@@ -1,0 +1,1633 @@
+import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
+import { useEffect, useMemo, useState, useRef } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  ArrowLeft, Check, Upload, Eye, Trash2, FileText, Loader2, AlertTriangle, Undo2,
+  FolderOpen, Download, FileImage, FileSpreadsheet, File as FileLucide, RefreshCw,
+} from "lucide-react";
+import { toast } from "sonner";
+import { supabase } from "@/integrations/supabase/client";
+import { AppShell } from "@/components/AppShell";
+import { STEP_DOCS_DETAILED, METHOD_LABEL, STATUS_LABEL, formatBaht } from "@/lib/procurement";
+import {
+  EGP_MILESTONE_SHORT,
+  EGP_STEP_LEGAL_HINTS,
+  getMilestoneLabel,
+} from "@/lib/egp-milestones";
+import { formatThaiDate } from "@/lib/utils";
+import { checkStorageQuota, incrementStorageUsage, decrementStorageUsage } from "@/lib/storage";
+import { ThaiDatePicker } from "@/components/ThaiDatePicker";
+import { GuidelineBox } from "@/components/GuidelineBox";
+import { Step1DetailForm, Step2DetailForm, Step3DetailForm } from "@/components/steps/ProjectStepForms";
+import { StepDocumentHub } from "@/components/steps/StepDocumentHub";
+import { StepInlineDocList } from "@/components/steps/StepInlineDocList";
+import {
+  addWorkdays,
+  getStepMinDays,
+  getMinDays,
+  validateStep3PublicationDates,
+} from "@/lib/workdays";
+import {
+  formatBudgetInput,
+  parseBudgetInput,
+  parseStepNote,
+  serializeStepNote,
+  buildStepDraftFields,
+  loadStepDraftFields,
+  loadStep3FormFromNote,
+  EMPTY_STEP3_ANNOUNCEMENT,
+  type Step3Announcement,
+} from "@/lib/step-form";
+import {
+  getStep3HearingTier,
+  shouldShowStep3HearingForm,
+  type Step3SkipReason,
+} from "@/lib/step3-hearing";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+
+export const Route = createFileRoute("/projects_/$projectId")({
+  head: () => ({ meta: [{ title: "รายละเอียดโครงการ — ProcureTrack" }] }),
+  component: ProjectDetailPage,
+});
+
+type Project = {
+  id: string;
+  organization_id: string;
+  name: string;
+  project_code: string;
+  description: string | null;
+  budget: number;
+  estimated_price?: number | null;
+  status: string;
+  method: string;
+  fiscal_year: number;
+  current_step: number;
+  created_at: string;
+  district_office: string | null;
+  design_code: string | null;
+  approving_agency: string | null;
+  procurement_agency: string | null;
+  result_unit: string | null;
+};
+
+type Step = {
+  id: string;
+  step_number: number;
+  step_name: string;
+  status: string;
+  due_date: string | null;
+  completed_at: string | null;
+  note: string | null;
+  responsible_officer_name?: string | null;
+  step_notes?: string | null;
+  completed_by: string | null;
+};
+
+type Doc = {
+  id: string;
+  step_number: number | null;
+  document_type: string;
+  file_name: string;
+  storage_path: string;
+  file_size: number | null;
+};
+
+// NOTE: committees.committee_type has DB CHECK constraint; use a canonical value.
+const STEP2_COMMITTEE_TYPE = "tor";
+
+function ProjectDetailPage() {
+  const { projectId } = Route.useParams();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [activeStep, setActiveStep] = useState<number>(1);
+  const [tab, setTab] = useState<"detail" | "contract">("detail");
+  const [error, setError] = useState<string | null>(null);
+
+  // Step edit state
+  const [responsibleName, setResponsibleName] = useState("");
+  const [dueDate, setDueDate] = useState("");
+  const [note, setNote] = useState("");
+  // ขั้นตอนที่ 1
+  const [egpCode, setEgpCode] = useState("");
+  const [step1Budget, setStep1Budget] = useState("");
+  const [estimatedPrice, setEstimatedPrice] = useState("");
+  const [step1Method, setStep1Method] = useState("e_bidding");
+  // ขั้นตอนที่ 2
+  const [step2Checklist, setStep2Checklist] = useState({
+    draft_order_done: false,
+    director_signed_order: false,
+    committee_ack_no_conflict: false,
+    median_price_report_done: false,
+    director_signed_median_price: false,
+  });
+  const [committeeMembers, setCommitteeMembers] = useState<string[]>(["", "", ""]);
+  // ขั้นตอนที่ 3
+  const [step3Checklist, setStep3Checklist] = useState({
+    committee_tor_bid_docs_done: false,
+    director_report_submitted: false,
+    draft_published_for_comment: false,
+  });
+  const [step3Announcement, setStep3Announcement] = useState<Step3Announcement>({
+    ...EMPTY_STEP3_ANNOUNCEMENT,
+  });
+  const [step3Skipping, setStep3Skipping] = useState(false);
+
+  const { data, isLoading: loading, refetch } = useQuery({
+    queryKey: ["project", projectId],
+    queryFn: async () => {
+      const { data: u } = await supabase.auth.getUser();
+      if (!u.user) { navigate({ to: "/login" }); return null; }
+      const [{ data: p }, { data: s }, { data: d }, { data: c }] = await Promise.all([
+        supabase.from("projects").select("*").eq("id", projectId).single(),
+        supabase.from("procurement_steps").select("*").eq("project_id", projectId).order("step_number"),
+        supabase.from("documents").select("*").eq("project_id", projectId),
+        supabase.from("committees").select("*").eq("project_id", projectId).eq("committee_type", STEP2_COMMITTEE_TYPE).order("created_at"),
+      ]);
+      return {
+        project: p as Project | null,
+        steps: ((s as Step[]) ?? []),
+        docs: ((d as Doc[]) ?? []),
+        committees: (c ?? []) as any[],
+      };
+    },
+  });
+  const project = data?.project ?? null;
+  const steps = data?.steps ?? [];
+  const docs = data?.docs ?? [];
+  const committees = data?.committees ?? [];
+
+  // Sync activeStep to project's current_step on first load
+  useEffect(() => {
+    if (project) setActiveStep((s) => (s === 1 ? project.current_step : s));
+  }, [project?.id]); // eslint-disable-line
+
+  const current = useMemo(() => steps.find((s) => s.step_number === activeStep), [steps, activeStep]);
+
+  useEffect(() => {
+    if (!current || !project) return;
+    if (current.step_number === 1) {
+      setEgpCode(project.project_code ?? "");
+      setStep1Budget(formatBudgetInput(String(project.budget ?? 0)));
+      setEstimatedPrice(
+        project.estimated_price != null
+          ? formatBudgetInput(String(project.estimated_price))
+          : "",
+      );
+      const m = project.method ?? "e_bidding";
+      setStep1Method(m === "e_market" ? "selection" : m);
+      const draft1 = loadStepDraftFields(current);
+      setResponsibleName(draft1.responsible);
+      setNote(draft1.userNote);
+      setDueDate(draft1.dueDate);
+      return;
+    }
+    if (current.step_number === 2) {
+      const { userNote, form } = parseStepNote(current.note);
+      const draft2 = loadStepDraftFields({ ...current, note: userNote });
+      setStep2Checklist({
+        draft_order_done: !!form.checklist?.draft_order_done,
+        director_signed_order: !!form.checklist?.director_signed_order,
+        committee_ack_no_conflict: !!form.checklist?.committee_ack_no_conflict,
+        median_price_report_done: !!form.checklist?.median_price_report_done,
+        director_signed_median_price: !!form.checklist?.director_signed_median_price,
+      });
+      const names = committees.map((cm: any) => cm.member_name).filter(Boolean);
+      setCommitteeMembers(names.length >= 3 ? names : [...names, ...Array(Math.max(0, 3 - names.length)).fill("")]);
+      setResponsibleName("");
+      setNote(draft2.userNote);
+      setDueDate("");
+      return;
+    }
+    if (current.step_number === 3) {
+      const { userNote } = parseStepNote(current.note);
+      const step3Form = loadStep3FormFromNote(current.note);
+      const draft3 = loadStepDraftFields({ ...current, note: userNote });
+      setStep3Checklist({
+        committee_tor_bid_docs_done: !!step3Form.checklist?.committee_tor_bid_docs_done,
+        director_report_submitted: !!step3Form.checklist?.director_report_submitted,
+        draft_published_for_comment: !!step3Form.checklist?.draft_published_for_comment,
+      });
+      setStep3Announcement(step3Form.announcement ?? { ...EMPTY_STEP3_ANNOUNCEMENT });
+      setResponsibleName(draft3.responsible);
+      setNote(draft3.userNote);
+      setDueDate("");
+      return;
+    }
+    const draft = loadStepDraftFields(current);
+    setResponsibleName(draft.responsible);
+    setNote(draft.userNote);
+    setDueDate(draft.dueDate);
+  }, [current?.id, project?.id, committees.length]); // eslint-disable-line
+
+  /** งบ/วิธีจัดซื้อที่ใช้คำนวณ — อ่านจากฟอร์มขั้น 1 ถ้ากำลังอยู่ขั้นนั้น */
+  const calcBudget = project
+    ? activeStep === 1
+      ? parseBudgetInput(step1Budget) || Number(project.budget)
+      : Number(project.budget)
+    : 0;
+  const calcMethod = project
+    ? activeStep === 1
+      ? step1Method
+      : project.method
+    : "e_bidding";
+
+  const invalidateAll = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["project", projectId] }),
+      queryClient.invalidateQueries({ queryKey: ["projects"] }),
+    ]);
+  };
+
+  const setStep2Check = (
+    key:
+      | "draft_order_done"
+      | "director_signed_order"
+      | "committee_ack_no_conflict"
+      | "median_price_report_done"
+      | "director_signed_median_price",
+    checked: boolean,
+  ) => {
+    setStep2Checklist((prev) => ({ ...prev, [key]: checked }));
+  };
+
+  const setStep3Check = (
+    key:
+      | "committee_tor_bid_docs_done"
+      | "director_report_submitted"
+      | "draft_published_for_comment",
+    checked: boolean,
+  ) => {
+    setStep3Checklist((prev) => ({ ...prev, [key]: checked }));
+  };
+
+  const patchStep3Announcement = (patch: Partial<Step3Announcement>) => {
+    setStep3Announcement((prev) => ({ ...prev, ...patch }));
+  };
+
+  const addCommitteeMember = () => setCommitteeMembers((prev) => [...prev, ""]);
+  const changeCommitteeMember = (index: number, value: string) =>
+    setCommitteeMembers((prev) => prev.map((v, i) => (i === index ? value : v)));
+  const removeCommitteeMember = (index: number) =>
+    setCommitteeMembers((prev) => (prev.length <= 3 ? prev : prev.filter((_, i) => i !== index)));
+
+  /** บันทึกร่างขั้นตอน — ชื่อเจ้าหน้าที่เป็นข้อความใน responsible_officer_name (ไม่ใส่ใน note) */
+  const patchStepDraft = async (
+    stepId: string,
+    fields: ReturnType<typeof buildStepDraftFields>,
+    extra?: { note?: string | null },
+  ) => {
+    const payload: Record<string, unknown> = { ...fields };
+    if (extra?.note !== undefined) payload.note = extra.note;
+
+    const { error } = await supabase.from("procurement_steps").update(payload).eq("id", stepId);
+    if (
+      error &&
+      (error.message.includes("responsible_officer_name") ||
+        error.message.includes("step_notes"))
+    ) {
+      const legacyNote = [
+        fields.step_notes,
+        fields.responsible_officer_name
+          ? `เจ้าหน้าที่ผู้รับผิดชอบ: ${fields.responsible_officer_name}`
+          : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+      return supabase
+        .from("procurement_steps")
+        .update({
+          due_date: fields.due_date,
+          note: extra?.note ?? (legacyNote || null),
+        })
+        .eq("id", stepId);
+    }
+    return { error };
+  };
+
+  const saveDraft = async () => {
+    if (!current || !project) return;
+    setError(null);
+
+    if (current.step_number === 1) {
+      const budgetVal = parseBudgetInput(step1Budget);
+      const estVal = estimatedPrice ? parseBudgetInput(estimatedPrice) : null;
+      const { error: pe } = await supabase
+        .from("projects")
+        .update({
+          project_code: egpCode.trim() || project.project_code,
+          budget: budgetVal,
+          method: step1Method,
+        })
+        .eq("id", project.id);
+      if (pe) {
+        setError(pe.message);
+        return;
+      }
+      if (estVal != null) {
+        const { error: pe2 } = await supabase
+          .from("projects")
+          .update({ estimated_price: estVal })
+          .eq("id", project.id);
+        if (pe2 && !pe2.message.includes("estimated_price")) {
+          setError(pe2.message);
+          return;
+        }
+      }
+      const { error: se } = await patchStepDraft(
+        current.id,
+        buildStepDraftFields(responsibleName, note, dueDate),
+      );
+      if (se?.error) {
+        setError(se.error.message);
+        return;
+      }
+      await invalidateAll();
+      return;
+    }
+
+    if (current.step_number === 2) {
+      const formNote = serializeStepNote("", {
+        checklist: step2Checklist,
+      });
+      const { error: e } = await patchStepDraft(
+        current.id,
+        buildStepDraftFields("", note, ""),
+        { note: formNote || null },
+      );
+      if (e?.error) {
+        setError(e.error.message);
+        return;
+      }
+
+      // IMPORTANT: Step2 checklist must persist even if committees table permissions are missing.
+      // Therefore, committee sync is best-effort and should not block draft save.
+      const cleanedMembers = committeeMembers.map((n) => n.trim()).filter(Boolean);
+      try {
+        const { error: delErr } = await supabase
+          .from("committees")
+          .delete()
+          .eq("project_id", project.id)
+          .eq("committee_type", STEP2_COMMITTEE_TYPE);
+        if (delErr) {
+          console.error("[Step2] committees delete failed", delErr);
+          toast.error(`บันทึกรายชื่อคณะกรรมการไม่สำเร็จ: ${delErr.message}`);
+        } else if (cleanedMembers.length > 0) {
+          const rows = cleanedMembers.map((member, idx) => ({
+            organization_id: project.organization_id,
+            project_id: project.id,
+            committee_type: STEP2_COMMITTEE_TYPE,
+            member_name: member,
+            position: idx === 0 ? "ประธานกรรมการ" : "กรรมการ",
+            appointment_date: null,
+          }));
+          const { error: insErr } = await supabase.from("committees").insert(rows);
+          if (insErr) {
+            console.error("[Step2] committees insert failed", insErr);
+            toast.error(`บันทึกรายชื่อคณะกรรมการไม่สำเร็จ: ${insErr.message}`);
+          }
+        }
+      } catch (committeeErr: any) {
+        console.error("[Step2] committees sync exception", committeeErr);
+        toast.error(`บันทึกรายชื่อคณะกรรมการไม่สำเร็จ: ${committeeErr?.message ?? "unknown error"}`);
+      }
+
+      toast.success("บันทึกร่างขั้นตอนที่ 2 เรียบร้อย");
+      await invalidateAll();
+      return;
+    }
+
+    if (current.step_number === 3) {
+      const formNote = serializeStepNote(note, {
+        checklist: step3Checklist,
+        announcement: step3Announcement,
+      });
+      const { error: e } = await patchStepDraft(
+        current.id,
+        buildStepDraftFields(responsibleName, "", ""),
+        { note: formNote || null },
+      );
+      if (e?.error) {
+        setError(e.error.message);
+        return;
+      }
+      toast.success("บันทึกร่างขั้นตอนที่ 3 เรียบร้อย");
+      await invalidateAll();
+      return;
+    }
+
+    const { error: e } = await patchStepDraft(
+      current.id,
+      buildStepDraftFields(responsibleName, note, dueDate),
+    );
+    if (e?.error) {
+      setError(e.error.message);
+      return;
+    }
+    await invalidateAll();
+  };
+
+  const advanceToNextStep = async () => {
+    if (!current || !project) return;
+    const { data: u } = await supabase.auth.getUser();
+    const draftFields =
+      current.step_number === 3
+        ? buildStepDraftFields(responsibleName, note, "")
+        : buildStepDraftFields(responsibleName, note, dueDate);
+    const { error: e1 } = await supabase.from("procurement_steps").update({
+      status: "completed",
+      completed_at: new Date().toISOString(),
+      completed_by: u.user?.id ?? null,
+      ...draftFields,
+    }).eq("id", current.id);
+    if (e1) {
+      setError(e1.message);
+      return false;
+    }
+
+    const nextStep = Math.min(10, current.step_number + 1);
+    const updates: Record<string, unknown> = { current_step: nextStep };
+    if (current.step_number === 10) updates.status = "completed";
+    await supabase.from("projects").update(updates).eq("id", project.id);
+
+    if (nextStep !== current.step_number) {
+      await supabase
+        .from("procurement_steps")
+        .update({ status: "in_progress" })
+        .eq("project_id", project.id)
+        .eq("step_number", nextStep)
+        .eq("status", "pending");
+    }
+    setActiveStep(nextStep);
+    await invalidateAll();
+    return true;
+  };
+
+  const completeStep = async (opts?: { skipDocValidation?: boolean }) => {
+    if (!current || !project) return;
+    if (current.step_number === 3) {
+      const tier = getStep3HearingTier(Number(project.budget));
+      const hearingFormActive = shouldShowStep3HearingForm(
+        tier,
+        !!step3Announcement.hearing_proceed,
+        !!step3Announcement.hearing_skipped,
+      );
+      if (hearingFormActive) {
+        const pubErr = validateStep3PublicationDates(
+          step3Announcement.publication_start,
+          step3Announcement.publication_end,
+        );
+        if (pubErr) {
+          toast.error(pubErr);
+          setError(pubErr);
+          return;
+        }
+      }
+    }
+    await saveDraft();
+    if (!opts?.skipDocValidation) {
+      const stepDocs = STEP_DOCS_DETAILED[current.step_number - 1] ?? [];
+      const requiredDocs = stepDocs.filter((d) => d.required).map((d) => d.name);
+      const uploaded = docs
+        .filter((d) => d.step_number === current.step_number)
+        .map((d) => d.document_type);
+      const missing = requiredDocs.filter((name) => !uploaded.includes(name));
+      if (missing.length > 0) {
+        alert(
+          `บันทึกข้อมูลเรียบร้อย ✓\n\nแต่เอกสารที่จำเป็นยังไม่ครบ (${missing.length} รายการ):\n- ${missing.join("\n- ")}\n\nกรุณาอัปโหลดเอกสารบังคับให้ครบก่อนยืนยันขั้นตอนถัดไป`,
+        );
+        return;
+      }
+    }
+    const ok = await advanceToNextStep();
+    if (ok) toast.success("ยืนยันเสร็จสิ้นขั้นตอนแล้ว");
+  };
+
+  const proceedStep3Hearing = () => {
+    patchStep3Announcement({ hearing_proceed: true, hearing_skipped: false, skip_reason: undefined });
+    toast.message("ดำเนินการจัดฟังคำวิจารณ์ร่างประกาศ — กรุณากรอกข้อมูลและแนบเอกสารให้ครบ");
+  };
+
+  const skipStep3 = async (reason: Step3SkipReason) => {
+    if (!current || !project || current.step_number !== 3) return;
+    const label =
+      reason === "exempt"
+        ? "ข้ามขั้นตอนรับฟังความคิดเห็น (ยกเว้นตามวงเงิน)"
+        : "ข้ามการฟังคำวิจารณ์ร่างประกาศ (ดุลยพินิจหัวหน้าหน่วยงาน)";
+    if (!window.confirm(`ยืนยัน${label} และไปขั้นตอนที่ 4 (รายงานขอซื้อขอจ้าง) ทันที?`)) return;
+
+    setStep3Skipping(true);
+    setError(null);
+    try {
+      const updatedAnnouncement: Step3Announcement = {
+        ...step3Announcement,
+        hearing_skipped: true,
+        skip_reason: reason,
+        hearing_proceed: false,
+      };
+      setStep3Announcement(updatedAnnouncement);
+      const formNote = serializeStepNote(note, {
+        checklist: step3Checklist,
+        announcement: updatedAnnouncement,
+      });
+      const { error: saveErr } = await patchStepDraft(
+        current.id,
+        buildStepDraftFields(responsibleName, "", ""),
+        { note: formNote || null },
+      );
+      if (saveErr?.error) {
+        setError(saveErr.error.message);
+        return;
+      }
+      const ok = await advanceToNextStep();
+      if (ok) toast.success(`${label} — ไปขั้นตอนที่ 4 แล้ว`);
+    } finally {
+      setStep3Skipping(false);
+    }
+  };
+
+  const revertStep = async () => {
+    if (!current || !project) return;
+    if (current.step_number <= 1) return;
+    const prevStep = current.step_number - 1;
+    const updates: any = { current_step: prevStep };
+    if (project.status === "completed") updates.status = "active";
+    await supabase.from("projects").update(updates).eq("id", project.id);
+    await supabase.from("procurement_steps").update({
+      status: "pending",
+      completed_at: null,
+      completed_by: null,
+    }).eq("id", current.id);
+    await supabase.from("procurement_steps").update({
+      status: "in_progress",
+      completed_at: null,
+      completed_by: null,
+    }).eq("project_id", project.id).eq("step_number", prevStep);
+    setActiveStep(prevStep);
+    await invalidateAll();
+  };
+
+  if (loading) {
+    return <AppShell breadcrumb="โครงการ"><p className="text-sm text-muted-foreground">กำลังโหลด...</p></AppShell>;
+  }
+  if (!project) {
+    return <AppShell breadcrumb="โครงการ"><p className="text-sm text-destructive">ไม่พบโครงการ</p></AppShell>;
+  }
+
+  const docsForStep = docs.filter((d) => d.step_number === activeStep);
+
+  return (
+    <AppShell breadcrumb={`โครงการ / ${project.name}`}>
+      <div className="space-y-5">
+        <Link to="/projects" className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
+          <ArrowLeft className="h-4 w-4" /> กลับไปยังรายการโครงการ
+        </Link>
+
+        {/* Header */}
+        <div className="bg-card border rounded-[10px] p-6">
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div className="min-w-0 flex-1">
+              <h1 className="text-2xl font-semibold">{project.name}</h1>
+              <p className="text-sm text-muted-foreground mt-1">{project.project_code}</p>
+              {project.description && (
+                <p className="text-sm mt-3 max-w-2xl">{project.description}</p>
+              )}
+              <div className="flex flex-wrap gap-4 mt-4 text-sm">
+                <Info label="งบประมาณ" value={`฿ ${formatBaht(Number(project.budget))}`} />
+                {project.estimated_price != null && Number(project.estimated_price) > 0 && (
+                  <Info label="ราคากลาง" value={`฿ ${formatBaht(Number(project.estimated_price))}`} />
+                )}
+                <Info label="วิธีจัดซื้อ" value={METHOD_LABEL[project.method] ?? project.method} />
+                <Info label="ปีงบประมาณ" value={String(project.fiscal_year)} />
+                {project.district_office && <Info label="สพข./เขต" value={project.district_office} />}
+                {project.design_code && <Info label="รหัสแบบ/รหัสโครงการ" value={project.design_code} />}
+                {project.approving_agency && <Info label="หน่วยงานที่อนุมัติเบิกจ่าย" value={project.approving_agency} />}
+                {project.procurement_agency && <Info label="หน่วยงานที่ดำเนินการจัดซื้อจัดจ้าง" value={project.procurement_agency} />}
+                {project.result_unit && <Info label="ผลสะสม (หน่วย)" value={project.result_unit} />}
+              </div>
+            </div>
+            <div className="flex flex-col items-end gap-2">
+              <div className="flex items-center gap-2">
+                <span className="text-xs px-2.5 py-1 rounded-full bg-primary/10 text-primary font-medium">
+                  {STATUS_LABEL[project.status] ?? project.status}
+                </span>
+                <span className="text-xs px-2.5 py-1 rounded-full bg-accent text-accent-foreground font-medium">
+                  ขั้นตอน {project.current_step}/10
+                </span>
+              </div>
+              <div className="flex gap-2">
+                <Link
+                  to="/projects/$projectId/construction"
+                  params={{ projectId: project.id }}
+                  className="h-9 px-3 rounded-md border border-input bg-background text-sm hover:bg-accent flex items-center gap-1.5"
+                >
+                  <FileText className="h-3.5 w-3.5" /> ติดตามก่อสร้าง
+                </Link>
+                <button onClick={() => window.print()} className="h-9 px-3 rounded-md border border-input bg-background text-sm hover:bg-accent flex items-center gap-1.5">
+                  <FileText className="h-3.5 w-3.5" /> Export PDF
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Step progress */}
+        <div className="bg-card border rounded-[10px] p-5">
+          <h3 className="font-semibold mb-4">ความคืบหน้า 10 ขั้นตอน</h3>
+          <div className="grid grid-cols-5 lg:grid-cols-10 gap-2">
+            {steps.map((s) => {
+              const isActive = s.step_number === activeStep;
+              const isDone = s.status === "completed";
+              return (
+                <button
+                  key={s.id}
+                  onClick={() => setActiveStep(s.step_number)}
+                  className={`relative p-3 rounded-md text-xs text-center transition border-2 ${
+                    isDone
+                      ? "bg-success/15 border-success/30 text-success-foreground"
+                      : isActive
+                      ? "bg-primary/5 border-primary text-primary font-medium"
+                      : "bg-muted/50 border-transparent text-muted-foreground hover:bg-muted"
+                  }`}
+                >
+                  {isDone && <Check className="absolute top-1 right-1 h-3 w-3 text-success" />}
+                  <div className="font-medium">{EGP_MILESTONE_SHORT[s.step_number - 1]}</div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Timeline summary */}
+        <ProjectTimeline project={project} steps={steps} />
+
+        {/* Detail panel */}
+        {current && (() => {
+          const prevStep = steps.find((s) => s.step_number === current.step_number - 1);
+          const stepStartDate =
+            current.step_number === 1
+              ? project.created_at
+              : prevStep?.completed_at ?? new Date().toISOString();
+          const step3Tier =
+            current.step_number === 3 ? getStep3HearingTier(calcBudget) : null;
+          const showStep3HearingForm =
+            current.step_number === 3 &&
+            step3Tier != null &&
+            shouldShowStep3HearingForm(
+              step3Tier,
+              !!step3Announcement.hearing_proceed,
+              !!step3Announcement.hearing_skipped,
+            );
+          const minDays =
+            current.step_number === 3
+              ? 0
+              : getStepMinDays(current.step_number, calcMethod, calcBudget);
+          const minDeadline = minDays > 0 ? addWorkdays(new Date(stepStartDate), minDays) : null;
+          const dueDateObj = dueDate ? new Date(dueDate) : null;
+          const dueValid = !!dueDateObj && !isNaN(dueDateObj.getTime());
+          const isContractStep = current.step_number === 8;
+          const contractMaxDeadline = isContractStep
+            ? addWorkdays(new Date(stepStartDate), 7)
+            : null;
+          const dueTooEarly =
+            !!minDeadline && dueValid && dueDateObj! < minDeadline;
+          const dueTooLateContract =
+            isContractStep &&
+            !!contractMaxDeadline &&
+            dueValid &&
+            dueDateObj! > contractMaxDeadline;
+          return (
+          <>
+            <GuidelineBox
+              stepNumber={current.step_number}
+              method={calcMethod}
+              budget={calcBudget}
+              stepStartDate={stepStartDate}
+              onSkipStep3={current.step_number === 3 ? skipStep3 : undefined}
+              onProceedStep3Hearing={
+                current.step_number === 3 ? proceedStep3Hearing : undefined
+              }
+              step3HearingProceed={!!step3Announcement.hearing_proceed}
+              step3Skipping={step3Skipping}
+            />
+          <div className="bg-card border rounded-[10px]">
+            <div className="border-b px-5 flex gap-1">
+              <TabBtn active={tab === "detail"} onClick={() => setTab("detail")}>
+                {current.step_number <= 5 ? "ขั้นตอนนี้ (Workflow)" : "รายละเอียด"}
+              </TabBtn>
+              {current.step_number === 8 && (
+                <TabBtn active={tab === "contract"} onClick={() => setTab("contract")}>ข้อมูลสัญญา</TabBtn>
+              )}
+            </div>
+
+            <div className="p-5">
+              {tab === "contract" && current.step_number === 8 ? (
+                <ContractForm project={project} onSaved={invalidateAll} />
+              ) : (
+                <div className="space-y-4 max-w-2xl">
+                  <div>
+                    <h3 className="text-lg font-semibold">
+                      ขั้นตอนที่ {current.step_number}: {getMilestoneLabel(current.step_number)}
+                    </h3>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      ระยะเวลา/ข้อควรระวัง:{" "}
+                      {current.step_number === 3
+                        ? "รับฟังความคิดเห็นร่างประกาศ/TOR ตามวงเงินงบประมาณ (ดูกล่องไกด์ไลน์ด้านบน)"
+                        : EGP_STEP_LEGAL_HINTS[current.step_number - 1]}
+                    </p>
+                  </div>
+                  {current.step_number === 1 && (
+                    <Step1DetailForm
+                      egpCode={egpCode}
+                      onEgpCodeChange={setEgpCode}
+                      budget={step1Budget}
+                      onBudgetChange={setStep1Budget}
+                      estimatedPrice={estimatedPrice}
+                      onEstimatedPriceChange={setEstimatedPrice}
+                      method={step1Method}
+                      onMethodChange={setStep1Method}
+                    />
+                  )}
+                  {current.step_number === 2 && (
+                    <Step2DetailForm
+                      checklist={step2Checklist}
+                      onChecklistChange={setStep2Check}
+                      committeeMembers={committeeMembers}
+                      onCommitteeChange={changeCommitteeMember}
+                      onAddCommittee={addCommitteeMember}
+                      onRemoveCommittee={removeCommitteeMember}
+                    />
+                  )}
+                  {current.step_number === 3 && showStep3HearingForm && (
+                    <Step3DetailForm
+                      checklist={step3Checklist}
+                      onChecklistChange={setStep3Check}
+                      announcement={step3Announcement}
+                      onAnnouncementChange={patchStep3Announcement}
+                      responsibleName={responsibleName}
+                      onResponsibleNameChange={setResponsibleName}
+                      docBinder={{
+                        project,
+                        stepNumber: 3,
+                        docs: docsForStep,
+                        onDocsChange: invalidateAll,
+                      }}
+                    />
+                  )}
+                  {current.step_number === 3 && !showStep3HearingForm && current.status !== "completed" && (
+                    <p className="text-sm text-muted-foreground rounded-md border border-dashed p-4">
+                      {step3Tier === "exempt"
+                        ? "โครงการวงเงินไม่เกิน 5 ล้านบาท — กดปุ่ม «ข้ามขั้นตอนนี้อัตโนมัติ» ในกล่องไกด์ไลน์ด้านบนเพื่อไปขั้นตอนที่ 4"
+                        : "หากหัวหน้าหน่วยงานไม่จัดฟังคำวิจารณ์ กดปุ่มข้ามในกล่องไกด์ไลน์ — หรือกด «ดำเนินการจัดฟังคำวิจารณ์» เพื่อเปิดฟอร์มบันทึกข้อมูล"}
+                    </p>
+                  )}
+                  {current.step_number !== 1 &&
+                    current.step_number !== 2 &&
+                    current.step_number !== 3 && (
+                    <FieldRow label="กำหนดเสร็จ">
+                      <div className="space-y-1">
+                        <ThaiDatePicker value={dueDate} onChange={setDueDate} />
+                        {dueDate && (
+                          <p className="text-xs text-muted-foreground">📅 {formatThaiDate(dueDate)}</p>
+                        )}
+                        {dueTooEarly && minDeadline && (
+                          <p className="text-xs" style={{ color: "#EA580C" }}>
+                            ⚠️ วันที่เลือกสั้นกว่ากำหนดตาม พ.ร.บ. กรุณาเลือกวันที่ {formatThaiDate(minDeadline)} หรือหลังจากนั้น มิฉะนั้น สตง. อาจทักท้วงได้
+                          </p>
+                        )}
+                        {dueTooLateContract && (
+                          <p className="text-xs" style={{ color: "#EA580C" }}>
+                            ⚠️ ควรลงนามสัญญาภายใน 7 วันทำการ หลังพ้นอุทธรณ์
+                          </p>
+                        )}
+                      </div>
+                    </FieldRow>
+                  )}
+                  {current.step_number !== 2 &&
+                    current.step_number !== 3 && (
+                    <FieldRow label="เจ้าหน้าที่ผู้รับผิดชอบ">
+                      <input
+                        value={responsibleName}
+                        onChange={(e) => setResponsibleName(e.target.value)}
+                        placeholder="ระบุชื่อเจ้าหน้าที่ผิดชอบโครงการ"
+                        className={inputCls}
+                      />
+                    </FieldRow>
+                  )}
+                  {current.step_number !== 3 && (
+                    <FieldRow label="หมายเหตุ">
+                      <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={4}
+                        className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
+                    </FieldRow>
+                  )}
+                  {current.status === "completed" && (
+                    <p className="text-sm text-success flex items-center gap-1.5">
+                      <Check className="h-4 w-4" /> ขั้นตอนนี้เสร็จสิ้นแล้ว
+                    </p>
+                  )}
+                  {current.step_number !== 3 && (
+                    <StepInlineDocList
+                      project={project}
+                      stepNumber={current.step_number}
+                      docList={STEP_DOCS_DETAILED[current.step_number - 1] ?? []}
+                      existing={docsForStep}
+                      onChange={invalidateAll}
+                    />
+                  )}
+                  {!(current.step_number === 3 && !showStep3HearingForm) && (
+                    <StepDocumentHub
+                      stepNumber={current.step_number}
+                      docList={STEP_DOCS_DETAILED[current.step_number - 1] ?? []}
+                      docs={docsForStep}
+                      projectName={project.name}
+                    />
+                  )}
+                </div>
+              )}
+
+              {error && <p className="text-sm text-destructive mt-3">{error}</p>}
+
+              {(() => {
+                const stepDocs = STEP_DOCS_DETAILED[current.step_number - 1] ?? [];
+                const requiredDocs =
+                  current.step_number === 3 && !showStep3HearingForm
+                    ? []
+                    : stepDocs.filter((d) => d.required);
+                const uploadedTypes = docsForStep.map((d) => d.document_type);
+                const completedCount = requiredDocs.filter((d) => uploadedTypes.includes(d.name)).length;
+                const total = requiredDocs.length;
+                const allUploaded = total === 0 || completedCount >= total;
+                const isCompleted = current.status === "completed";
+                const disabled = isCompleted || !allUploaded;
+                const showCompleteBtn =
+                  isCompleted ||
+                  current.step_number !== 3 ||
+                  showStep3HearingForm;
+                const showSaveDraft =
+                  current.step_number !== 3 || showStep3HearingForm;
+                return (
+                  <div className="mt-6 pt-5 border-t">
+                    <div className="flex gap-3 flex-wrap">
+                      {showSaveDraft && (
+                      <button onClick={saveDraft}
+                        className="h-10 px-4 rounded-md border border-input bg-background text-sm font-medium hover:bg-accent">
+                        บันทึกร่าง
+                      </button>
+                      )}
+                      {current.step_number > 1 && (
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <button
+                              className="h-10 px-4 rounded-md border border-input bg-muted text-muted-foreground text-sm font-medium hover:bg-muted/70 flex items-center gap-2"
+                            >
+                              <Undo2 className="h-4 w-4" /> ย้อนกลับขั้นตอน
+                            </button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>ย้อนกลับขั้นตอน?</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                ต้องการย้อนกลับไปขั้นตอนที่ {current.step_number - 1} เพื่อแก้ไขเอกสารใช่หรือไม่?
+                                <br />
+                                ขั้นตอนปัจจุบันจะถูกรีเซ็ตกลับเป็น pending
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>ยกเลิก</AlertDialogCancel>
+                              <AlertDialogAction onClick={revertStep}>ยืนยัน</AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      )}
+                      {showCompleteBtn && !isCompleted && (
+                        <button
+                          onClick={() => completeStep()}
+                          disabled={disabled}
+                          className="h-10 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed disabled:hover:bg-muted flex items-center gap-2"
+                        >
+                          <Check className="h-4 w-4" /> ยืนยันเสร็จสิ้น → ขั้นตอนถัดไป
+                        </button>
+                      )}
+                    </div>
+                    {!allUploaded && !isCompleted && (
+                      <p className="text-sm text-warning mt-3 flex items-center gap-1.5">
+                        <AlertTriangle className="h-4 w-4" />
+                        กรุณาอัปโหลดเอกสารบังคับให้ครบ {completedCount}/{total} รายการก่อนดำเนินการต่อ
+                      </p>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+          </>
+          );
+        })()}
+      </div>
+    </AppShell>
+  );
+}
+
+const inputCls = "w-full h-10 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring";
+
+function Info({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="font-medium">{value}</p>
+    </div>
+  );
+}
+
+function FieldRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="block text-sm font-medium mb-1.5">{label}</label>
+      {children}
+    </div>
+  );
+}
+
+function TabBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-4 py-3 text-sm font-medium border-b-2 -mb-px transition ${
+        active ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+/** ไอคอนตามประเภทไฟล์ */
+function FileIcon({ fileName }: { fileName: string }) {
+  const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
+  if (["jpg", "jpeg", "png", "gif", "webp", "svg"].includes(ext))
+    return <FileImage className="h-4 w-4 text-blue-500" />;
+  if (["xls", "xlsx", "csv"].includes(ext))
+    return <FileSpreadsheet className="h-4 w-4 text-green-600" />;
+  if (["pdf"].includes(ext))
+    return <FileText className="h-4 w-4 text-red-500" />;
+  return <FileLucide className="h-4 w-4 text-muted-foreground" />;
+}
+
+function formatFileSize(bytes: number | null): string {
+  if (!bytes) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Section แฟ้มหลักฐาน — fetch ไฟล์ที่อัปโหลดไว้ทั้งหมดของขั้นนี้จาก DB แสดงพร้อม View/Delete */
+function DocArchive({
+  project,
+  stepNumber,
+  refreshTick,
+  onRefresh,
+}: {
+  project: Project;
+  stepNumber: number;
+  refreshTick: number;
+  onRefresh: () => void;
+}) {
+  const [docs, setDocs] = useState<Doc[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [openingId, setOpeningId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    (async () => {
+      console.log("[DocArchive] fetch:start", { projectId: project.id, stepNumber, refreshTick });
+      try {
+        const { data, error } = await supabase
+          .from("documents")
+          .select("*")
+          .eq("project_id", project.id)
+          .eq("step_number", stepNumber)
+        .order("uploaded_at", { ascending: false });
+        if (error) {
+          console.error("[DocArchive] fetch:error", error);
+          toast.error(`โหลดรายการเอกสารไม่สำเร็จ: ${error.message}`);
+        }
+        if (!cancelled) {
+          setDocs((data ?? []) as Doc[]);
+          setLoading(false);
+          console.log("[DocArchive] fetch:done", { count: data?.length ?? 0 });
+        }
+      } catch (e: any) {
+        console.error("[DocArchive] fetch:exception", e);
+        if (!cancelled) {
+          setLoading(false);
+          toast.error(`โหลดรายการเอกสารไม่สำเร็จ: ${e?.message ?? "unknown error"}`);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [project.id, stepNumber, refreshTick]);
+
+  const viewDoc = async (doc: Doc) => {
+    setOpeningId(doc.id);
+    console.log("[DocArchive] view:start", { docId: doc.id, storagePath: doc.storage_path });
+    try {
+      const { data, error } = await supabase.storage
+        .from("procurement-docs")
+        .createSignedUrl(doc.storage_path, 300);
+      if (error) {
+        console.error("[DocArchive] view:error", error);
+        toast.error(`เปิดไฟล์ไม่สำเร็จ: ${error.message}`);
+        return;
+      }
+      if (data?.signedUrl) {
+        window.open(data.signedUrl, "_blank");
+        console.log("[DocArchive] view:done", { docId: doc.id });
+      } else {
+        toast.error("ไม่สามารถเปิดไฟล์ได้ (signed URL ว่าง)");
+      }
+    } catch (e: any) {
+      console.error("[DocArchive] view:exception", e);
+      toast.error(`เปิดไฟล์ไม่สำเร็จ: ${e?.message ?? "unknown error"}`);
+    } finally {
+      setOpeningId(null);
+    }
+  };
+
+  const deleteDoc = async (doc: Doc) => {
+    if (!confirm(`ลบเอกสาร "${doc.file_name}" ออกจากแฟ้มหลักฐาน?`)) return;
+    setDeletingId(doc.id);
+    console.log("[DocArchive] delete:start", { docId: doc.id, storagePath: doc.storage_path });
+    try {
+      const { error: storageErr } = await supabase.storage.from("procurement-docs").remove([doc.storage_path]);
+      if (storageErr) {
+        console.error("[DocArchive] delete:storage_error", storageErr);
+        toast.error(`ลบไฟล์จาก Storage ไม่สำเร็จ: ${storageErr.message}`);
+        return;
+      }
+      const { error: dbErr } = await supabase.from("documents").delete().eq("id", doc.id);
+      if (dbErr) {
+        console.error("[DocArchive] delete:db_error", dbErr);
+        toast.error(`ลบข้อมูลเอกสารไม่สำเร็จ: ${dbErr.message}`);
+        return;
+      }
+      await decrementStorageUsage(project.organization_id, Number(doc.file_size ?? 0));
+      setDocs((prev) => prev.filter((d) => d.id !== doc.id));
+      onRefresh();
+      toast.success("ลบไฟล์เรียบร้อยแล้ว");
+      console.log("[DocArchive] delete:done", { docId: doc.id });
+    } catch (e: any) {
+      console.error("[DocArchive] delete:exception", e);
+      toast.error(`ลบไฟล์ไม่สำเร็จ: ${e?.message ?? "unknown error"}`);
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  return (
+    <div className="mt-6 pt-5 border-t">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <FolderOpen className="h-4 w-4 text-primary" />
+          <h4 className="font-semibold text-sm">แฟ้มหลักฐาน (เอกสารที่อัปโหลดแล้ว)</h4>
+          {!loading && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary font-medium">
+              {docs.length} ไฟล์
+            </span>
+          )}
+        </div>
+        <button
+          onClick={onRefresh}
+          className="h-7 w-7 rounded-md hover:bg-accent flex items-center justify-center text-muted-foreground"
+          title="โหลดใหม่"
+        >
+          <RefreshCw className="h-3.5 w-3.5" />
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          กำลังโหลดรายชื่อเอกสาร...
+        </div>
+      ) : docs.length === 0 ? (
+        <div className="flex flex-col items-center gap-2 py-8 rounded-md border border-dashed text-muted-foreground">
+          <FolderOpen className="h-8 w-8 opacity-40" />
+          <p className="text-sm">ยังไม่มีเอกสารแนบ</p>
+          <p className="text-xs opacity-70">อัปโหลดเอกสารจาก Checklist ด้านบนเพื่อเริ่มสร้างแฟ้มหลักฐาน</p>
+        </div>
+      ) : (
+        <ul className="space-y-2">
+          {docs.map((doc) => (
+            <li
+              key={doc.id}
+              className="flex items-center gap-3 p-3 rounded-md border bg-background hover:bg-accent/30 transition group"
+            >
+              <div className="h-9 w-9 rounded-md bg-muted flex items-center justify-center shrink-0">
+                <FileIcon fileName={doc.file_name} />
+              </div>
+
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium truncate">{doc.file_name}</p>
+                <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                  <span className="text-xs text-muted-foreground truncate max-w-[200px]">
+                    {doc.document_type}
+                  </span>
+                  {doc.file_size && (
+                    <>
+                      <span className="text-muted-foreground/40 text-xs">·</span>
+                      <span className="text-xs text-muted-foreground">{formatFileSize(doc.file_size)}</span>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1 shrink-0">
+                <button
+                  onClick={() => viewDoc(doc)}
+                  disabled={openingId === doc.id}
+                  className="h-8 px-2.5 rounded-md border border-input bg-background text-xs hover:bg-accent flex items-center gap-1.5 disabled:opacity-60"
+                  title="ดู / ดาวน์โหลดไฟล์"
+                >
+                  {openingId === doc.id
+                    ? <Loader2 className="h-3 w-3 animate-spin" />
+                    : <Download className="h-3 w-3" />}
+                  ดูไฟล์
+                </button>
+                <button
+                  onClick={() => deleteDoc(doc)}
+                  disabled={deletingId === doc.id}
+                  className="h-8 w-8 rounded-md hover:bg-destructive/10 text-destructive flex items-center justify-center disabled:opacity-60"
+                  title="ลบไฟล์"
+                >
+                  {deletingId === doc.id
+                    ? <Loader2 className="h-3 w-3 animate-spin" />
+                    : <Trash2 className="h-3.5 w-3.5" />}
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function DocChecklist({
+  project, stepNumber, existing, onChange,
+}: {
+  project: Project;
+  stepNumber: number;
+  existing: Doc[];
+  onChange: () => void;
+}) {
+  const docList = STEP_DOCS_DETAILED[stepNumber - 1] ?? [];
+  const requiredList = docList.filter((d) => d.required);
+  const requiredUploaded = requiredList.filter((d) => existing.some((e) => e.document_type === d.name)).length;
+  const [uploading, setUploading] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const [archiveTick, setArchiveTick] = useState(0);
+  const fileInputs = useRef<Record<string, HTMLInputElement | null>>({});
+
+  const refreshArchive = () => {
+    setArchiveTick((t) => t + 1);
+    onChange();
+  };
+
+  const uploadFile = async (docType: string, file: File) => {
+    if (file.size > 50 * 1024 * 1024) {
+      toast.error("ขนาดไฟล์เกิน 50MB");
+      return;
+    }
+    console.log("[DocUpload] start", {
+      docType,
+      fileName: file.name,
+      fileSize: file.size,
+      projectId: project.id,
+      stepNumber,
+      orgId: project.organization_id,
+    });
+    const quota = await checkStorageQuota(project.organization_id, file.size);
+    console.log("[DocUpload] quota", quota);
+    if (!quota.ok) return;
+    setUploading(docType);
+    try {
+      const { data: u, error: authErr } = await supabase.auth.getUser();
+      if (authErr) {
+        console.error("[DocUpload] auth:error", authErr);
+        toast.error(`ไม่สามารถตรวจสอบผู้ใช้ได้: ${authErr.message}`);
+        return;
+      }
+      const ext = file.name.split(".").pop() ?? "bin";
+      const path = `${project.organization_id}/${project.id}/step-${stepNumber}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+      console.log("[DocUpload] storage:upload:start", { path });
+      const { error: upErr } = await supabase.storage.from("procurement-docs").upload(path, file);
+      if (upErr) {
+        console.error("[DocUpload] storage:upload:error", upErr);
+        toast.error(`อัปโหลดไฟล์ไป Storage ไม่สำเร็จ: ${upErr.message}`);
+        return;
+      }
+      console.log("[DocUpload] storage:upload:done", { path });
+      console.log("[DocUpload] db:insert:start");
+      const { error: dbErr } = await supabase.from("documents").insert({
+        organization_id: project.organization_id,
+        project_id: project.id,
+        step_number: stepNumber,
+        document_type: docType,
+        file_name: file.name,
+        storage_path: path,
+        file_size: file.size,
+        mime_type: file.type,
+        uploaded_by: u.user?.id ?? null,
+      });
+      if (dbErr) {
+        console.error("[DocUpload] db:insert:error", dbErr);
+        toast.error(`บันทึกข้อมูลเอกสารไม่สำเร็จ: ${dbErr.message}`);
+        return;
+      }
+      console.log("[DocUpload] db:insert:done");
+      await incrementStorageUsage(project.organization_id, file.size);
+      refreshArchive();
+      toast.success("อัปโหลดไฟล์เรียบร้อย");
+      console.log("[DocUpload] done");
+    } catch (e: any) {
+      console.error("[DocUpload] exception", e);
+      toast.error("อัปโหลดไม่สำเร็จ: " + (e.message ?? "unknown"));
+    } finally {
+      setUploading(null);
+    }
+  };
+
+  const viewDoc = async (path: string) => {
+    console.log("[DocChecklist] view:start", { path });
+    try {
+      const { data, error } = await supabase.storage.from("procurement-docs").createSignedUrl(path, 300);
+      if (error) {
+        console.error("[DocChecklist] view:error", error);
+        toast.error(`เปิดไฟล์ไม่สำเร็จ: ${error.message}`);
+        return;
+      }
+      if (data?.signedUrl) window.open(data.signedUrl, "_blank");
+      else toast.error("ไม่สามารถเปิดไฟล์ได้ (signed URL ว่าง)");
+    } catch (e: any) {
+      console.error("[DocChecklist] view:exception", e);
+      toast.error(`เปิดไฟล์ไม่สำเร็จ: ${e?.message ?? "unknown error"}`);
+    }
+  };
+
+  const deleteDoc = async (doc: Doc) => {
+    if (!confirm(`ลบเอกสาร "${doc.file_name}" ?`)) return;
+    console.log("[DocChecklist] delete:start", { docId: doc.id, path: doc.storage_path });
+    try {
+      const { error: storageErr } = await supabase.storage.from("procurement-docs").remove([doc.storage_path]);
+      if (storageErr) {
+        console.error("[DocChecklist] delete:storage_error", storageErr);
+        toast.error(`ลบไฟล์จาก Storage ไม่สำเร็จ: ${storageErr.message}`);
+        return;
+      }
+      const { error: dbErr } = await supabase.from("documents").delete().eq("id", doc.id);
+      if (dbErr) {
+        console.error("[DocChecklist] delete:db_error", dbErr);
+        toast.error(`ลบข้อมูลเอกสารไม่สำเร็จ: ${dbErr.message}`);
+        return;
+      }
+      await decrementStorageUsage(project.organization_id, Number(doc.file_size ?? 0));
+      refreshArchive();
+      toast.success("ลบไฟล์เรียบร้อยแล้ว");
+      console.log("[DocChecklist] delete:done", { docId: doc.id });
+    } catch (e: any) {
+      console.error("[DocChecklist] delete:exception", e);
+      toast.error(`ลบไฟล์ไม่สำเร็จ: ${e?.message ?? "unknown error"}`);
+    }
+  };
+
+  return (
+    <div>
+      <p className="text-sm text-muted-foreground mb-4">
+        Checklist เอกสาร (เอกสารบังคับ {requiredUploaded}/{requiredList.length} รายการ)
+      </p>
+
+      <div
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault(); setDragOver(false);
+          const file = e.dataTransfer.files[0];
+          if (file) uploadFile("เอกสารทั่วไป", file);
+        }}
+        className={`mb-4 border-2 border-dashed rounded-md p-4 text-center text-xs transition ${
+          dragOver ? "border-primary bg-primary/5" : "border-input text-muted-foreground"
+        }`}
+      >
+        ลากไฟล์มาวางที่นี่ได้ (PDF, Word, Excel, รูปภาพ — สูงสุด 50MB)
+      </div>
+
+      <ul className="space-y-2">
+        {docList.map((item) => {
+          const docType = item.name;
+          const file = existing.find((d) => d.document_type === docType);
+          return (
+            <li key={docType} className="flex items-center gap-3 p-3 rounded-md border bg-background">
+              <div className={`h-5 w-5 rounded border-2 flex items-center justify-center flex-shrink-0 ${
+                file ? "bg-success border-success" : "border-input"
+              }`}>
+                {file && <Check className="h-3 w-3 text-success-foreground" />}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium">
+                  {docType}
+                  {!item.required && (
+                    <span className="ml-2 text-xs font-normal text-muted-foreground">(ไม่บังคับ)</span>
+                  )}
+                </p>
+                {file && <p className="text-xs text-muted-foreground truncate">{file.file_name}</p>}
+              </div>
+              <input
+                ref={(el) => { fileInputs.current[docType] = el; }}
+                type="file"
+                hidden
+                accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) uploadFile(docType, f);
+                  e.target.value = "";
+                }}
+              />
+              {file ? (
+                <>
+                  <button onClick={() => viewDoc(file.storage_path)} className="h-8 w-8 rounded-md hover:bg-accent flex items-center justify-center" title="ดู">
+                    <Eye className="h-4 w-4" />
+                  </button>
+                  <button onClick={() => deleteDoc(file)} className="h-8 w-8 rounded-md hover:bg-destructive/10 text-destructive flex items-center justify-center" title="ลบ">
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={() => fileInputs.current[docType]?.click()}
+                  disabled={uploading === docType}
+                  className="h-8 px-3 rounded-md border border-input text-xs hover:bg-accent flex items-center gap-1.5"
+                >
+                  {uploading === docType ? <Loader2 className="h-3 w-3 animate-spin" /> : <Upload className="h-3 w-3" />}
+                  อัปโหลด
+                </button>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+
+      {/* แฟ้มหลักฐาน */}
+      <DocArchive
+        project={project}
+        stepNumber={stepNumber}
+        refreshTick={archiveTick}
+        onRefresh={refreshArchive}
+      />
+    </div>
+  );
+}
+
+function ContractForm({ project, onSaved }: { project: Project; onSaved: () => Promise<void> }) {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  const [contractId, setContractId] = useState<string | null>(null);
+  const [form, setForm] = useState({
+    contract_number: "",
+    contractor_name: "",
+    contractor_tax_id: "",
+    contract_amount: "",
+    start_date: "",
+    end_date: "",
+    guarantee_amount: "",
+    guarantee_type: "เงินสด",
+    signed_at: "",
+    announcement_date: "",
+    winner_date: "",
+    duration_days: "",
+    result_accumulated: "",
+  });
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from("contracts").select("*").eq("project_id", project.id).order("created_at", { ascending: false }).limit(1).maybeSingle();
+      if (data) {
+        setContractId(data.id);
+        setForm({
+          contract_number: data.contract_number ?? "",
+          contractor_name: data.contractor_name ?? "",
+          contractor_tax_id: data.contractor_tax_id ?? "",
+          contract_amount: data.contract_amount?.toString() ?? "",
+          start_date: data.start_date ?? "",
+          end_date: data.end_date ?? "",
+          guarantee_amount: data.guarantee_amount?.toString() ?? "",
+          guarantee_type: data.guarantee_type ?? "เงินสด",
+          signed_at: data.signed_at ?? "",
+          announcement_date: data.announcement_date ?? "",
+          winner_date: data.winner_date ?? "",
+          duration_days: data.duration_days?.toString() ?? "",
+          result_accumulated: data.result_accumulated ?? "",
+        });
+      }
+      setLoading(false);
+    })();
+  }, [project.id]);
+
+  const set = (k: keyof typeof form, v: string) => setForm((f) => ({ ...f, [k]: v }));
+
+  const submit = async () => {
+    setMsg(null);
+    const required: Array<[keyof typeof form, string]> = [
+      ["contract_number", "เลขที่สัญญา"],
+      ["contractor_name", "ชื่อผู้รับจ้าง"],
+      ["contract_amount", "มูลค่าสัญญา"],
+      ["start_date", "วันเริ่มสัญญา"],
+      ["end_date", "วันสิ้นสุดสัญญา"],
+      ["guarantee_amount", "หลักประกันสัญญา"],
+      ["signed_at", "วันที่ลงนาม"],
+    ];
+    const missing = required.filter(([k]) => !form[k]).map(([, l]) => l);
+    if (missing.length) { setMsg({ type: "err", text: `กรุณากรอก: ${missing.join(", ")}` }); return; }
+
+    setSaving(true);
+    const payload = {
+      organization_id: project.organization_id,
+      project_id: project.id,
+      contract_number: form.contract_number,
+      contractor_name: form.contractor_name,
+      contractor_tax_id: form.contractor_tax_id || null,
+      contract_amount: Number(form.contract_amount),
+      start_date: form.start_date,
+      end_date: form.end_date,
+      guarantee_amount: Number(form.guarantee_amount),
+      guarantee_type: form.guarantee_type,
+      signed_at: form.signed_at,
+      announcement_date: form.announcement_date || null,
+      winner_date: form.winner_date || null,
+      duration_days: form.duration_days ? Number(form.duration_days) : null,
+      result_accumulated: form.result_accumulated || null,
+      status: "active",
+    };
+    const { data, error } = contractId
+      ? await supabase.from("contracts").update(payload).eq("id", contractId).select().single()
+      : await supabase.from("contracts").insert(payload).select().single();
+    setSaving(false);
+    if (error) { setMsg({ type: "err", text: error.message }); return; }
+    if (data) setContractId(data.id);
+    setMsg({ type: "ok", text: "บันทึกสัญญาเรียบร้อย ✓" });
+    await onSaved();
+  };
+
+  if (loading) return <p className="text-sm text-muted-foreground">กำลังโหลด...</p>;
+
+  return (
+    <div className="space-y-4 max-w-2xl">
+      <h3 className="text-lg font-semibold">ข้อมูลสัญญา</h3>
+      <FieldRow label="เลขที่สัญญา *">
+        <input value={form.contract_number} onChange={(e) => set("contract_number", e.target.value)} className={inputCls} />
+      </FieldRow>
+      <FieldRow label="ชื่อผู้รับจ้าง *">
+        <input value={form.contractor_name} onChange={(e) => set("contractor_name", e.target.value)} className={inputCls} />
+      </FieldRow>
+      <FieldRow label="เลขประจำตัวผู้เสียภาษี">
+        <input value={form.contractor_tax_id} onChange={(e) => set("contractor_tax_id", e.target.value)} className={inputCls} />
+      </FieldRow>
+      <FieldRow label="มูลค่าสัญญา (฿) *">
+        <input type="number" value={form.contract_amount} onChange={(e) => set("contract_amount", e.target.value)} className={inputCls} />
+        {form.contract_amount && <p className="text-xs text-muted-foreground mt-1">{formatBaht(Number(form.contract_amount))}</p>}
+      </FieldRow>
+      <div className="grid grid-cols-2 gap-3">
+        <FieldRow label="วันเริ่มสัญญา *">
+          <ThaiDatePicker value={form.start_date} onChange={(v) => set("start_date", v)} />
+        </FieldRow>
+        <FieldRow label="วันสิ้นสุดสัญญา *">
+          <ThaiDatePicker value={form.end_date} onChange={(v) => set("end_date", v)} />
+        </FieldRow>
+      </div>
+      <FieldRow label="หลักประกันสัญญา (฿) *">
+        <input type="number" value={form.guarantee_amount} onChange={(e) => set("guarantee_amount", e.target.value)} className={inputCls} />
+        {form.guarantee_amount && <p className="text-xs text-muted-foreground mt-1">{formatBaht(Number(form.guarantee_amount))}</p>}
+      </FieldRow>
+      <FieldRow label="ประเภทหลักประกัน">
+        <select value={form.guarantee_type} onChange={(e) => set("guarantee_type", e.target.value)} className={inputCls}>
+          <option value="เงินสด">เงินสด</option>
+          <option value="หนังสือค้ำประกันธนาคาร">หนังสือค้ำประกันธนาคาร</option>
+          <option value="พันธบัตร">พันธบัตร</option>
+        </select>
+      </FieldRow>
+      <FieldRow label="วันที่ลงนาม *">
+        <ThaiDatePicker value={form.signed_at} onChange={(v) => set("signed_at", v)} />
+      </FieldRow>
+      <div className="grid grid-cols-2 gap-3">
+        <FieldRow label="วันที่ประกาศจัดซื้อจัดจ้าง">
+          <ThaiDatePicker value={form.announcement_date} onChange={(v) => set("announcement_date", v)} />
+        </FieldRow>
+        <FieldRow label="วันที่ประกาศผู้ชนะ">
+          <ThaiDatePicker value={form.winner_date} onChange={(v) => set("winner_date", v)} />
+        </FieldRow>
+      </div>
+      <FieldRow label="ระยะเวลาสัญญา (วัน)">
+        <input type="number" value={form.duration_days} onChange={(e) => set("duration_days", e.target.value)} placeholder="เช่น 330" className={inputCls} />
+      </FieldRow>
+      <FieldRow label="ผลสะสม (ไร่/บ่อ/กม.)">
+        <input value={form.result_accumulated} onChange={(e) => set("result_accumulated", e.target.value)} placeholder="เช่น 120 ไร่" className={inputCls} />
+      </FieldRow>
+      {msg && <p className={`text-sm ${msg.type === "ok" ? "text-success" : "text-destructive"}`}>{msg.text}</p>}
+      <div className="pt-2">
+        <button onClick={submit} disabled={saving}
+          className="h-10 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-60 flex items-center gap-2">
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+          บันทึกสัญญา
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ProjectTimeline({ project, steps }: { project: Project; steps: Step[] }) {
+  const sorted = [...steps].sort((a, b) => a.step_number - b.step_number);
+  const mins = getMinDays(project.method, Number(project.budget));
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  // build cursor for estimating future steps
+  const lastCompleted = [...sorted].reverse().find((s) => s.completed_at);
+  let cursor = lastCompleted?.completed_at
+    ? new Date(lastCompleted.completed_at)
+    : new Date(project.created_at);
+  if (cursor < today) {
+    // estimates start from today for in-progress / future
+  }
+
+  const items = sorted.map((s) => {
+    const isDone = !!s.completed_at;
+    const isCurrent = s.step_number === project.current_step && !isDone;
+    let date: Date | null = null;
+    let estimated = false;
+    if (isDone) {
+      date = new Date(s.completed_at as string);
+    } else {
+      const minDays = (mins as any)[`step${s.step_number}`] ?? 3;
+      const start = cursor < today ? today : cursor;
+      date = addWorkdays(start, Math.max(minDays, 1));
+      cursor = date;
+      estimated = true;
+    }
+    return { step: s, date, estimated, isCurrent, isDone };
+  });
+
+  const color = (it: typeof items[0]) =>
+    it.isDone ? "#16A34A" : it.isCurrent ? "#2563EB" : "#9CA3AF";
+
+  return (
+    <div className="bg-card border rounded-[10px] p-5">
+      <h3 className="font-semibold mb-4">ไทม์ไลน์โครงการ</h3>
+      <div className="overflow-x-auto">
+        <div className="flex items-start gap-2 min-w-max pb-2">
+          {items.map((it, i) => (
+            <div key={it.step.id} className="flex items-start gap-2">
+              <div className="flex flex-col items-center w-28">
+                <div
+                  className="h-4 w-4 rounded-full border-2 border-background shadow"
+                  style={{ backgroundColor: color(it) }}
+                />
+                <p className="text-[11px] font-medium mt-2 text-center leading-tight">
+                  {it.step.step_number}. {getMilestoneLabel(it.step.step_number)}
+                </p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  {it.estimated && "~ "}
+                  {formatThaiDate(it.date)}
+                </p>
+                {it.isCurrent && (
+                  <p className="text-[10px] mt-0.5" style={{ color: "#2563EB" }}>
+                    กำลังดำเนินการ
+                  </p>
+                )}
+              </div>
+              {i < items.length - 1 && (
+                <div className="h-0.5 w-6 bg-border mt-[7px]" />
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="flex gap-4 mt-3 text-xs text-muted-foreground">
+        <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: "#16A34A" }} />เสร็จแล้ว</span>
+        <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: "#2563EB" }} />กำลังดำเนินการ</span>
+        <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: "#9CA3AF" }} />ประมาณการ</span>
+      </div>
+    </div>
+  );
+}
+

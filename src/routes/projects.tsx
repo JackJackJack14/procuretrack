@@ -1,0 +1,346 @@
+import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
+import { useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Plus, Search, Loader2, X, FolderKanban } from "lucide-react";
+import { toast } from "sonner";
+import { supabase } from "@/integrations/supabase/client";
+import { AppShell } from "@/components/AppShell";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  METHOD_OPTIONS, METHOD_LABEL, STATUS_LABEL,
+  formatBaht, progressColor,
+} from "@/lib/procurement";
+import { EGP_MILESTONES, getMilestoneLabel, milestoneProgressPercent } from "@/lib/egp-milestones";
+
+export const Route = createFileRoute("/projects")({
+  head: () => ({ meta: [{ title: "โครงการทั้งหมด — ProcureTrack" }] }),
+  component: ProjectsPage,
+});
+
+type Project = {
+  id: string;
+  name: string;
+  project_code: string;
+  budget: number;
+  status: string;
+  method: string;
+  fiscal_year: number;
+  current_step: number;
+};
+
+const YEARS = [2566, 2567, 2568, 2569, 2570];
+
+function ProjectsPage() {
+  const navigate = useNavigate();
+  const [search, setSearch] = useState("");
+  const [yearFilter, setYearFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [methodFilter, setMethodFilter] = useState<string>("all");
+  const [showCreate, setShowCreate] = useState(false);
+
+  const { data: projects = [], isLoading: loading } = useQuery<Project[]>({
+    queryKey: ["projects"],
+    queryFn: async () => {
+      const { data: u } = await supabase.auth.getUser();
+      if (!u.user) { navigate({ to: "/login" }); return []; }
+      const { data } = await supabase
+        .from("projects")
+        .select("id, name, project_code, budget, status, method, fiscal_year, current_step")
+        .order("created_at", { ascending: false });
+      return (data ?? []) as Project[];
+    },
+  });
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return projects.filter((p) => {
+      if (q && !(p.name.toLowerCase().includes(q) || p.project_code.toLowerCase().includes(q))) return false;
+      if (yearFilter !== "all" && String(p.fiscal_year) !== yearFilter) return false;
+      if (statusFilter !== "all" && p.status !== statusFilter) return false;
+      if (methodFilter !== "all" && p.method !== methodFilter) return false;
+      return true;
+    });
+  }, [projects, search, yearFilter, statusFilter, methodFilter]);
+
+  return (
+    <AppShell breadcrumb="โครงการทั้งหมด">
+      <div className="space-y-5">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h1 className="text-2xl font-semibold">โครงการทั้งหมด</h1>
+            <p className="text-sm text-muted-foreground mt-1">บริหารโครงการจัดซื้อจัดจ้าง 10 ขั้นตอน</p>
+          </div>
+          <button
+            onClick={() => setShowCreate(true)}
+            className="h-10 px-4 rounded-md bg-primary text-primary-foreground font-medium text-sm hover:bg-primary/90 flex items-center gap-2"
+          >
+            <Plus className="h-4 w-4" /> สร้างโครงการใหม่
+          </button>
+        </div>
+
+        {/* Filters */}
+        <div className="bg-card border rounded-[10px] p-4 flex flex-wrap items-center gap-3">
+          <div className="relative flex-1 min-w-[220px]">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="ค้นหาชื่อหรือรหัสโครงการ..."
+              className="w-full h-9 pl-9 pr-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            />
+          </div>
+          <FilterSelect value={yearFilter} onChange={setYearFilter}
+            options={[{ v: "all", l: "ทุกปีงบประมาณ" }, ...YEARS.map((y) => ({ v: String(y), l: `ปี ${y}` }))]} />
+          <FilterSelect value={statusFilter} onChange={setStatusFilter}
+            options={[{ v: "all", l: "ทุกสถานะ" }, ...Object.entries(STATUS_LABEL).map(([v, l]) => ({ v, l }))]} />
+          <FilterSelect value={methodFilter} onChange={setMethodFilter}
+            options={[{ v: "all", l: "ทุกวิธี" }, ...METHOD_OPTIONS.map((m) => ({ v: m.value, l: METHOD_LABEL[m.value] }))]} />
+        </div>
+
+        {/* Grid */}
+        {loading ? (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="h-[180px] rounded-[10px]" />
+            ))}
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="bg-card border rounded-[10px] p-16 text-center">
+            <div className="h-16 w-16 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-4">
+              <FolderKanban className="h-8 w-8 text-primary" />
+            </div>
+            <h3 className="text-base font-semibold">ยังไม่มีโครงการ</h3>
+            <p className="text-sm text-muted-foreground mt-1.5">
+              เริ่มต้นบริหารงานจัดซื้อจัดจ้างด้วยการสร้างโครงการแรกของคุณ
+            </p>
+            <button
+              onClick={() => setShowCreate(true)}
+              className="mt-5 h-10 px-5 rounded-md bg-primary text-primary-foreground font-medium text-sm hover:bg-primary/90 inline-flex items-center gap-2"
+            >
+              <Plus className="h-4 w-4" /> สร้างโครงการแรก
+            </button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {filtered.map((p) => <ProjectCard key={p.id} project={p} />)}
+          </div>
+        )}
+      </div>
+
+      {showCreate && (
+        <CreateProjectModal
+          onClose={() => setShowCreate(false)}
+          onCreated={(id) => { setShowCreate(false); navigate({ to: "/projects/$projectId", params: { projectId: id } }); }}
+        />
+      )}
+    </AppShell>
+  );
+}
+
+function FilterSelect({ value, onChange, options }: {
+  value: string; onChange: (v: string) => void; options: { v: string; l: string }[];
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="h-9 px-3 rounded-md border border-input bg-background text-sm"
+    >
+      {options.map((o) => <option key={o.v} value={o.v}>{o.l}</option>)}
+    </select>
+  );
+}
+
+function ProjectCard({ project }: { project: Project }) {
+  const pct = milestoneProgressPercent(project.current_step);
+  return (
+    <Link
+      to="/projects/$projectId"
+      params={{ projectId: project.id }}
+      className="block bg-card border rounded-[10px] shadow-sm p-5 hover:shadow-md hover:border-primary/40 transition"
+    >
+      <div className="flex items-start justify-between gap-3 mb-2">
+        <div className="min-w-0 flex-1">
+          <h3 className="font-semibold truncate">{project.name}</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">{project.project_code}</p>
+        </div>
+        <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary whitespace-nowrap">
+          {STATUS_LABEL[project.status] ?? project.status}
+        </span>
+      </div>
+      <p className="text-lg font-semibold">฿ {formatBaht(Number(project.budget))}</p>
+      <p className="text-xs text-muted-foreground mt-0.5">
+        {METHOD_LABEL[project.method] ?? project.method} • ปี {project.fiscal_year}
+      </p>
+      <div className="mt-3">
+        <div className="flex items-center justify-between text-xs mb-1.5 gap-2">
+          <span className="text-muted-foreground truncate">
+            ขั้น {project.current_step}: {getMilestoneLabel(project.current_step, true)}
+          </span>
+          <span className="font-medium shrink-0">{pct}%</span>
+        </div>
+        <div className="h-2 rounded-full bg-muted overflow-hidden">
+          <div className={`h-full rounded-full ${progressColor(pct)}`} style={{ width: `${pct}%` }} />
+        </div>
+      </div>
+    </Link>
+  );
+}
+
+function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }) {
+  const queryClient = useQueryClient();
+  const [name, setName] = useState("");
+  const [code, setCode] = useState("");
+  const [description, setDescription] = useState("");
+  const [budget, setBudget] = useState("");
+  const [fiscalYear, setFiscalYear] = useState(2568);
+  const [method, setMethod] = useState("e_bidding");
+  const [districtOffice, setDistrictOffice] = useState("");
+  const [designCode, setDesignCode] = useState("");
+  const [approvingAgency, setApprovingAgency] = useState("");
+  const [procurementAgency, setProcurementAgency] = useState("");
+  const [resultUnit, setResultUnit] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    setLoading(true); setError(null);
+    try {
+      const { data: u } = await supabase.auth.getUser();
+      if (!u.user) throw new Error("ไม่พบผู้ใช้");
+      const { data: prof } = await supabase.from("profiles").select("organization_id").eq("id", u.user.id).single();
+      if (!prof?.organization_id) throw new Error("ยังไม่ได้ตั้งค่าหน่วยงาน");
+
+      const newId = (globalThis.crypto as Crypto).randomUUID();
+      const { error: insErr } = await supabase.from("projects").insert({
+        id: newId,
+        organization_id: prof.organization_id,
+        name,
+        project_code: code,
+        description: description || null,
+        budget: Number(budget.replace(/,/g, "")),
+        fiscal_year: fiscalYear,
+        method,
+        district_office: districtOffice || null,
+        design_code: designCode || null,
+        approving_agency: approvingAgency || null,
+        procurement_agency: procurementAgency || null,
+        result_unit: resultUnit || null,
+        current_step: 1,
+        status: "active",
+        created_by: u.user.id,
+      });
+      if (insErr) throw insErr;
+
+      // Auto-create 10 procurement steps (in case DB trigger not attached)
+      const steps = EGP_MILESTONES.map((nm, i) => ({
+        organization_id: prof.organization_id,
+        project_id: newId,
+        step_number: i + 1,
+        step_name: nm,
+        status: i === 0 ? "in_progress" : "pending",
+      }));
+      // Ignore conflict in case a trigger already inserted them
+      await supabase.from("procurement_steps").insert(steps);
+
+      await queryClient.invalidateQueries({ queryKey: ["projects"] });
+      toast.success("บันทึกสำเร็จ ✓");
+      onCreated(newId);
+    } catch (e: any) {
+      const msg = e.message ?? "เกิดข้อผิดพลาด กรุณาลองใหม่";
+      setError(msg);
+      toast.error(msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const formatBudget = (v: string) => {
+    const num = v.replace(/[^\d]/g, "");
+    if (!num) return "";
+    return new Intl.NumberFormat("th-TH").format(Number(num));
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 overflow-y-auto">
+      <div className="bg-card border rounded-[12px] shadow-xl w-full max-w-lg my-8">
+        <div className="flex items-center justify-between p-5 border-b">
+          <h2 className="text-lg font-semibold">สร้างโครงการใหม่</h2>
+          <button onClick={onClose} className="h-8 w-8 rounded-md hover:bg-accent flex items-center justify-center">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="p-5 space-y-4">
+          <Field label="ชื่อโครงการ *">
+            <input value={name} onChange={(e) => setName(e.target.value)} className={inputCls} />
+          </Field>
+          <Field label="รหัสโครงการ *">
+            <input value={code} onChange={(e) => setCode(e.target.value)} className={inputCls} />
+          </Field>
+          <Field label="คำอธิบาย">
+            <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3}
+              className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
+          </Field>
+          <Field label="งบประมาณ (฿) *">
+            <input value={budget} onChange={(e) => setBudget(formatBudget(e.target.value))}
+              placeholder="0" className={inputCls} />
+          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="ปีงบประมาณ">
+              <select value={fiscalYear} onChange={(e) => setFiscalYear(Number(e.target.value))} className={inputCls}>
+                {YEARS.map((y) => <option key={y} value={y}>{y}</option>)}
+              </select>
+            </Field>
+            <Field label="วิธีจัดซื้อ">
+              <select value={method} onChange={(e) => setMethod(e.target.value)} className={inputCls}>
+                {METHOD_OPTIONS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+              </select>
+            </Field>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="สพข./เขต">
+              <input value={districtOffice} onChange={(e) => setDistrictOffice(e.target.value)} placeholder="เช่น สพข.2" className={inputCls} />
+            </Field>
+            <Field label="รหัสแบบ/รหัสโครงการ">
+              <input value={designCode} onChange={(e) => setDesignCode(e.target.value)} placeholder="เช่น ฝ. ฉช.0168 / 01268" className={inputCls} />
+            </Field>
+          </div>
+          <Field label="หน่วยงานที่อนุมัติเบิกจ่าย">
+            <input value={approvingAgency} onChange={(e) => setApprovingAgency(e.target.value)} className={inputCls} />
+          </Field>
+          <Field label="หน่วยงานที่ดำเนินการจัดซื้อจัดจ้าง">
+            <input value={procurementAgency} onChange={(e) => setProcurementAgency(e.target.value)} className={inputCls} />
+          </Field>
+          <Field label="ผลสะสม (หน่วย)">
+            <input value={resultUnit} onChange={(e) => setResultUnit(e.target.value)} placeholder="เช่น ไร่, บ่อ, กม." className={inputCls} />
+          </Field>
+          {error && <p className="text-sm text-destructive">{error}</p>}
+        </div>
+        <div className="flex gap-3 p-5 border-t">
+          <button onClick={onClose} className="flex-1 h-10 rounded-md border border-input bg-background text-sm font-medium hover:bg-accent">
+            ยกเลิก
+          </button>
+          <button
+            onClick={submit}
+            disabled={!name || !code || !budget || loading}
+            className="flex-1 h-10 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+            สร้างโครงการ
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const inputCls = "w-full h-10 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring";
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="block text-sm font-medium mb-1.5">{label}</label>
+      {children}
+    </div>
+  );
+}
