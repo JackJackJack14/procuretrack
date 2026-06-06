@@ -18,7 +18,7 @@ import { formatThaiDate } from "@/lib/utils";
 import { checkStorageQuota, incrementStorageUsage, decrementStorageUsage } from "@/lib/storage";
 import { ThaiDatePicker } from "@/components/ThaiDatePicker";
 import { GuidelineBox } from "@/components/GuidelineBox";
-import { Step1DetailForm, Step2DetailForm, Step3DetailForm } from "@/components/steps/ProjectStepForms";
+import { Step1DetailForm, Step2DetailForm, Step3DetailForm, Step4DetailForm, ResponsibleOfficerField } from "@/components/steps/ProjectStepForms";
 import { StepDocumentHub } from "@/components/steps/StepDocumentHub";
 import { StepInlineDocList } from "@/components/steps/StepInlineDocList";
 import {
@@ -37,9 +37,24 @@ import {
   loadStep3FormFromNote,
   EMPTY_STEP3_ANNOUNCEMENT,
   buildProjectProcurementRequestFields,
+  buildProjectStep4Fields,
   resolveCommitteeReviewWorkdays,
+  loadStep4FormFromNote,
+  mergeStep4BidResultFromProject,
+  EMPTY_STEP4_BID_RESULT,
+  EMPTY_STEP4_CHECKLIST,
+  isStep4AppealBlocking,
+  isStep4ReadyForNext,
+  getStep4ComplianceIssues,
+  resolveBidSubmissionEndDate,
+  getStep1ResponsibleOfficer,
+  resolveResponsibleOfficer,
   type Step3Announcement,
+  type Step4BidResult,
+  type Step4Checklist,
+  type Step4ChecklistKey,
 } from "@/lib/step-form";
+import { STEP4_DOC } from "@/lib/step-doc-types";
 import {
   getStep3HearingTier,
   shouldShowStep3HearingForm,
@@ -83,6 +98,15 @@ type Project = {
   procurement_request_letter_no?: string | null;
   procurement_request_approval_date?: string | null;
   committee_review_workdays?: number | null;
+  egp_doc_request_count?: number | null;
+  egp_bid_submission_count?: number | null;
+  winning_bidder_name?: string | null;
+  winning_bid_amount?: number | null;
+  evaluation_report_letter_no?: string | null;
+  evaluation_report_approval_date?: string | null;
+  appeal_status?: string | null;
+  appeal_report_letter_no?: string | null;
+  appeal_consideration_status?: string | null;
 };
 
 type Step = {
@@ -146,6 +170,12 @@ function ProjectDetailPage() {
     ...EMPTY_STEP3_ANNOUNCEMENT,
   });
   const [step3Skipping, setStep3Skipping] = useState(false);
+  const [step4BidResult, setStep4BidResult] = useState<Step4BidResult>({
+    ...EMPTY_STEP4_BID_RESULT,
+  });
+  const [step4Checklist, setStep4Checklist] = useState<Step4Checklist>({
+    ...EMPTY_STEP4_CHECKLIST,
+  });
 
   const { data, isLoading: loading, refetch } = useQuery({
     queryKey: ["project", projectId],
@@ -178,10 +208,25 @@ function ProjectDetailPage() {
 
   const current = useMemo(() => steps.find((s) => s.step_number === activeStep), [steps, activeStep]);
   const step3Record = useMemo(() => steps.find((s) => s.step_number === 3), [steps]);
+  const step1Record = useMemo(() => steps.find((s) => s.step_number === 1), [steps]);
+  const step1ResponsibleDefault = useMemo(
+    () => getStep1ResponsibleOfficer(steps),
+    [steps, step1Record?.responsible_officer_name, step1Record?.id],
+  );
   const committeeReviewWorkdays = useMemo(
     () => resolveCommitteeReviewWorkdays(project, step3Record?.note ?? null),
     [project, step3Record?.note],
   );
+  const bidSubmissionEndDate = useMemo(
+    () => resolveBidSubmissionEndDate(step3Record?.note ?? null),
+    [step3Record?.note],
+  );
+
+  useEffect(() => {
+    if (!steps.length) return;
+    const active = steps.find((s) => s.step_number === activeStep);
+    setResponsibleName(resolveResponsibleOfficer(active, step1ResponsibleDefault));
+  }, [activeStep, step1ResponsibleDefault, steps]);
 
   useEffect(() => {
     if (!current || !project) return;
@@ -196,7 +241,6 @@ function ProjectDetailPage() {
       const m = project.method ?? "e_bidding";
       setStep1Method(m === "e_market" ? "selection" : m);
       const draft1 = loadStepDraftFields(current);
-      setResponsibleName(draft1.responsible);
       setNote(draft1.userNote);
       setDueDate(draft1.dueDate);
       return;
@@ -213,7 +257,6 @@ function ProjectDetailPage() {
       });
       const names = committees.map((cm: any) => cm.member_name).filter(Boolean);
       setCommitteeMembers(names.length >= 3 ? names : [...names, ...Array(Math.max(0, 3 - names.length)).fill("")]);
-      setResponsibleName("");
       setNote(draft2.userNote);
       setDueDate("");
       return;
@@ -244,16 +287,41 @@ function ProjectDetailPage() {
             ? step3Form.announcement.committee_review_workdays
             : project.committee_review_workdays ?? null,
       });
-      setResponsibleName(draft3.responsible);
       setNote(draft3.userNote);
       setDueDate("");
       return;
     }
+    if (current.step_number === 4) {
+      const { userNote } = parseStepNote(current.note);
+      const step4Form = loadStep4FormFromNote(current.note);
+      setStep4Checklist(step4Form.checklist ?? { ...EMPTY_STEP4_CHECKLIST });
+      setStep4BidResult(
+        mergeStep4BidResultFromProject(
+          step4Form.bidResult ?? { ...EMPTY_STEP4_BID_RESULT },
+          project,
+        ),
+      );
+      setNote("");
+      setDueDate("");
+      return;
+    }
     const draft = loadStepDraftFields(current);
-    setResponsibleName(draft.responsible);
     setNote(draft.userNote);
     setDueDate(draft.dueDate);
   }, [current?.id, project?.id, committees.length]); // eslint-disable-line
+
+  const effectiveResponsibleName =
+    responsibleName.trim() || step1ResponsibleDefault.trim();
+
+  /** ซิงก์ชื่อเจ้าหน้าที่กลับขั้นตอนที่ 1 (ค่ามาตรฐาน) เมื่อบันทึกจากขั้นอื่น */
+  const propagateResponsibleToStep1 = async (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed || !step1Record || current?.step_number === 1) return;
+    await supabase
+      .from("procurement_steps")
+      .update(buildStepDraftFields(trimmed, "", ""))
+      .eq("id", step1Record.id);
+  };
 
   /** งบ/วิธีจัดซื้อที่ใช้คำนวณ — อ่านจากฟอร์มขั้น 1 ถ้ากำลังอยู่ขั้นนั้น */
   const calcBudget = project
@@ -298,6 +366,14 @@ function ProjectDetailPage() {
 
   const patchStep3Announcement = (patch: Partial<Step3Announcement>) => {
     setStep3Announcement((prev) => ({ ...prev, ...patch }));
+  };
+
+  const patchStep4BidResult = (patch: Partial<Step4BidResult>) => {
+    setStep4BidResult((prev) => ({ ...prev, ...patch }));
+  };
+
+  const setStep4Check = (key: Step4ChecklistKey, checked: boolean) => {
+    setStep4Checklist((prev) => ({ ...prev, [key]: checked }));
   };
 
   const addCommitteeMember = () => setCommitteeMembers((prev) => [...prev, ""]);
@@ -371,12 +447,13 @@ function ProjectDetailPage() {
       }
       const { error: se } = await patchStepDraft(
         current.id,
-        buildStepDraftFields(responsibleName, note, dueDate),
+        buildStepDraftFields(effectiveResponsibleName, note, dueDate),
       );
       if (se?.error) {
         setError(se.error.message);
         return;
       }
+      await propagateResponsibleToStep1(effectiveResponsibleName);
       await invalidateAll();
       return;
     }
@@ -387,7 +464,7 @@ function ProjectDetailPage() {
       });
       const { error: e } = await patchStepDraft(
         current.id,
-        buildStepDraftFields("", note, ""),
+        buildStepDraftFields(effectiveResponsibleName, note, ""),
         { note: formNote || null },
       );
       if (e?.error) {
@@ -428,6 +505,7 @@ function ProjectDetailPage() {
       }
 
       toast.success("บันทึกร่างขั้นตอนที่ 2 เรียบร้อย");
+      await propagateResponsibleToStep1(effectiveResponsibleName);
       await invalidateAll();
       return;
     }
@@ -439,7 +517,7 @@ function ProjectDetailPage() {
       });
       const { error: e } = await patchStepDraft(
         current.id,
-        buildStepDraftFields(responsibleName, "", ""),
+        buildStepDraftFields(effectiveResponsibleName, "", ""),
         { note: formNote || null },
       );
       if (e?.error) {
@@ -454,18 +532,47 @@ function ProjectDetailPage() {
         console.warn("[Step3] project procurement fields sync failed", projErr);
       }
       toast.success("บันทึกร่างขั้นตอนที่ 3 เรียบร้อย");
+      await propagateResponsibleToStep1(effectiveResponsibleName);
+      await invalidateAll();
+      return;
+    }
+
+    if (current.step_number === 4) {
+      const formNote = serializeStepNote("", {
+        checklist: step4Checklist,
+        bidResult: step4BidResult,
+      });
+      const { error: e } = await patchStepDraft(
+        current.id,
+        buildStepDraftFields(effectiveResponsibleName, "", ""),
+        { note: formNote || null },
+      );
+      if (e?.error) {
+        setError(e.error.message);
+        return;
+      }
+      const { error: projErr } = await supabase
+        .from("projects")
+        .update(buildProjectStep4Fields(step4BidResult))
+        .eq("id", project.id);
+      if (projErr) {
+        console.warn("[Step4] project bid result sync failed", projErr);
+      }
+      toast.success("บันทึกร่างขั้นตอนที่ 4 เรียบร้อย");
+      await propagateResponsibleToStep1(effectiveResponsibleName);
       await invalidateAll();
       return;
     }
 
     const { error: e } = await patchStepDraft(
       current.id,
-      buildStepDraftFields(responsibleName, note, dueDate),
+      buildStepDraftFields(effectiveResponsibleName, note, dueDate),
     );
     if (e?.error) {
       setError(e.error.message);
       return;
     }
+    await propagateResponsibleToStep1(effectiveResponsibleName);
     await invalidateAll();
   };
 
@@ -473,9 +580,9 @@ function ProjectDetailPage() {
     if (!current || !project) return;
     const { data: u } = await supabase.auth.getUser();
     const draftFields =
-      current.step_number === 3
-        ? buildStepDraftFields(responsibleName, note, "")
-        : buildStepDraftFields(responsibleName, note, dueDate);
+      current.step_number === 3 || current.step_number === 4
+        ? buildStepDraftFields(effectiveResponsibleName, note, "")
+        : buildStepDraftFields(effectiveResponsibleName, note, dueDate);
     const { error: e1 } = await supabase.from("procurement_steps").update({
       status: "completed",
       completed_at: new Date().toISOString(),
@@ -486,6 +593,7 @@ function ProjectDetailPage() {
       setError(e1.message);
       return false;
     }
+    await propagateResponsibleToStep1(effectiveResponsibleName);
 
     const nextStep = Math.min(10, current.step_number + 1);
     const updates: Record<string, unknown> = { current_step: nextStep };
@@ -524,6 +632,26 @@ function ProjectDetailPage() {
           setError(pubErr);
           return;
         }
+      }
+    }
+    if (current.step_number === 4) {
+      const hasEvalDoc = docs
+        .filter((d) => d.step_number === 4)
+        .some((d) => d.document_type === STEP4_DOC.EVALUATION_REPORT);
+      const complianceIssues = getStep4ComplianceIssues(
+        step4Checklist,
+        step4BidResult,
+        {
+          responsibleName: effectiveResponsibleName,
+          hasEvaluationReportDoc: hasEvalDoc,
+          bidSubmissionEndDate,
+          committeeReviewWorkdays,
+        },
+      );
+      if (complianceIssues.length > 0) {
+        toast.error(complianceIssues[0].message);
+        setError(complianceIssues[0].message);
+        return;
       }
     }
     await saveDraft();
@@ -574,7 +702,7 @@ function ProjectDetailPage() {
       });
       const { error: saveErr } = await patchStepDraft(
         current.id,
-        buildStepDraftFields(responsibleName, "", ""),
+        buildStepDraftFields(effectiveResponsibleName, "", ""),
         { note: formNote || null },
       );
       if (saveErr?.error) {
@@ -791,6 +919,8 @@ function ProjectDetailPage() {
                       onEstimatedPriceChange={setEstimatedPrice}
                       method={step1Method}
                       onMethodChange={setStep1Method}
+                      responsibleName={responsibleName}
+                      onResponsibleNameChange={setResponsibleName}
                     />
                   )}
                   {current.step_number === 2 && (
@@ -801,6 +931,9 @@ function ProjectDetailPage() {
                       onCommitteeChange={changeCommitteeMember}
                       onAddCommittee={addCommitteeMember}
                       onRemoveCommittee={removeCommitteeMember}
+                      responsibleName={responsibleName}
+                      onResponsibleNameChange={setResponsibleName}
+                      step1ResponsibleDefault={step1ResponsibleDefault}
                     />
                   )}
                   {current.step_number === 3 && showStep3HearingForm && (
@@ -811,6 +944,7 @@ function ProjectDetailPage() {
                       onAnnouncementChange={patchStep3Announcement}
                       responsibleName={responsibleName}
                       onResponsibleNameChange={setResponsibleName}
+                      step1ResponsibleDefault={step1ResponsibleDefault}
                       docBinder={{
                         project,
                         stepNumber: 3,
@@ -826,9 +960,29 @@ function ProjectDetailPage() {
                         : "หากหัวหน้าหน่วยงานไม่จัดฟังคำวิจารณ์ กดปุ่มข้ามในกล่องไกด์ไลน์ — หรือกด «ดำเนินการจัดฟังคำวิจารณ์» เพื่อเปิดฟอร์มบันทึกข้อมูล"}
                     </p>
                   )}
+                  {current.step_number === 4 && (
+                    <Step4DetailForm
+                      checklist={step4Checklist}
+                      onChecklistChange={setStep4Check}
+                      bidResult={step4BidResult}
+                      onBidResultChange={patchStep4BidResult}
+                      responsibleName={responsibleName}
+                      onResponsibleNameChange={setResponsibleName}
+                      step1ResponsibleDefault={step1ResponsibleDefault}
+                      bidSubmissionEndDate={bidSubmissionEndDate}
+                      committeeReviewWorkdays={committeeReviewWorkdays}
+                      docBinder={{
+                        project,
+                        stepNumber: 4,
+                        docs: docsForStep,
+                        onDocsChange: invalidateAll,
+                      }}
+                    />
+                  )}
                   {current.step_number !== 1 &&
                     current.step_number !== 2 &&
-                    current.step_number !== 3 && (
+                    current.step_number !== 3 &&
+                    current.step_number !== 4 && (
                     <FieldRow label="กำหนดเสร็จ">
                       <div className="space-y-1">
                         <ThaiDatePicker value={dueDate} onChange={setDueDate} />
@@ -848,18 +1002,19 @@ function ProjectDetailPage() {
                       </div>
                     </FieldRow>
                   )}
-                  {current.step_number !== 2 &&
-                    current.step_number !== 3 && (
-                    <FieldRow label="เจ้าหน้าที่ผู้รับผิดชอบ">
-                      <input
-                        value={responsibleName}
-                        onChange={(e) => setResponsibleName(e.target.value)}
-                        placeholder="ระบุชื่อเจ้าหน้าที่ผิดชอบโครงการ"
-                        className={inputCls}
-                      />
-                    </FieldRow>
+                  {current.step_number !== 1 &&
+                    current.step_number !== 2 &&
+                    current.step_number !== 3 &&
+                    current.step_number !== 4 && (
+                    <ResponsibleOfficerField
+                      stepNumber={current.step_number}
+                      value={responsibleName}
+                      onChange={setResponsibleName}
+                      step1Default={step1ResponsibleDefault}
+                    />
                   )}
-                  {current.step_number !== 3 && (
+                  {current.step_number !== 3 &&
+                    current.step_number !== 4 && (
                     <FieldRow label="หมายเหตุ">
                       <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={4}
                         className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
@@ -870,7 +1025,8 @@ function ProjectDetailPage() {
                       <Check className="h-4 w-4" /> ขั้นตอนนี้เสร็จสิ้นแล้ว
                     </p>
                   )}
-                  {current.step_number !== 3 && (
+                  {current.step_number !== 3 &&
+                    current.step_number !== 4 && (
                     <StepInlineDocList
                       project={project}
                       stepNumber={current.step_number}
@@ -879,7 +1035,8 @@ function ProjectDetailPage() {
                       onChange={invalidateAll}
                     />
                   )}
-                  {!(current.step_number === 3 && !showStep3HearingForm) && (
+                  {!(current.step_number === 3 && !showStep3HearingForm) &&
+                    current.step_number !== 4 && (
                     <StepDocumentHub
                       stepNumber={current.step_number}
                       docList={STEP_DOCS_DETAILED[current.step_number - 1] ?? []}
@@ -903,13 +1060,41 @@ function ProjectDetailPage() {
                 const total = requiredDocs.length;
                 const allUploaded = total === 0 || completedCount >= total;
                 const isCompleted = current.status === "completed";
-                const disabled = isCompleted || !allUploaded;
+                const step4HasEvalDoc =
+                  current.step_number === 4 &&
+                  docsForStep.some((d) => d.document_type === STEP4_DOC.EVALUATION_REPORT);
+                const step4ComplianceIssues =
+                  current.step_number === 4
+                    ? getStep4ComplianceIssues(step4Checklist, step4BidResult, {
+                        responsibleName: effectiveResponsibleName,
+                        hasEvaluationReportDoc: step4HasEvalDoc,
+                        bidSubmissionEndDate,
+                        committeeReviewWorkdays,
+                      })
+                    : [];
+                const step4Ready =
+                  current.step_number !== 4 ||
+                  isStep4ReadyForNext(step4Checklist, step4BidResult, {
+                    responsibleName: effectiveResponsibleName,
+                    hasEvaluationReportDoc: step4HasEvalDoc,
+                    bidSubmissionEndDate,
+                    committeeReviewWorkdays,
+                  });
+                const appealBlocking =
+                  current.step_number === 4 && isStep4AppealBlocking(step4BidResult);
+                const disabled =
+                  isCompleted ||
+                  (current.step_number === 4 ? !step4Ready : !allUploaded);
                 const showCompleteBtn =
                   isCompleted ||
                   current.step_number !== 3 ||
                   showStep3HearingForm;
                 const showSaveDraft =
                   current.step_number !== 3 || showStep3HearingForm;
+                const completeBtnLabel =
+                  current.step_number === 4
+                    ? "ขั้นตอนถัดไป (ทำสัญญา)"
+                    : "ยืนยันเสร็จสิ้น → ขั้นตอนถัดไป";
                 return (
                   <div className="mt-6 pt-5 border-t">
                     <div className="flex gap-3 flex-wrap">
@@ -950,11 +1135,32 @@ function ProjectDetailPage() {
                           disabled={disabled}
                           className="h-10 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed disabled:hover:bg-muted flex items-center gap-2"
                         >
-                          <Check className="h-4 w-4" /> ยืนยันเสร็จสิ้น → ขั้นตอนถัดไป
+                          <Check className="h-4 w-4" /> {completeBtnLabel}
                         </button>
                       )}
                     </div>
-                    {!allUploaded && !isCompleted && (
+                    {appealBlocking && !isCompleted && (
+                      <p className="text-sm text-destructive mt-3 font-medium">
+                        ⚠️ แจ้งเตือน: โครงการนี้ติดสถานะอุทธรณ์ ไม่สามารถไปขั้นตอนทำสัญญาได้
+                      </p>
+                    )}
+                    {current.step_number === 4 && !isCompleted && !step4Ready && step4ComplianceIssues.length > 0 && (
+                      <div className="text-sm text-muted-foreground mt-3 space-y-1 rounded-md border border-dashed border-border bg-muted/30 p-3">
+                        <p className="font-medium text-foreground flex items-center gap-1.5">
+                          <AlertTriangle className="h-4 w-4 text-warning shrink-0" />
+                          กรุณาดำเนินการให้ครบก่อนไปขั้นถัดไป:
+                        </p>
+                        <ul className="list-disc list-inside space-y-0.5 text-xs">
+                          {step4ComplianceIssues.slice(0, 4).map((issue) => (
+                            <li key={issue.id}>{issue.message}</li>
+                          ))}
+                          {step4ComplianceIssues.length > 4 && (
+                            <li>และอีก {step4ComplianceIssues.length - 4} รายการ...</li>
+                          )}
+                        </ul>
+                      </div>
+                    )}
+                    {current.step_number !== 4 && !allUploaded && !isCompleted && (
                       <p className="text-sm text-warning mt-3 flex items-center gap-1.5">
                         <AlertTriangle className="h-4 w-4" />
                         กรุณาอัปโหลดเอกสารบังคับให้ครบ {completedCount}/{total} รายการก่อนดำเนินการต่อ
@@ -1475,6 +1681,12 @@ function ContractForm({ project, onSaved }: { project: Project; onSaved: () => P
           duration_days: data.duration_days?.toString() ?? "",
           result_accumulated: data.result_accumulated ?? "",
         });
+      } else if (project.winning_bid_amount || project.winning_bidder_name) {
+        setForm((f) => ({
+          ...f,
+          contractor_name: project.winning_bidder_name ?? "",
+          contract_amount: project.winning_bid_amount?.toString() ?? "",
+        }));
       }
       setLoading(false);
     })();

@@ -31,10 +31,7 @@ export const STEP_DOCS_DETAILED: DocItem[][] = [
     { name: "PDF รายงานผลการวิจารณ์", required: true },
   ],
   [
-    { name: "รายชื่อผู้ยื่นข้อเสนอราคา", required: true },
-    { name: "บันทึกเปิดซอง/ตรวจคุณสมบัติ", required: true },
-    { name: "รายงานผลการพิจารณาเบื้องต้น", required: true },
-    { name: "ข้อเสนอของผู้ประกอบการทุกราย", required: false },
+    { name: "PDF รายงานผลการพิจารณา", required: true },
   ],
   [
     { name: "รายงานผลการพิจารณา (ลงนามคณะกรรมการครบ)", required: true },

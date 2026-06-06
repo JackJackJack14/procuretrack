@@ -10,6 +10,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { AppShell } from "@/components/AppShell";
 import { fetchAlerts, type Alert as AlertType } from "@/lib/alerts";
 import { formatThaiDate } from "@/lib/utils";
+import { APPEAL_STATUS_LABELS } from "@/lib/step-form";
 
 export const Route = createFileRoute("/dashboard")({
   head: () => ({ meta: [{ title: "หน้าหลัก — ProcureTrack" }] }),
@@ -24,6 +25,7 @@ type Project = {
   current_step: number;
   fiscal_year: number;
   created_at: string;
+  appeal_status?: string | null;
 };
 
 function DashboardPage() {
@@ -39,7 +41,7 @@ function DashboardPage() {
       if (!u.user) { navigate({ to: "/login" }); return []; }
       const { data } = await supabase
         .from("projects")
-        .select("id, name, budget, status, current_step, fiscal_year, created_at")
+        .select("id, name, budget, status, current_step, fiscal_year, created_at, appeal_status")
         .order("created_at", { ascending: false });
       return (data ?? []) as Project[];
     },
@@ -57,7 +59,9 @@ function DashboardPage() {
     const total = projects.length;
     const budget = projects.reduce((s, p) => s + Number(p.budget ?? 0), 0);
     const active = projects.filter((p) => p.status === "active").length;
-    return { total, budget, active, urgent: redAlerts.length };
+    const appealPending = projects.filter((p) => p.appeal_status === "pending").length;
+    const readyForContract = projects.filter((p) => p.appeal_status === "none" && p.current_step >= 4).length;
+    return { total, budget, active, urgent: redAlerts.length, appealPending, readyForContract };
   }, [projects, redAlerts]);
 
 
@@ -107,10 +111,12 @@ function DashboardPage() {
         </div>
 
         {/* Metrics */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
           <MetricCard label="โครงการทั้งหมด" value={metrics.total.toString()} icon={FolderKanban} tone="primary" />
           <MetricCard label="งบประมาณรวม (฿)" value={formatBaht(metrics.budget)} icon={Banknote} tone="success" />
           <MetricCard label="กำลังดำเนินการ" value={metrics.active.toString()} icon={Activity} tone="info" />
+          <MetricCard label="พร้อมทำสัญญา" value={metrics.readyForContract.toString()} icon={CheckCircle2} tone="success" />
+          <MetricCard label="ติดอุทธรณ์" value={metrics.appealPending.toString()} icon={AlertCircle} tone="warning" />
           <MetricCard label="ต้องดำเนินการด่วน" value={metrics.urgent.toString()} icon={AlertTriangle} tone="warning" />
         </div>
 
@@ -128,9 +134,12 @@ function DashboardPage() {
                   return (
                     <li key={p.id} className="py-3">
                       <Link to="/projects/$projectId" params={{ projectId: p.id }} className="block hover:bg-accent/40 -mx-2 px-2 py-1 rounded-md">
-                        <div className="flex items-center justify-between mb-1.5">
+                        <div className="flex items-center justify-between mb-1.5 gap-2">
                           <p className="text-sm font-medium truncate flex-1">{p.name}</p>
-                          <span className="text-xs text-muted-foreground ml-3">ขั้นตอน {p.current_step}/10</span>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <AppealStatusBadge appealStatus={p.appeal_status} currentStep={p.current_step} />
+                            <span className="text-xs text-muted-foreground">ขั้นตอน {p.current_step}/10</span>
+                          </div>
                         </div>
                         <div className="flex items-center gap-3">
                           <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
@@ -218,6 +227,31 @@ function DashboardPage() {
       </button>
     </AppShell>
   );
+}
+
+function AppealStatusBadge({
+  appealStatus,
+  currentStep,
+}: {
+  appealStatus?: string | null;
+  currentStep: number;
+}) {
+  if (currentStep < 4 || !appealStatus) return null;
+  if (appealStatus === "pending") {
+    return (
+      <span className="text-[10px] px-2 py-0.5 rounded-full bg-destructive/10 text-destructive font-medium whitespace-nowrap">
+        {APPEAL_STATUS_LABELS.pending}
+      </span>
+    );
+  }
+  if (appealStatus === "none") {
+    return (
+      <span className="text-[10px] px-2 py-0.5 rounded-full bg-success/15 text-success font-medium whitespace-nowrap">
+        {APPEAL_STATUS_LABELS.none}
+      </span>
+    );
+  }
+  return null;
 }
 
 function MetricCard({

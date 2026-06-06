@@ -615,6 +615,9 @@ export type Database = {
       }
       projects: {
         Row: {
+          appeal_consideration_status: string | null
+          appeal_report_letter_no: string | null
+          appeal_status: string | null
           approving_agency: string | null
           budget: number
           committee_review_workdays: number | null
@@ -624,7 +627,11 @@ export type Database = {
           description: string | null
           design_code: string | null
           district_office: string | null
+          egp_bid_submission_count: number | null
+          egp_doc_request_count: number | null
           estimated_price: number | null
+          evaluation_report_approval_date: string | null
+          evaluation_report_letter_no: string | null
           fiscal_year: number
           id: string
           method: string
@@ -637,8 +644,13 @@ export type Database = {
           result_unit: string | null
           status: string
           updated_at: string
+          winning_bid_amount: number | null
+          winning_bidder_name: string | null
         }
         Insert: {
+          appeal_consideration_status?: string | null
+          appeal_report_letter_no?: string | null
+          appeal_status?: string | null
           approving_agency?: string | null
           budget: number
           committee_review_workdays?: number | null
@@ -648,7 +660,11 @@ export type Database = {
           description?: string | null
           design_code?: string | null
           district_office?: string | null
+          egp_bid_submission_count?: number | null
+          egp_doc_request_count?: number | null
           estimated_price?: number | null
+          evaluation_report_approval_date?: string | null
+          evaluation_report_letter_no?: string | null
           fiscal_year: number
           id?: string
           method?: string
@@ -661,8 +677,13 @@ export type Database = {
           result_unit?: string | null
           status?: string
           updated_at?: string
+          winning_bid_amount?: number | null
+          winning_bidder_name?: string | null
         }
         Update: {
+          appeal_consideration_status?: string | null
+          appeal_report_letter_no?: string | null
+          appeal_status?: string | null
           approving_agency?: string | null
           budget?: number
           committee_review_workdays?: number | null
@@ -672,7 +693,11 @@ export type Database = {
           description?: string | null
           design_code?: string | null
           district_office?: string | null
+          egp_bid_submission_count?: number | null
+          egp_doc_request_count?: number | null
           estimated_price?: number | null
+          evaluation_report_approval_date?: string | null
+          evaluation_report_letter_no?: string | null
           fiscal_year?: number
           id?: string
           method?: string
@@ -685,6 +710,8 @@ export type Database = {
           result_unit?: string | null
           status?: string
           updated_at?: string
+          winning_bid_amount?: number | null
+          winning_bidder_name?: string | null
         }
         Relationships: [
           {

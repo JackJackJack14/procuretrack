@@ -15,6 +15,14 @@ export const STEP3_FEEDBACK_HELPER_NONE =
 export const STEP3_FEEDBACK_HELPER_HAS_COMMENTS =
   "หมายเหตุ: ให้แนบรายงานข้อสรุปประเด็นที่มีผู้เสนอแนะหรือวิจารณ์ พร้อมบันทึกข้อความชี้แจง/ปรับปรุงร่าง TOR ที่เสนอหัวหน้าหน่วยงานเห็นชอบ";
 
+/** ประเภทเอกสารขั้นตอนที่ 4 — ผูกกับฟิลด์ฟอร์ม */
+export const STEP4_DOC = {
+  EVALUATION_REPORT: "PDF รายงานผลการพิจารณา",
+} as const;
+
+export const STEP4_EVALUATION_UPLOAD_LABEL =
+  "📎 แนบเอกสารรายงานผลการพิจารณา (PDF)";
+
 /** ชื่อเอกสารเก่า (backward compatible ใน Hub) */
 export const STEP3_DOC_LEGACY = [
   "ร่าง TOR / รายละเอียดคุณลักษณะเฉพาะ",

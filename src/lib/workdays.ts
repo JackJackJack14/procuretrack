@@ -154,6 +154,12 @@ export function defaultPublicationEndISO(
   return toISODate(addWorkdays(start, workdaysAfter));
 }
 
+/** วันเดดไลน์พิจารณาผล — วันปิดรับซอง + N วันทำการ (ใช้ addWorkdays ข้ามวันหยุด) */
+export function reviewDeadlineISO(bidSubmissionEndISO: string, workdays: number): string {
+  if (!bidSubmissionEndISO || workdays <= 0) return "";
+  return defaultPublicationEndISO(bidSubmissionEndISO, workdays);
+}
+
 /** @deprecated ใช้ defaultPublicationEndISO แทน */
 export function minEndDateForWorkdayCountISO(startISO: string, minWorkdays = 3): string {
   return defaultPublicationEndISO(startISO, minWorkdays);

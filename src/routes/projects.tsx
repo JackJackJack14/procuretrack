@@ -11,6 +11,7 @@ import {
   formatBaht, progressColor,
 } from "@/lib/procurement";
 import { EGP_MILESTONES, getMilestoneLabel, milestoneProgressPercent } from "@/lib/egp-milestones";
+import { APPEAL_STATUS_LABELS } from "@/lib/step-form";
 
 export const Route = createFileRoute("/projects")({
   head: () => ({ meta: [{ title: "โครงการทั้งหมด — ProcureTrack" }] }),
@@ -26,6 +27,7 @@ type Project = {
   method: string;
   fiscal_year: number;
   current_step: number;
+  appeal_status?: string | null;
 };
 
 const YEARS = [2566, 2567, 2568, 2569, 2570];
@@ -45,7 +47,7 @@ function ProjectsPage() {
       if (!u.user) { navigate({ to: "/login" }); return []; }
       const { data } = await supabase
         .from("projects")
-        .select("id, name, project_code, budget, status, method, fiscal_year, current_step")
+        .select("id, name, project_code, budget, status, method, fiscal_year, current_step, appeal_status")
         .order("created_at", { ascending: false });
       return (data ?? []) as Project[];
     },
@@ -177,7 +179,19 @@ function ProjectCard({ project }: { project: Project }) {
           <span className="text-muted-foreground truncate">
             ขั้น {project.current_step}: {getMilestoneLabel(project.current_step, true)}
           </span>
-          <span className="font-medium shrink-0">{pct}%</span>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {project.current_step >= 4 && project.appeal_status === "pending" && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-destructive/10 text-destructive font-medium">
+                {APPEAL_STATUS_LABELS.pending}
+              </span>
+            )}
+            {project.current_step >= 4 && project.appeal_status === "none" && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-success/15 text-success font-medium">
+                {APPEAL_STATUS_LABELS.none}
+              </span>
+            )}
+            <span className="font-medium">{pct}%</span>
+          </div>
         </div>
         <div className="h-2 rounded-full bg-muted overflow-hidden">
           <div className={`h-full rounded-full ${progressColor(pct)}`} style={{ width: `${pct}%` }} />
