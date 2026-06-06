@@ -36,6 +36,8 @@ import {
   loadStepDraftFields,
   loadStep3FormFromNote,
   EMPTY_STEP3_ANNOUNCEMENT,
+  buildProjectProcurementRequestFields,
+  resolveCommitteeReviewWorkdays,
   type Step3Announcement,
 } from "@/lib/step-form";
 import {
@@ -78,6 +80,9 @@ type Project = {
   approving_agency: string | null;
   procurement_agency: string | null;
   result_unit: string | null;
+  procurement_request_letter_no?: string | null;
+  procurement_request_approval_date?: string | null;
+  committee_review_workdays?: number | null;
 };
 
 type Step = {
@@ -172,6 +177,11 @@ function ProjectDetailPage() {
   }, [project?.id]); // eslint-disable-line
 
   const current = useMemo(() => steps.find((s) => s.step_number === activeStep), [steps, activeStep]);
+  const step3Record = useMemo(() => steps.find((s) => s.step_number === 3), [steps]);
+  const committeeReviewWorkdays = useMemo(
+    () => resolveCommitteeReviewWorkdays(project, step3Record?.note ?? null),
+    [project, step3Record?.note],
+  );
 
   useEffect(() => {
     if (!current || !project) return;
@@ -217,7 +227,23 @@ function ProjectDetailPage() {
         director_report_submitted: !!step3Form.checklist?.director_report_submitted,
         draft_published_for_comment: !!step3Form.checklist?.draft_published_for_comment,
       });
-      setStep3Announcement(step3Form.announcement ?? { ...EMPTY_STEP3_ANNOUNCEMENT });
+      setStep3Announcement({
+        ...EMPTY_STEP3_ANNOUNCEMENT,
+        ...step3Form.announcement,
+        procurement_request_letter_no:
+          step3Form.announcement?.procurement_request_letter_no?.trim() ||
+          project.procurement_request_letter_no ||
+          "",
+        procurement_request_approval_date:
+          step3Form.announcement?.procurement_request_approval_date?.trim() ||
+          project.procurement_request_approval_date ||
+          "",
+        committee_review_workdays:
+          step3Form.announcement?.committee_review_workdays != null &&
+          step3Form.announcement.committee_review_workdays > 0
+            ? step3Form.announcement.committee_review_workdays
+            : project.committee_review_workdays ?? null,
+      });
       setResponsibleName(draft3.responsible);
       setNote(draft3.userNote);
       setDueDate("");
@@ -419,6 +445,13 @@ function ProjectDetailPage() {
       if (e?.error) {
         setError(e.error.message);
         return;
+      }
+      const { error: projErr } = await supabase
+        .from("projects")
+        .update(buildProjectProcurementRequestFields(step3Announcement))
+        .eq("id", project.id);
+      if (projErr) {
+        console.warn("[Step3] project procurement fields sync failed", projErr);
       }
       toast.success("บันทึกร่างขั้นตอนที่ 3 เรียบร้อย");
       await invalidateAll();
@@ -712,6 +745,9 @@ function ProjectDetailPage() {
               method={calcMethod}
               budget={calcBudget}
               stepStartDate={stepStartDate}
+              committeeReviewWorkdays={
+                current.step_number === 4 ? committeeReviewWorkdays : undefined
+              }
               onSkipStep3={current.step_number === 3 ? skipStep3 : undefined}
               onProceedStep3Hearing={
                 current.step_number === 3 ? proceedStep3Hearing : undefined

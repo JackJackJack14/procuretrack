@@ -617,6 +617,7 @@ export type Database = {
         Row: {
           approving_agency: string | null
           budget: number
+          committee_review_workdays: number | null
           created_at: string
           created_by: string | null
           current_step: number
@@ -630,6 +631,8 @@ export type Database = {
           name: string
           organization_id: string
           procurement_agency: string | null
+          procurement_request_approval_date: string | null
+          procurement_request_letter_no: string | null
           project_code: string
           result_unit: string | null
           status: string
@@ -638,6 +641,7 @@ export type Database = {
         Insert: {
           approving_agency?: string | null
           budget: number
+          committee_review_workdays?: number | null
           created_at?: string
           created_by?: string | null
           current_step?: number
@@ -651,6 +655,8 @@ export type Database = {
           name: string
           organization_id: string
           procurement_agency?: string | null
+          procurement_request_approval_date?: string | null
+          procurement_request_letter_no?: string | null
           project_code: string
           result_unit?: string | null
           status?: string
@@ -659,6 +665,7 @@ export type Database = {
         Update: {
           approving_agency?: string | null
           budget?: number
+          committee_review_workdays?: number | null
           created_at?: string
           created_by?: string | null
           current_step?: number
@@ -672,6 +679,8 @@ export type Database = {
           name?: string
           organization_id?: string
           procurement_agency?: string | null
+          procurement_request_approval_date?: string | null
+          procurement_request_letter_no?: string | null
           project_code?: string
           result_unit?: string | null
           status?: string

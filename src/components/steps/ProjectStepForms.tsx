@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { ThaiDatePicker } from "@/components/ThaiDatePicker";
-import { formatThaiDate } from "@/lib/utils";
+import { formatThaiDate, formatThaiDateSlash } from "@/lib/utils";
 import {
   countWorkdaysAfterStartISO,
   defaultPublicationEndISO,
@@ -255,6 +255,7 @@ export function Step3DetailForm({
   docBinder,
 }: Step3FormProps) {
   const [endDateRejected, setEndDateRejected] = useState(false);
+  const [procApprovalDateRejected, setProcApprovalDateRejected] = useState(false);
   const safeChecklist = {
     committee_tor_bid_docs_done: checklist?.committee_tor_bid_docs_done ?? false,
     director_report_submitted: checklist?.director_report_submitted ?? false,
@@ -363,6 +364,65 @@ export function Step3DetailForm({
       : announcement.feedback_result === "has_comments"
         ? STEP3_FEEDBACK_HELPER_HAS_COMMENTS
         : null;
+
+  const feedbackReportUploaded = docBinder.docs.some(
+    (d) => d.document_type === STEP3_DOC.FEEDBACK_REPORT,
+  );
+
+  const publicationEnd = announcement.publication_end ?? "";
+  const prevPublicationEndRef = useRef(publicationEnd);
+  /** true เมื่อผู้ใช้เลือกวันอนุมัติเอง (ไม่ใช่ค่า auto-sync จากวันสิ้นสุดเผยแพร่) */
+  const procApprovalManuallySetRef = useRef(false);
+
+  /** ปักค่าเริ่มต้นวันอนุมัติรายงานขอซื้อขอจ้าง = วันสิ้นสุดการเผยแพร่ (ตามระเบียบพัสดุ) */
+  useEffect(() => {
+    if (!publicationEnd || !feedbackReportUploaded) {
+      prevPublicationEndRef.current = publicationEnd;
+      return;
+    }
+    const current = announcement.procurement_request_approval_date ?? "";
+    const prevEnd = prevPublicationEndRef.current;
+
+    const wasAutoSyncedToPrevEnd = !!prevEnd && current === prevEnd;
+    const shouldSync =
+      !procApprovalManuallySetRef.current ||
+      !current ||
+      current < publicationEnd ||
+      wasAutoSyncedToPrevEnd;
+
+    if (shouldSync && current !== publicationEnd) {
+      onAnnouncementChange({ procurement_request_approval_date: publicationEnd });
+      procApprovalManuallySetRef.current = false;
+      setProcApprovalDateRejected(false);
+    }
+
+    prevPublicationEndRef.current = publicationEnd;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sync เมื่อ publication_end หรือเปิดฟอร์มขอซื้อขอจ้าง
+  }, [publicationEnd, feedbackReportUploaded]);
+
+  const handleProcApprovalDateChange = (v: string) => {
+    if (!v) {
+      procApprovalManuallySetRef.current = false;
+      setProcApprovalDateRejected(false);
+      onAnnouncementChange({ procurement_request_approval_date: "" });
+      return;
+    }
+    if (publicationEnd && v < publicationEnd) {
+      setProcApprovalDateRejected(true);
+      return;
+    }
+    procApprovalManuallySetRef.current = !!publicationEnd && v !== publicationEnd;
+    setProcApprovalDateRejected(false);
+    onAnnouncementChange({ procurement_request_approval_date: v });
+  };
+
+  const procApprovalBeforePublicationEnd =
+    !!publicationEnd &&
+    !!announcement.procurement_request_approval_date &&
+    announcement.procurement_request_approval_date < publicationEnd;
+
+  const showProcApprovalDateError =
+    procApprovalDateRejected || procApprovalBeforePublicationEnd;
 
   return (
     <div className="space-y-4 max-w-2xl">
@@ -565,6 +625,73 @@ export function Step3DetailForm({
             </p>
           )}
         </FieldRow>
+
+        {feedbackReportUploaded && (
+          <div className="rounded-lg border border-border bg-background p-4 space-y-4">
+            <SectionTitle>จัดทำรายงานขอซื้อหรือขอจ้าง</SectionTitle>
+            <FieldRow label="เลขที่หนังสือรายงานขอซื้อขอจ้าง">
+              <input
+                value={announcement.procurement_request_letter_no ?? ""}
+                onChange={(e) =>
+                  onAnnouncementChange({ procurement_request_letter_no: e.target.value })
+                }
+                placeholder="กษ ๐๖๐๒ / ๔๕๖"
+                className={inputCls}
+              />
+            </FieldRow>
+            <FieldRow label="วันที่หัวหน้าหน่วยงานอนุมัติเห็นชอบ">
+              <ThaiDatePicker
+                value={announcement.procurement_request_approval_date ?? ""}
+                onChange={handleProcApprovalDateChange}
+                minDate={publicationEnd || undefined}
+                disabled={!publicationEnd}
+                onInvalidDate={() => setProcApprovalDateRejected(true)}
+              />
+              {!publicationEnd && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  กรุณาระบุวันสิ้นสุดการเผยแพร่ร่างประกาศก่อน
+                </p>
+              )}
+              {announcement.procurement_request_approval_date && !showProcApprovalDateError && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  {formatThaiDate(announcement.procurement_request_approval_date)}
+                </p>
+              )}
+              {showProcApprovalDateError && publicationEnd && (
+                <p className="text-xs text-destructive font-medium mt-1">
+                  ❌ วันที่อนุมัติรายงานผล ต้องไม่น้อยกว่าวันสิ้นสุดการเผยแพร่ร่างประกาศ (วันที่{" "}
+                  {formatThaiDateSlash(publicationEnd)})
+                </p>
+              )}
+            </FieldRow>
+            <FieldRow label="ระยะเวลาพิจารณาผลของคณะกรรมการ (วันทำการ)">
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={
+                  announcement.committee_review_workdays != null
+                    ? String(announcement.committee_review_workdays)
+                    : ""
+                }
+                onChange={(e) => {
+                  const raw = e.target.value.trim();
+                  if (!raw) {
+                    onAnnouncementChange({ committee_review_workdays: null });
+                    return;
+                  }
+                  const n = parseInt(raw, 10);
+                  onAnnouncementChange({
+                    committee_review_workdays: Number.isFinite(n) && n > 0 ? n : null,
+                  });
+                }}
+                placeholder="ระบุกรอบเวลาที่คณะกรรมการฯ ต้องตรวจซองให้เสร็จตามที่ขออนุมัติไว้"
+                className={inputCls}
+              />
+            </FieldRow>
+          </div>
+        )}
+
         <FieldRow label="หมายเหตุ / ประเด็นวิจารณ์เพิ่มเติม">
           <textarea
             value={announcement.feedback_notes ?? ""}

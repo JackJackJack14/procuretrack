@@ -33,3 +33,14 @@ export function formatThaiDate(
   return `${base} เวลา ${hh}:${mm} น.`;
 }
 
+/** รูปแบบ dd/MM/yyyy (พ.ศ.) เช่น 10/06/2569 */
+export function formatThaiDateSlash(input: Date | string | null | undefined): string {
+  if (input === null || input === undefined || input === "") return "-";
+  const d = input instanceof Date ? input : new Date(input);
+  if (isNaN(d.getTime())) return "-";
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = d.getFullYear() + 543;
+  return `${dd}/${mm}/${yyyy}`;
+}
+

@@ -37,6 +37,10 @@ export type Step3Announcement = {
   skip_reason?: Step3SkipReason;
   /** วงเงิน 5–10 ล้าน — เลือกดำเนินการจัดฟังคำวิจารณ์ */
   hearing_proceed?: boolean;
+  /** จัดทำรายงานขอซื้อหรือขอจ้าง */
+  procurement_request_letter_no?: string;
+  procurement_request_approval_date?: string;
+  committee_review_workdays?: number | null;
 };
 
 export type Step2FormData = { checklist?: Step2Checklist };
@@ -62,6 +66,9 @@ export const EMPTY_STEP3_ANNOUNCEMENT: Required<
   feedback_result: "",
   feedback_report_no: "",
   feedback_notes: "",
+  procurement_request_letter_no: "",
+  procurement_request_approval_date: "",
+  committee_review_workdays: null,
   hearing_skipped: false,
   skip_reason: "",
   hearing_proceed: false,
@@ -174,10 +181,42 @@ function announcementHasData(a: Step3Announcement | undefined): boolean {
     a.feedback_result ||
     a.feedback_report_no?.trim() ||
     a.feedback_notes?.trim() ||
+    a.procurement_request_letter_no?.trim() ||
+    a.procurement_request_approval_date?.trim() ||
+    (a.committee_review_workdays != null && a.committee_review_workdays > 0) ||
     a.hearing_skipped ||
     a.hearing_proceed ||
     a.skip_reason
   );
+}
+
+/** ฟิลด์รายงานขอซื้อขอจ้าง — บันทึกลงตาราง projects (ส่งต่อขั้นตอนที่ 4) */
+export function buildProjectProcurementRequestFields(announcement: Step3Announcement) {
+  const days = announcement.committee_review_workdays;
+  return {
+    procurement_request_letter_no:
+      announcement.procurement_request_letter_no?.trim() || null,
+    procurement_request_approval_date:
+      announcement.procurement_request_approval_date?.trim() || null,
+    committee_review_workdays:
+      days != null && Number.isFinite(days) && days > 0 ? Math.round(days) : null,
+  };
+}
+
+/** ดึงจำนวนวันทำการพิจารณาผลจากขั้นตอนที่ 3 (project columns หรือ note JSON) */
+export function resolveCommitteeReviewWorkdays(
+  project: {
+    committee_review_workdays?: number | null;
+    procurement_request_letter_no?: string | null;
+    procurement_request_approval_date?: string | null;
+  } | null,
+  step3Note: string | null,
+): number | null {
+  const fromProject = project?.committee_review_workdays;
+  if (fromProject != null && fromProject > 0) return fromProject;
+  const form = loadStep3FormFromNote(step3Note);
+  const days = form.announcement?.committee_review_workdays;
+  return days != null && days > 0 ? days : null;
 }
 
 function formHasPersistedData(form: StepFormData): boolean {
