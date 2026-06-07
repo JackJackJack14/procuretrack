@@ -7,6 +7,7 @@ export {
   getMilestoneLabel,
   milestoneProgressPercent,
 } from "@/lib/egp-milestones";
+import { STEP3_DOC } from "@/lib/step-doc-types";
 
 export type DocItem = { name: string; required: boolean };
 
@@ -26,9 +27,13 @@ export const STEP_DOCS_DETAILED: DocItem[][] = [
     { name: "หนังสือแสดงความบริสุทธิ์ใจของกรรมการ", required: true },
   ],
   [
-    { name: "PDF บันทึกข้อความเห็นชอบ", required: true },
-    { name: "PDF ประกาศจากระบบ e-GP", required: true },
-    { name: "PDF รายงานผลการวิจารณ์", required: true },
+    { name: STEP3_DOC.DRAFT_TOR_SPEC, required: true },
+    { name: STEP3_DOC.DRAFT_ANNOUNCEMENT_BID, required: true },
+    { name: STEP3_DOC.MEDIAN_BG06, required: false },
+    { name: STEP3_DOC.MEMO_APPROVAL, required: true },
+    { name: STEP3_DOC.EGP_ANNOUNCEMENT, required: true },
+    { name: STEP3_DOC.EGP_SCREENSHOT, required: true },
+    { name: STEP3_DOC.FEEDBACK_REPORT, required: true },
   ],
   [
     { name: "PDF รายงานผลการพิจารณา", required: true },

@@ -59,3 +59,6 @@ alter table public.committees add constraint committees_committee_type_check
     'evaluation',
     'inspection'
   ));
+
+alter table public.procurement_steps
+  add column if not exists step3_checklist jsonb null;

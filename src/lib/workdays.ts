@@ -124,6 +124,18 @@ export function isPublicationEndValidISO(startISO: string, endISO: string): bool
   return endISO >= minEnd;
 }
 
+/** ตรวจว่าเป็นวันทำการ (ไม่ใช่เสาร์-อาทิตย์/วันหยุดราชการ) */
+export function isWorkdayISO(iso: string): boolean {
+  if (!iso.trim()) return false;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return false;
+  d.setHours(0, 0, 0, 0);
+  return isWorkday(d);
+}
+
+export const STEP3_PUBLICATION_NON_WORKDAY_MSG =
+  "❌ วันที่เผยแพร่ต้องเป็นวันทำการ (ไม่นับเสาร์-อาทิตย์และวันหยุดราชการ)";
+
 /** ตรวจวันเผยแพร่ขั้น 3 ก่อนบันทึก/ปิดขั้นตอน — คืนข้อความ error หรือ null ถ้าผ่าน */
 export function validateStep3PublicationDates(
   startISO?: string,
@@ -133,6 +145,12 @@ export function validateStep3PublicationDates(
   const end = endISO?.trim() ?? "";
   if (!start || !end) {
     return "กรุณาระบุวันเริ่มและวันสิ้นสุดการเผยแพร่ร่างประกาศให้ครบ";
+  }
+  if (!isWorkdayISO(start)) {
+    return `${STEP3_PUBLICATION_NON_WORKDAY_MSG} (วันเริ่มเผยแพร่)`;
+  }
+  if (!isWorkdayISO(end)) {
+    return `${STEP3_PUBLICATION_NON_WORKDAY_MSG} (วันสิ้นสุดเผยแพร่)`;
   }
   if (!isPublicationEndValidISO(start, end)) {
     return STEP3_PUBLICATION_END_TOO_SHORT_MSG;

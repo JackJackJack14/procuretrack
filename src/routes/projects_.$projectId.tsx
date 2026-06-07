@@ -34,8 +34,12 @@ import {
   serializeStepNote,
   buildStepDraftFields,
   loadStepDraftFields,
-  loadStep3FormFromNote,
+  loadStep3FormFromStep,
+  EMPTY_STEP3_CHECKLIST,
   EMPTY_STEP3_ANNOUNCEMENT,
+  getStep3ComplianceIssues,
+  isStep3ReadyForNext,
+  type Step3ChecklistKey,
   buildProjectProcurementRequestFields,
   buildProjectStep4Fields,
   resolveCommitteeReviewWorkdays,
@@ -85,7 +89,7 @@ import {
   type Step4Checklist,
   type Step4ChecklistKey,
 } from "@/lib/step-form";
-import { STEP2_DOC, STEP4_DOC } from "@/lib/step-doc-types";
+import { STEP2_DOC, STEP3_DOC, STEP4_DOC } from "@/lib/step-doc-types";
 import {
   getStep3HearingTier,
   shouldShowStep3HearingForm,
@@ -157,6 +161,7 @@ type Step = {
   step_notes?: string | null;
   step1_checklist?: unknown;
   step2_checklist?: unknown;
+  step3_checklist?: unknown;
   completed_by: string | null;
 };
 
@@ -201,11 +206,7 @@ function ProjectDetailPage() {
   });
   const [step2ComplianceLog, setStep2ComplianceLog] = useState<Step2ComplianceLog>({});
   // ขั้นตอนที่ 3
-  const [step3Checklist, setStep3Checklist] = useState({
-    committee_tor_bid_docs_done: false,
-    director_report_submitted: false,
-    draft_published_for_comment: false,
-  });
+  const [step3Checklist, setStep3Checklist] = useState({ ...EMPTY_STEP3_CHECKLIST });
   const [step3Announcement, setStep3Announcement] = useState<Step3Announcement>({
     ...EMPTY_STEP3_ANNOUNCEMENT,
   });
@@ -312,13 +313,9 @@ function ProjectDetailPage() {
     }
     if (current.step_number === 3) {
       const { userNote } = parseStepNote(current.note);
-      const step3Form = loadStep3FormFromNote(current.note);
+      const step3Form = loadStep3FormFromStep(current as Step);
       const draft3 = loadStepDraftFields({ ...current, note: userNote });
-      setStep3Checklist({
-        committee_tor_bid_docs_done: !!step3Form.checklist?.committee_tor_bid_docs_done,
-        director_report_submitted: !!step3Form.checklist?.director_report_submitted,
-        draft_published_for_comment: !!step3Form.checklist?.draft_published_for_comment,
-      });
+      setStep3Checklist(step3Form.checklist ?? { ...EMPTY_STEP3_CHECKLIST });
       setStep3Announcement({
         ...EMPTY_STEP3_ANNOUNCEMENT,
         ...step3Form.announcement,
@@ -403,13 +400,7 @@ function ProjectDetailPage() {
     setStep2MedianPrice((prev) => ({ ...prev, ...patch }));
   };
 
-  const setStep3Check = (
-    key:
-      | "committee_tor_bid_docs_done"
-      | "director_report_submitted"
-      | "draft_published_for_comment",
-    checked: boolean,
-  ) => {
+  const setStep3Check = (key: Step3ChecklistKey, checked: boolean) => {
     setStep3Checklist((prev) => ({ ...prev, [key]: checked }));
   };
 
@@ -463,14 +454,28 @@ function ProjectDetailPage() {
   const patchStepDraft = async (
     stepId: string,
     fields: ReturnType<typeof buildStepDraftFields>,
-    extra?: { note?: string | null; step1_checklist?: Record<string, boolean> | null; step2_checklist?: Record<string, boolean> | null },
+    extra?: {
+      note?: string | null;
+      step1_checklist?: Record<string, boolean> | null;
+      step2_checklist?: Record<string, boolean> | null;
+      step3_checklist?: Record<string, boolean> | null;
+    },
   ) => {
     const payload: Record<string, unknown> = { ...fields };
     if (extra?.note !== undefined) payload.note = extra.note;
     if (extra?.step1_checklist !== undefined) payload.step1_checklist = extra.step1_checklist;
     if (extra?.step2_checklist !== undefined) payload.step2_checklist = extra.step2_checklist;
+    if (extra?.step3_checklist !== undefined) payload.step3_checklist = extra.step3_checklist;
 
     const { error } = await supabase.from("procurement_steps").update(payload).eq("id", stepId);
+    if (
+      error &&
+      error.message.includes("step3_checklist") &&
+      extra?.step3_checklist !== undefined
+    ) {
+      const { step3_checklist: _omit, ...rest } = payload;
+      return supabase.from("procurement_steps").update(rest).eq("id", stepId);
+    }
     if (
       error &&
       error.message.includes("step2_checklist") &&
@@ -659,7 +664,7 @@ function ProjectDetailPage() {
       const { error: e } = await patchStepDraft(
         current.id,
         buildStepDraftFields(effectiveResponsibleName, "", ""),
-        { note: formNote || null },
+        { note: formNote || null, step3_checklist: step3Checklist },
       );
       if (e?.error) {
         setError(e.error.message);
@@ -773,6 +778,35 @@ function ProjectDetailPage() {
           setError(pubErr);
           return;
         }
+        const step3Docs = docs.filter((d) => d.step_number === 3);
+        const step3ComplianceIssues = getStep3ComplianceIssues(step3Checklist, {
+          announcement: step3Announcement,
+          responsibleName: effectiveResponsibleName,
+          approvedMedianPrice: project.approved_median_price ?? null,
+          medianPriceApprovalDate: project.median_price_approval_date ?? null,
+          hasMemoDoc: step3Docs.some((d) => d.document_type === STEP3_DOC.MEMO_APPROVAL),
+          hasDraftTorDoc: step3Docs.some((d) => d.document_type === STEP3_DOC.DRAFT_TOR_SPEC),
+          hasDraftAnnouncementDoc: step3Docs.some(
+            (d) => d.document_type === STEP3_DOC.DRAFT_ANNOUNCEMENT_BID,
+          ),
+          hasBg06Doc:
+            docs.some(
+              (d) =>
+                d.step_number === 2 && d.document_type === STEP2_DOC.MEDIAN_PRICE_BG06,
+            ) || step3Docs.some((d) => d.document_type === STEP3_DOC.MEDIAN_BG06),
+          hasEgpAnnouncementDoc: step3Docs.some(
+            (d) => d.document_type === STEP3_DOC.EGP_ANNOUNCEMENT,
+          ),
+          hasEgpScreenshotDoc: step3Docs.some(
+            (d) => d.document_type === STEP3_DOC.EGP_SCREENSHOT,
+          ),
+          hearingFormActive: true,
+        });
+        if (step3ComplianceIssues.length > 0) {
+          toast.error(step3ComplianceIssues[0].message);
+          setError(step3ComplianceIssues[0].message);
+          return;
+        }
       }
     }
     if (current.step_number === 2) {
@@ -877,7 +911,7 @@ function ProjectDetailPage() {
       const { error: saveErr } = await patchStepDraft(
         current.id,
         buildStepDraftFields(effectiveResponsibleName, "", ""),
-        { note: formNote || null },
+        { note: formNote || null, step3_checklist: step3Checklist },
       );
       if (saveErr?.error) {
         setError(saveErr.error.message);
@@ -1132,6 +1166,13 @@ function ProjectDetailPage() {
                       onChecklistChange={setStep3Check}
                       announcement={step3Announcement}
                       onAnnouncementChange={patchStep3Announcement}
+                      approvedMedianPrice={project.approved_median_price ?? null}
+                      medianPriceApprovalDate={project.median_price_approval_date ?? null}
+                      step2Bg06Uploaded={docs.some(
+                        (d) =>
+                          d.step_number === 2 &&
+                          d.document_type === STEP2_DOC.MEDIAN_PRICE_BG06,
+                      )}
                       responsibleName={responsibleName}
                       onResponsibleNameChange={setResponsibleName}
                       step1ResponsibleDefault={step1ResponsibleDefault}
@@ -1280,6 +1321,50 @@ function ProjectDetailPage() {
                 const step4HasEvalDoc =
                   current.step_number === 4 &&
                   docsForStep.some((d) => d.document_type === STEP4_DOC.EVALUATION_REPORT);
+                const step3DocsForCompliance = docs.filter((d) => d.step_number === 3);
+                const step3ComplianceOpts =
+                  current.step_number === 3 && showStep3HearingForm
+                    ? {
+                        announcement: step3Announcement,
+                        responsibleName: effectiveResponsibleName,
+                        approvedMedianPrice: project.approved_median_price ?? null,
+                        medianPriceApprovalDate: project.median_price_approval_date ?? null,
+                        hasMemoDoc: step3DocsForCompliance.some(
+                          (d) => d.document_type === STEP3_DOC.MEMO_APPROVAL,
+                        ),
+                        hasDraftTorDoc: step3DocsForCompliance.some(
+                          (d) => d.document_type === STEP3_DOC.DRAFT_TOR_SPEC,
+                        ),
+                        hasDraftAnnouncementDoc: step3DocsForCompliance.some(
+                          (d) => d.document_type === STEP3_DOC.DRAFT_ANNOUNCEMENT_BID,
+                        ),
+                        hasBg06Doc:
+                          docs.some(
+                            (d) =>
+                              d.step_number === 2 &&
+                              d.document_type === STEP2_DOC.MEDIAN_PRICE_BG06,
+                          ) ||
+                          step3DocsForCompliance.some(
+                            (d) => d.document_type === STEP3_DOC.MEDIAN_BG06,
+                          ),
+                        hasEgpAnnouncementDoc: step3DocsForCompliance.some(
+                          (d) => d.document_type === STEP3_DOC.EGP_ANNOUNCEMENT,
+                        ),
+                        hasEgpScreenshotDoc: step3DocsForCompliance.some(
+                          (d) => d.document_type === STEP3_DOC.EGP_SCREENSHOT,
+                        ),
+                        hearingFormActive: true,
+                      }
+                    : null;
+                const step3ComplianceIssues =
+                  step3ComplianceOpts != null
+                    ? getStep3ComplianceIssues(step3Checklist, step3ComplianceOpts)
+                    : [];
+                const step3Ready =
+                  current.step_number !== 3 ||
+                  !showStep3HearingForm ||
+                  (step3ComplianceOpts != null &&
+                    isStep3ReadyForNext(step3Checklist, step3ComplianceOpts));
                 const step1ComplianceIssues =
                   current.step_number === 1
                     ? getStep1ComplianceIssues(step1Checklist, {
@@ -1320,6 +1405,8 @@ function ProjectDetailPage() {
                     ? !step1Ready
                     : current.step_number === 2
                       ? !step2Ready
+                      : current.step_number === 3
+                        ? !step3Ready
                       : current.step_number === 4
                         ? !step4Ready
                         : !allUploaded);
@@ -1381,6 +1468,26 @@ function ProjectDetailPage() {
                       <p className="text-sm text-destructive mt-3 font-medium">
                         ⚠️ แจ้งเตือน: โครงการนี้ติดสถานะอุทธรณ์ ไม่สามารถไปขั้นตอนทำสัญญาได้
                       </p>
+                    )}
+                    {current.step_number === 3 &&
+                      !isCompleted &&
+                      showStep3HearingForm &&
+                      !step3Ready &&
+                      step3ComplianceIssues.length > 0 && (
+                      <div className="text-sm text-muted-foreground mt-3 space-y-1 rounded-md border border-dashed border-border bg-muted/30 p-3">
+                        <p className="font-medium text-foreground flex items-center gap-1.5">
+                          <AlertTriangle className="h-4 w-4 text-warning shrink-0" />
+                          กรุณาดำเนินการให้ครบก่อนไปขั้นถัดไป:
+                        </p>
+                        <ul className="list-disc list-inside space-y-0.5 text-xs">
+                          {step3ComplianceIssues.slice(0, 4).map((issue) => (
+                            <li key={issue.id}>{issue.message}</li>
+                          ))}
+                          {step3ComplianceIssues.length > 4 && (
+                            <li>และอีก {step3ComplianceIssues.length - 4} รายการ...</li>
+                          )}
+                        </ul>
+                      </div>
                     )}
                     {current.step_number === 2 && !isCompleted && !step2Ready && step2ComplianceIssues.length > 0 && (
                       <div className="text-sm text-muted-foreground mt-3 space-y-1 rounded-md border border-dashed border-border bg-muted/30 p-3">

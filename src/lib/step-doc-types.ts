@@ -12,10 +12,26 @@ export const STEP2_BG06_UPLOAD_LABEL =
 
 /** ประเภทเอกสารขั้นตอนที่ 3 — ผูกกับฟิลด์ฟอร์ม (Single Page Workflow) */
 export const STEP3_DOC = {
+  DRAFT_TOR_SPEC: "ร่าง TOR / รายละเอียดคุณลักษณะเฉพาะ",
+  DRAFT_ANNOUNCEMENT_BID: "ร่างประกาศและร่างเอกสารประกวดราคา",
+  MEDIAN_BG06: "แบบรายงานผลการกำหนดราคากlาง (บก.06)",
   MEMO_APPROVAL: "PDF บันทึกข้อความเห็นชอบ",
   EGP_ANNOUNCEMENT: "PDF ประกาศจากระบบ e-GP",
+  EGP_SCREENSHOT: "ภาพหน้าจอระบบ e-GP (หลักฐานการเผยแพร่)",
   FEEDBACK_REPORT: "PDF รายงานผลการวิจารณ์",
 } as const;
+
+export const STEP3_DRAFT_TOR_UPLOAD_LABEL =
+  "📎 แนบไฟล์ร่าง TOR / รายละเอียดคุณลักษณะเฉพาะ (PDF)";
+
+export const STEP3_DRAFT_ANNOUNCEMENT_UPLOAD_LABEL =
+  "📎 แนบไฟล์ร่างประกาศและร่างเอกสารประกวดราคา (PDF)";
+
+export const STEP3_MEDIAN_BG06_UPLOAD_LABEL =
+  "📎 แนบไฟล์ตารางราคากlาง (บก.06) (PDF) — หากอัปโหลดในขั้นตอนที่ 2 แล้วไม่ต้องซ้ำ";
+
+export const STEP3_EGP_SCREENSHOT_UPLOAD_LABEL =
+  "📎 แนบภาพหน้าจอระบบ e-GP ที่แสดงการเผยแพร่ประกาศ (PNG/JPG/PDF)";
 
 /** ป้ายปุ่มอัปโหลดรายงานผลรับฟังความคิดเห็น (แสดงบนฟอร์ม) */
 export const STEP3_FEEDBACK_UPLOAD_LABEL =

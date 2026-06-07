@@ -513,6 +513,7 @@ export type Database = {
           status: string
           step1_checklist: Json | null
           step2_checklist: Json | null
+          step3_checklist: Json | null
           step_name: string
           step_notes: string | null
           step_number: number
@@ -530,6 +531,7 @@ export type Database = {
           status?: string
           step1_checklist?: Json | null
           step2_checklist?: Json | null
+          step3_checklist?: Json | null
           step_name: string
           step_notes?: string | null
           step_number: number
@@ -547,6 +549,7 @@ export type Database = {
           status?: string
           step1_checklist?: Json | null
           step2_checklist?: Json | null
+          step3_checklist?: Json | null
           step_name?: string
           step_notes?: string | null
           step_number?: number

@@ -1,5 +1,10 @@
 /** ตัวเลือกวิธีจัดซื้อในฟอร์มขั้นตอนที่ 1 (3 วิธีหลัก) */
-import { countWorkdaysAfterStartISO, countWorkdaysBetweenISO, reviewDeadlineISO } from "@/lib/workdays";
+import {
+  countWorkdaysAfterStartISO,
+  countWorkdaysBetweenISO,
+  reviewDeadlineISO,
+  validateStep3PublicationDates,
+} from "@/lib/workdays";
 
 export const STEP1_METHOD_OPTIONS = [
   { value: "e_bidding", label: "วิธีประกวดราคาอิเล็กทรอนิกส์ (e-bidding)" },
@@ -294,7 +299,71 @@ export function shouldWarnEvenCommitteeCount(members: string[]): boolean {
   return count >= 4 && count % 2 === 0;
 }
 
-export type Step3Checklist = {
+export type Step3ChecklistKey =
+  | "draft_announcement_standard_compliant"
+  | "spec_no_lock_in_verified"
+  | "internal_memo_director_approval"
+  | "median_price_step2_verified"
+  | "hearing_files_prepared"
+  | "egp_published_for_comment"
+  | "comment_channel_prepared";
+
+export type Step3Checklist = Record<Step3ChecklistKey, boolean>;
+
+export const STEP3_CHECKLIST_ITEMS: Array<{
+  key: Step3ChecklistKey;
+  label: string;
+  hint?: string;
+}> = [
+  {
+    key: "draft_announcement_standard_compliant",
+    label: 'ตรวจสอบ "ร่างประกาศฯ และร่างเอกสารประกวดราคา" ให้เป็นไปตามแบบมาตรฐาน',
+    hint: "ตรวจสอบว่าสาระสำคัญครบถ้วนตามแบบที่กรมบัญชีกลางกำหนด ทั้งเงื่อนไขการเสนอราคา เกณฑ์การพิจารณา และระยะเวลาการส่งมอบ",
+  },
+  {
+    key: "spec_no_lock_in_verified",
+    label: 'ตรวจสอบคุณลักษณะเฉพาะ (Spec) ไม่ให้เป็นการ "ล็อกสเปค"',
+    hint: "ยี่ห้อสินค้า สเปคที่เจาะจงเกินจำเป็น หรือการระบุชื่อผู้ขายรายใดรายหนึ่ง ต้องไม่มี หรือหากมีต้องมีเหตุผลความจำเป็นที่ชัดเจน",
+  },
+  {
+    key: "internal_memo_director_approval",
+    label: 'จัดทำบันทึกข้อความภายในเสนอหัวหน้าหน่วยงาน "ขอความเห็นชอบ"',
+    hint: "ต้องมีหนังสือบันทึกข้อความที่ผ่านการออกเลขสารบรรณแล้ว เพื่อขอเห็นชอบร่างเอกสารทั้งหมดก่อนนำไปขึ้นเว็บ",
+  },
+  {
+    key: "median_price_step2_verified",
+    label: 'ตรวจสอบสถานะการอนุมัติ "ราคากlาง" จากขั้นตอนที่ 2',
+    hint: "ยืนยันว่าราคากlางได้รับอนุมัติเรียบร้อยแล้วและตัวเลขตรงกันก่อนนำไปบันทึกลงในระบบ e-GP",
+  },
+  {
+    key: "hearing_files_prepared",
+    label: 'เตรียมไฟล์สำหรับ "เผยแพร่รับฟังคำวิจารณ์" ให้ครบ',
+    hint: "ไฟล์ร่างประกาศ + ร่างเอกสารประกวดราคา + ไฟล์ตารางราคากlาง บก.06",
+  },
+  {
+    key: "egp_published_for_comment",
+    label: "นำข้อมูลขึ้นเผยแพร่ในระบบ e-GP เพื่อรับฟังความคิดเห็น (ขั้นต่ำ 3 วันทำการ)",
+    hint: "ต้องบันทึกเลขที่โครงการจาก e-GP ให้เรียบร้อย",
+  },
+  {
+    key: "comment_channel_prepared",
+    label: "เตรียมช่องทางรับคำวิจารณ์",
+    hint: "ระบุอีเมลหน่วยงาน หรือช่องทางอื่นให้ชัดเจน เพื่อให้ผู้ประกอบการส่งคำวิจารณ์เข้ามาได้",
+  },
+];
+
+export const EMPTY_STEP3_CHECKLIST: Step3Checklist = {
+  draft_announcement_standard_compliant: false,
+  spec_no_lock_in_verified: false,
+  internal_memo_director_approval: false,
+  median_price_step2_verified: false,
+  hearing_files_prepared: false,
+  egp_published_for_comment: false,
+  comment_channel_prepared: false,
+};
+
+/** @deprecated ใช้ Step3ChecklistKey แทน */
+export type LegacyStep3Checklist = {
   committee_tor_bid_docs_done?: boolean;
   director_report_submitted?: boolean;
   draft_published_for_comment?: boolean;
@@ -307,9 +376,13 @@ export type Step3SkipReason = "exempt" | "discretionary";
 export type Step3Announcement = {
   approval_letter_no?: string;
   approval_letter_date?: string;
+  /** เลขที่โครงการในระบบ e-GP */
+  egp_project_code?: string;
   egp_announcement_no?: string;
   publication_start?: string;
   publication_end?: string;
+  /** อีเมลหรือช่องทางรับคำวิจารณ์จากผู้ประกอบการ */
+  comment_channel_email?: string;
   feedback_result?: Step3FeedbackResult;
   feedback_report_no?: string;
   feedback_notes?: string;
@@ -425,9 +498,11 @@ export const EMPTY_STEP3_ANNOUNCEMENT: Required<
 } = {
   approval_letter_no: "",
   approval_letter_date: "",
+  egp_project_code: "",
   egp_announcement_no: "",
   publication_start: "",
   publication_end: "",
+  comment_channel_email: "",
   feedback_result: "",
   feedback_report_no: "",
   feedback_notes: "",
@@ -1289,16 +1364,184 @@ function formHasPersistedData(form: StepFormData): boolean {
   return step4BidResultHasData((form as Step4FormData).bidResult);
 }
 
+function normalizeStep3Checklist(
+  raw: Partial<Step3Checklist> & LegacyStep3Checklist | null | undefined,
+): Step3Checklist {
+  const checklist = { ...EMPTY_STEP3_CHECKLIST };
+  if (!raw) return checklist;
+
+  STEP3_CHECKLIST_ITEMS.forEach((item) => {
+    if (raw[item.key]) checklist[item.key] = true;
+  });
+
+  if (raw.committee_tor_bid_docs_done) {
+    checklist.draft_announcement_standard_compliant = true;
+    checklist.hearing_files_prepared = true;
+  }
+  if (raw.director_report_submitted) {
+    checklist.internal_memo_director_approval = true;
+  }
+  if (raw.draft_published_for_comment) {
+    checklist.egp_published_for_comment = true;
+  }
+
+  return checklist;
+}
+
+export type Step3ComplianceIssue = { id: string; message: string };
+
+export function getStep3ComplianceIssues(
+  checklist: Step3Checklist,
+  opts: {
+    announcement: Step3Announcement;
+    responsibleName: string;
+    approvedMedianPrice: number | null;
+    medianPriceApprovalDate: string | null;
+    hasMemoDoc: boolean;
+    hasDraftTorDoc: boolean;
+    hasDraftAnnouncementDoc: boolean;
+    hasBg06Doc: boolean;
+    hasEgpAnnouncementDoc: boolean;
+    hasEgpScreenshotDoc: boolean;
+    hearingFormActive: boolean;
+  },
+): Step3ComplianceIssue[] {
+  if (!opts.hearingFormActive) return [];
+
+  const issues: Step3ComplianceIssue[] = [];
+
+  STEP3_CHECKLIST_ITEMS.forEach((item, index) => {
+    if (!checklist[item.key]) {
+      issues.push({
+        id: `checklist-${item.key}`,
+        message: `ยังไม่ได้ติ๊กข้อที่ ${index + 1}: ${item.label}`,
+      });
+    }
+  });
+
+  if (!opts.announcement.approval_letter_no?.trim()) {
+    issues.push({
+      id: "approval_letter_no",
+      message: "กรุณาระบุเลขที่บันทึกข้อความภายใน (ขอความเห็นชอบร่าง TOR)",
+    });
+  }
+  if (!opts.announcement.approval_letter_date?.trim()) {
+    issues.push({
+      id: "approval_letter_date",
+      message: "กรุณาระบุวันที่หัวหน้าหน่วยงานเห็นชอบ/ลงนาม",
+    });
+  }
+  if (!opts.hasMemoDoc) {
+    issues.push({
+      id: "memo_doc",
+      message: "กรุณาแนบไฟล์ PDF บันทึกข้อความเห็นชอบ",
+    });
+  }
+
+  const median =
+    opts.approvedMedianPrice != null &&
+    Number.isFinite(opts.approvedMedianPrice) &&
+    opts.approvedMedianPrice > 0;
+  if (!median) {
+    issues.push({
+      id: "median_price_missing",
+      message: "ยังไม่มีราคากlางที่อนุมัติจากขั้นตอนที่ 2 — กรุณากลับไปบันทึกขั้นตอนที่ 2",
+    });
+  }
+  if (!opts.medianPriceApprovalDate?.trim()) {
+    issues.push({
+      id: "median_price_approval_date",
+      message: "ยังไม่มีวันที่อนุมัติราคากlางจากขั้นตอนที่ 2",
+    });
+  }
+
+  if (!opts.hasDraftTorDoc) {
+    issues.push({
+      id: "draft_tor_doc",
+      message: "กรุณาแนบไฟล์ร่าง TOR / รายละเอียดคุณลักษณะเฉพาะ",
+    });
+  }
+  if (!opts.hasDraftAnnouncementDoc) {
+    issues.push({
+      id: "draft_announcement_doc",
+      message: "กรุณาแนบไฟล์ร่างประกาศและร่างเอกสารประกวดราคา",
+    });
+  }
+  if (!opts.hasBg06Doc) {
+    issues.push({
+      id: "bg06_doc",
+      message: "กรุณาแนบไฟล์ตารางราคากlาง (บก.06) — อัปโหลดในขั้นตอนนี้หรือขั้นตอนที่ 2",
+    });
+  }
+
+  if (!opts.announcement.egp_project_code?.trim() && !opts.announcement.egp_announcement_no?.trim()) {
+    issues.push({
+      id: "egp_project_code",
+      message: "กรุณาระบุเลขที่โครงการหรือเลขที่ประกาศในระบบ e-GP",
+    });
+  }
+  if (!opts.hasEgpAnnouncementDoc && !opts.hasEgpScreenshotDoc) {
+    issues.push({
+      id: "egp_publication_proof",
+      message: "กรุณาแนบ PDF ประกาศจาก e-GP หรือภาพหน้าจอหลักฐานการเผยแพร่",
+    });
+  }
+
+  const pubErr = validateStep3PublicationDates(
+    opts.announcement.publication_start,
+    opts.announcement.publication_end,
+  );
+  if (pubErr) {
+    issues.push({ id: "publication_dates", message: pubErr });
+  }
+
+  if (!opts.announcement.comment_channel_email?.trim()) {
+    issues.push({
+      id: "comment_channel_email",
+      message: "กรุณาระบุอีเมลหรือช่องทางรับคำวิจารณ์จากผู้ประกอบการ",
+    });
+  }
+
+  if (!opts.responsibleName.trim()) {
+    issues.push({
+      id: "responsible_officer",
+      message: "กรุณาระบุเจ้าหน้าที่ผู้รับผิดชอบโครงการ",
+    });
+  }
+
+  return issues;
+}
+
+export function isStep3ReadyForNext(
+  checklist: Step3Checklist,
+  opts: Parameters<typeof getStep3ComplianceIssues>[1],
+): boolean {
+  return getStep3ComplianceIssues(checklist, opts).length === 0;
+}
+
+/** โหลด Smart Checklist ขั้นตอนที่ 3 — จากคอลัมน์ step3_checklist หรือ note */
+export function loadStep3FormFromStep(step: {
+  note: string | null;
+  step3_checklist?: Step3Checklist | LegacyStep3Checklist | Record<string, boolean> | null;
+}): Step3FormData {
+  const fromNote = loadStep3FormFromNote(step.note);
+  if (step.step3_checklist && typeof step.step3_checklist === "object") {
+    return {
+      ...fromNote,
+      checklist: normalizeStep3Checklist(
+        step.step3_checklist as Partial<Step3Checklist> & LegacyStep3Checklist,
+      ),
+    };
+  }
+  return fromNote;
+}
+
 /** โหลดข้อมูลฟอร์มขั้นตอนที่ 3 จาก note */
 export function loadStep3FormFromNote(note: string | null): Step3FormData {
   const { form } = parseStepNote(note);
   const f = form as Step3FormData;
   return {
-    checklist: {
-      committee_tor_bid_docs_done: !!f.checklist?.committee_tor_bid_docs_done,
-      director_report_submitted: !!f.checklist?.director_report_submitted,
-      draft_published_for_comment: !!f.checklist?.draft_published_for_comment,
-    },
+    checklist: normalizeStep3Checklist(f.checklist),
     announcement: {
       ...EMPTY_STEP3_ANNOUNCEMENT,
       ...f.announcement,

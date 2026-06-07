@@ -2,6 +2,7 @@ import DatePicker, { registerLocale } from "react-datepicker";
 import { th } from "date-fns/locale/th";
 import "react-datepicker/dist/react-datepicker.css";
 import { cn } from "@/lib/utils";
+import { isWorkday } from "@/lib/workdays";
 
 registerLocale("th", th);
 
@@ -15,6 +16,8 @@ interface ThaiDatePickerProps {
   minDate?: string;
   /** วันที่เลือกได้ไม่เกิน (yyyy-mm-dd) */
   maxDate?: string;
+  /** อนุญาตเฉพาะวันทำการ (ข้ามเสาร์-อาทิตย์และวันหยุดราชการ) */
+  workdaysOnly?: boolean;
   disabled?: boolean;
   /** เรียกเมื่อผู้ใช้เลือก/กรอกวันที่นอกช่วง min–max */
   onInvalidDate?: () => void;
@@ -43,6 +46,7 @@ export function ThaiDatePicker({
   id,
   minDate,
   maxDate,
+  workdaysOnly = false,
   disabled,
   onInvalidDate,
 }: ThaiDatePickerProps) {
@@ -65,6 +69,10 @@ export function ThaiDatePicker({
       onInvalidDate?.();
       return;
     }
+    if (workdaysOnly && !isWorkday(normalized)) {
+      onInvalidDate?.();
+      return;
+    }
     onChange(toISODate(normalized));
   };
 
@@ -81,6 +89,7 @@ export function ThaiDatePicker({
         d.setHours(0, 0, 0, 0);
         if (min && d < min) return false;
         if (max && d > max) return false;
+        if (workdaysOnly && !isWorkday(d)) return false;
         return true;
       }}
       dateFormat="dd/MM/yyyy"

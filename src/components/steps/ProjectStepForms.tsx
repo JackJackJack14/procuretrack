@@ -8,11 +8,17 @@ import {
   MIN_DRAFT_PUBLICATION_WORKDAYS,
   STEP3_PUBLICATION_END_GUIDELINE,
   STEP3_PUBLICATION_END_TOO_SHORT_MSG,
+  STEP3_PUBLICATION_NON_WORKDAY_MSG,
+  isWorkdayISO,
 } from "@/lib/workdays";
 import { InlineDocUpload } from "@/components/steps/InlineDocUpload";
 import type { ProjectDocRef, StepDocRecord } from "@/lib/doc-upload";
 import {
   STEP3_DOC,
+  STEP3_DRAFT_TOR_UPLOAD_LABEL,
+  STEP3_DRAFT_ANNOUNCEMENT_UPLOAD_LABEL,
+  STEP3_MEDIAN_BG06_UPLOAD_LABEL,
+  STEP3_EGP_SCREENSHOT_UPLOAD_LABEL,
   STEP3_FEEDBACK_HELPER_HAS_COMMENTS,
   STEP3_FEEDBACK_HELPER_NONE,
   STEP3_FEEDBACK_UPLOAD_LABEL,
@@ -30,6 +36,10 @@ import {
   parseBudgetInput,
   type Step3Announcement,
   type Step3FeedbackResult,
+  type Step3Checklist,
+  type Step3ChecklistKey,
+  STEP3_CHECKLIST_ITEMS,
+  resolveProjectMedianPrice,
   type Step4BidResult,
   type Step4Checklist,
   type Step4ChecklistKey,
@@ -145,7 +155,7 @@ function SmartChecklist<K extends string>({
   onChecklistChange,
 }: {
   stepLabel: string;
-  items: Array<{ key: K; label: string }>;
+  items: Array<{ key: K; label: string; hint?: string }>;
   checklist: Record<K, boolean>;
   onChecklistChange: (key: K, checked: boolean) => void;
 }) {
@@ -198,6 +208,11 @@ function SmartChecklist<K extends string>({
             <span>
               <span className="font-medium text-muted-foreground mr-1">{index + 1}.</span>
               {item.label}
+              {item.hint && (
+                <span className="block text-xs text-muted-foreground mt-0.5 font-normal leading-relaxed">
+                  ({item.hint})
+                </span>
+              )}
             </span>
           </label>
         ))}
@@ -611,12 +626,6 @@ export function Step2DetailForm({
   );
 }
 
-type Step3ChecklistState = {
-  committee_tor_bid_docs_done: boolean;
-  director_report_submitted: boolean;
-  draft_published_for_comment: boolean;
-};
-
 type Step3DocBinder = {
   project: ProjectDocRef;
   stepNumber: number;
@@ -625,13 +634,13 @@ type Step3DocBinder = {
 };
 
 type Step3FormProps = {
-  checklist: Step3ChecklistState;
-  onChecklistChange: (
-    key: keyof Step3ChecklistState,
-    checked: boolean,
-  ) => void;
+  checklist: Step3Checklist;
+  onChecklistChange: (key: Step3ChecklistKey, checked: boolean) => void;
   announcement: Step3Announcement;
   onAnnouncementChange: (patch: Partial<Step3Announcement>) => void;
+  approvedMedianPrice: number | null;
+  medianPriceApprovalDate: string | null;
+  step2Bg06Uploaded: boolean;
   responsibleName: string;
   onResponsibleNameChange: (value: string) => void;
   step1ResponsibleDefault?: string;
@@ -648,34 +657,22 @@ export function Step3DetailForm({
   onChecklistChange,
   announcement,
   onAnnouncementChange,
+  approvedMedianPrice,
+  medianPriceApprovalDate,
+  step2Bg06Uploaded,
   responsibleName,
   onResponsibleNameChange,
   step1ResponsibleDefault = "",
   docBinder,
 }: Step3FormProps) {
   const [endDateRejected, setEndDateRejected] = useState(false);
+  const [startDateRejected, setStartDateRejected] = useState(false);
   const [procApprovalDateRejected, setProcApprovalDateRejected] = useState(false);
-  const safeChecklist = {
-    committee_tor_bid_docs_done: checklist?.committee_tor_bid_docs_done ?? false,
-    director_report_submitted: checklist?.director_report_submitted ?? false,
-    draft_published_for_comment: checklist?.draft_published_for_comment ?? false,
-  };
 
-  const checklistItems: Array<{ key: keyof Step3ChecklistState; label: string }> = [
-    {
-      key: "committee_tor_bid_docs_done",
-      label: "คณะกรรมการดำเนินการจัดทำร่าง TOR และร่างเอกสารประกวดราคาเสร็จเรียบร้อย",
-    },
-    {
-      key: "director_report_submitted",
-      label: "จัดทำรายงานเสนอหัวหน้าหน่วยงานเพื่อขอความเห็นชอบร่างประกาศและร่างเอกสาร",
-    },
-    {
-      key: "draft_published_for_comment",
-      label:
-        "นำร่างประกาศและร่างเอกสารประกวดราคาไปเผยแพร่รับฟังความคิดเห็นในระบบ e-GP และเว็บไซต์หน่วยงาน (ถ้ามี)",
-    },
-  ];
+  const medianDisplay = resolveProjectMedianPrice({
+    approved_median_price: approvedMedianPrice,
+    estimated_price: null,
+  });
 
   const approvalDate = announcement.approval_letter_date ?? "";
 
@@ -687,6 +684,11 @@ export function Step3DetailForm({
       ),
     [announcement.publication_start, announcement.publication_end],
   );
+
+  const publicationStartNonWorkday =
+    !!announcement.publication_start && !isWorkdayISO(announcement.publication_start);
+  const publicationEndNonWorkday =
+    !!announcement.publication_end && !isWorkdayISO(announcement.publication_end);
 
   const showPublicationStats =
     !!announcement.publication_start && !!announcement.publication_end;
@@ -720,11 +722,16 @@ export function Step3DetailForm({
 
   const handlePublicationStartChange = (startISO: string) => {
     setEndDateRejected(false);
+    setStartDateRejected(false);
     if (!startISO) {
       onAnnouncementChange({ publication_start: "", publication_end: "" });
       return;
     }
     if (approvalDate && startISO < approvalDate) return;
+    if (!isWorkdayISO(startISO)) {
+      setStartDateRejected(true);
+      return;
+    }
     const autoEnd = defaultPublicationEndISO(startISO);
     onAnnouncementChange({ publication_start: startISO, publication_end: autoEnd });
   };
@@ -734,6 +741,10 @@ export function Step3DetailForm({
     if (!endISO) {
       setEndDateRejected(false);
       onAnnouncementChange({ publication_end: "" });
+      return;
+    }
+    if (!isWorkdayISO(endISO)) {
+      setEndDateRejected(true);
       return;
     }
     if (minPublicationEnd && endISO < minPublicationEnd) {
@@ -825,20 +836,69 @@ export function Step3DetailForm({
 
   return (
     <div className="space-y-4 max-w-2xl">
+      <SmartChecklist
+        stepLabel="ขั้นตอนที่ 3"
+        items={STEP3_CHECKLIST_ITEMS}
+        checklist={checklist}
+        onChecklistChange={onChecklistChange}
+      />
+
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
+        <SectionTitle>กลุ่มที่ 1: ร่างเอกสารและ Spec (Anti-Lock-in)</SectionTitle>
+        <FieldRow label="ร่าง TOR / รายละเอียดคุณลักษณะเฉพาะ">
+          <InlineDocUpload
+            project={docBinder.project}
+            stepNumber={docBinder.stepNumber}
+            documentType={STEP3_DOC.DRAFT_TOR_SPEC}
+            label={STEP3_DRAFT_TOR_UPLOAD_LABEL}
+            existing={docBinder.docs}
+            onChange={docBinder.onDocsChange}
+          />
+        </FieldRow>
+        <FieldRow label="ร่างประกาศและร่างเอกสารประกวดราคา">
+          <InlineDocUpload
+            project={docBinder.project}
+            stepNumber={docBinder.stepNumber}
+            documentType={STEP3_DOC.DRAFT_ANNOUNCEMENT_BID}
+            label={STEP3_DRAFT_ANNOUNCEMENT_UPLOAD_LABEL}
+            existing={docBinder.docs}
+            onChange={docBinder.onDocsChange}
+          />
+        </FieldRow>
+        <FieldRow label="ตารางราคากlาง (บก.06)">
+          {step2Bg06Uploaded ? (
+            <p className="text-xs text-muted-foreground mb-2">
+              ✓ พบไฟล์ บก.06 จากขั้นตอนที่ 2 แล้ว — ไม่จำเป็นต้องอัปโหลดซ้ำ
+            </p>
+          ) : null}
+          <InlineDocUpload
+            project={docBinder.project}
+            stepNumber={docBinder.stepNumber}
+            documentType={STEP3_DOC.MEDIAN_BG06}
+            label={STEP3_MEDIAN_BG06_UPLOAD_LABEL}
+            existing={docBinder.docs}
+            onChange={docBinder.onDocsChange}
+          />
+        </FieldRow>
+      </div>
+
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-3">
-        <SectionTitle>Smart Checklist</SectionTitle>
-        <div className="rounded-md border bg-background p-3 space-y-2">
-          {checklistItems.map((item) => (
-            <label key={item.key} className="flex items-start gap-2.5 text-sm">
-              <input
-                type="checkbox"
-                className="mt-0.5 h-4 w-4"
-                checked={safeChecklist[item.key]}
-                onChange={(e) => onChecklistChange(item.key, e.target.checked)}
-              />
-              <span>{item.label}</span>
-            </label>
-          ))}
+        <SectionTitle>สถานะราคากlาง (อ้างอิงขั้นตอนที่ 2)</SectionTitle>
+        <div className="rounded-md border border-border bg-background px-3 py-2 text-sm space-y-1">
+          <p>
+            ราคากlางที่อนุมัติ:{" "}
+            <span className="font-medium">
+              {medianDisplay != null && medianDisplay > 0
+                ? `${formatBaht(medianDisplay)} บาท`
+                : "— ยังไม่มีข้อมูล (กรุณาบันทึกขั้นตอนที่ 2)"}
+            </span>
+          </p>
+          <p className="text-muted-foreground text-xs">
+            วันที่อนุมัติราคากlาง:{" "}
+            {medianPriceApprovalDate
+              ? formatThaiDate(medianPriceApprovalDate)
+              : "— ยังไม่มีข้อมูล"}
+          </p>
         </div>
       </div>
 
@@ -875,6 +935,14 @@ export function Step3DetailForm({
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
         <SectionTitle>ข้อมูลการเผยแพร่ระบบ e-GP</SectionTitle>
+        <FieldRow label="เลขที่โครงการในระบบ e-GP">
+          <input
+            value={announcement.egp_project_code ?? ""}
+            onChange={(e) => onAnnouncementChange({ egp_project_code: e.target.value })}
+            placeholder="เช่น เลขที่โครงการ e-GP หรือรหัสแผนจัดซื้อจัดจ้าง"
+            className={inputCls}
+          />
+        </FieldRow>
         <FieldRow label="เลขที่ประกาศในระบบ e-GP">
           <input
             value={announcement.egp_announcement_no ?? ""}
@@ -890,6 +958,25 @@ export function Step3DetailForm({
             existing={docBinder.docs}
             onChange={docBinder.onDocsChange}
           />
+          <InlineDocUpload
+            project={docBinder.project}
+            stepNumber={docBinder.stepNumber}
+            documentType={STEP3_DOC.EGP_SCREENSHOT}
+            label={STEP3_EGP_SCREENSHOT_UPLOAD_LABEL}
+            existing={docBinder.docs}
+            onChange={docBinder.onDocsChange}
+          />
+        </FieldRow>
+        <FieldRow label="ช่องทางรับคำวิจารณ์จากผู้ประกอบการ">
+          <input
+            value={announcement.comment_channel_email ?? ""}
+            onChange={(e) => onAnnouncementChange({ comment_channel_email: e.target.value })}
+            placeholder="เช่น procurement@agency.go.th หรือช่องทางอื่นที่ระบุในประกาศ"
+            className={inputCls}
+          />
+          <p className="text-xs text-muted-foreground mt-1">
+            ระบุอีเมลหน่วยงานหรือช่องทางที่ผู้ประกอบการส่งคำวิจารณ์ได้ตามที่ประกาศไว้
+          </p>
         </FieldRow>
         <div className="grid sm:grid-cols-2 gap-4">
           <FieldRow label="วันที่เริ่มเผยแพร่ร่างประกาศ">
@@ -897,7 +984,9 @@ export function Step3DetailForm({
               value={announcement.publication_start ?? ""}
               onChange={handlePublicationStartChange}
               minDate={approvalDate || undefined}
+              workdaysOnly
               disabled={!approvalDate}
+              onInvalidDate={() => setStartDateRejected(true)}
             />
             {!approvalDate && (
               <p className="text-xs text-muted-foreground mt-1">
@@ -915,6 +1004,7 @@ export function Step3DetailForm({
               value={announcement.publication_end ?? ""}
               onChange={handlePublicationEndChange}
               minDate={minPublicationEnd || undefined}
+              workdaysOnly
               disabled={!announcement.publication_start}
               onInvalidDate={() => setEndDateRejected(true)}
             />
@@ -937,13 +1027,27 @@ export function Step3DetailForm({
         )}
         {(publicationEndBelowMinimum || endDateRejected) && (
           <p className="text-xs text-destructive font-medium">
-            {STEP3_PUBLICATION_END_TOO_SHORT_MSG}
-            {minPublicationEnd && (
+            {endDateRejected && !publicationEndBelowMinimum
+              ? STEP3_PUBLICATION_NON_WORKDAY_MSG
+              : STEP3_PUBLICATION_END_TOO_SHORT_MSG}
+            {minPublicationEnd && publicationEndBelowMinimum && (
               <span className="font-normal text-destructive/90">
                 {" "}
                 (วันสิ้นสุดขั้นต่ำ: {formatThaiDate(minPublicationEnd)})
               </span>
             )}
+          </p>
+        )}
+        {startDateRejected && (
+          <p className="text-xs text-destructive font-medium">
+            {STEP3_PUBLICATION_NON_WORKDAY_MSG} (วันเริ่มเผยแพร่)
+          </p>
+        )}
+        {(publicationStartNonWorkday || publicationEndNonWorkday) &&
+          !startDateRejected &&
+          !endDateRejected && (
+          <p className="text-xs text-destructive font-medium">
+            {STEP3_PUBLICATION_NON_WORKDAY_MSG}
           </p>
         )}
         {publicationStartBeforeApproval && (
