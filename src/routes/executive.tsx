@@ -9,6 +9,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { fetchOrganizationProjects } from "@/lib/organization-projects";
 import { AppShell } from "@/components/AppShell";
 import { MilestoneTimeline } from "@/components/MilestoneTimeline";
 import { fetchAlerts } from "@/lib/alerts";
@@ -34,21 +35,22 @@ function ExecutiveDashboardPage() {
   const navigate = useNavigate();
   const [statusFilter, setStatusFilter] = useState<string>("all");
 
-  const { data: projects = [], isLoading } = useQuery<Project[]>({
+  const { data: projectResult, isLoading } = useQuery({
     queryKey: ["projects"],
     queryFn: async () => {
-      const { data: u } = await supabase.auth.getUser();
-      if (!u.user) {
+      const result = await fetchOrganizationProjects<Project>(
+        "id, name, project_code, budget, status, current_step, fiscal_year",
+      );
+      if (result.errorCode === "NOT_AUTH") {
         navigate({ to: "/login" });
-        return [];
       }
-      const { data } = await supabase
-        .from("projects")
-        .select("id, name, project_code, budget, status, current_step, fiscal_year")
-        .order("created_at", { ascending: false });
-      return (data ?? []) as Project[];
+      if (result.errorCode === "NO_ORG") {
+        navigate({ to: "/onboarding" });
+      }
+      return result;
     },
   });
+  const projects = projectResult?.projects ?? [];
 
   const { data: alerts = [] } = useQuery({
     queryKey: ["alerts"],

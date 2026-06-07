@@ -18,6 +18,9 @@ import {
   STEP3_FEEDBACK_UPLOAD_LABEL,
 } from "@/lib/step-doc-types";
 import {
+  STEP2_DOC,
+  STEP2_APPOINTMENT_ORDER_UPLOAD_LABEL,
+  STEP2_BG06_UPLOAD_LABEL,
   STEP4_DOC,
   STEP4_EVALUATION_UPLOAD_LABEL,
 } from "@/lib/step-doc-types";
@@ -31,7 +34,31 @@ import {
   type Step4Checklist,
   type Step4ChecklistKey,
   STEP4_CHECKLIST_ITEMS,
-  countStep4ChecklistDone,
+  type Step1Checklist,
+  type Step1ChecklistKey,
+  STEP1_CHECKLIST_ITEMS,
+  isStep1EgpCodeUnlocked,
+  type Step2Checklist,
+  type Step2ChecklistKey,
+  STEP2_CHECKLIST_ITEMS,
+  type Step2CommitteeOrder,
+  type Step2MedianPrice,
+  isStep2MedianPriceOverBudget,
+  STEP2_MEDIAN_OVER_BUDGET_MSG,
+  STEP2_EVEN_COMMITTEE_MSG,
+  isStep2MedianApprovalBeforeAppointment,
+  countStep2MedianProcessWorkdays,
+  isStep2MedianProcessSlow,
+  STEP2_MEDIAN_APPROVAL_BEFORE_APPOINTMENT_MSG,
+  STEP2_MEDIAN_WORKDAYS_SLOW_MSG,
+  isStep2MedianFastApproval,
+  STEP2_MEDIAN_FAST_APPROVAL_MSG,
+  STEP2_MEDIAN_FAST_APPROVAL_HELPER,
+  type Step2ComplianceLog,
+  type Step2CommitteesState,
+  type Step2CommitteeAppointmentMode,
+  type Step2CommitteeListKey,
+  shouldWarnEvenCommitteeCount,
   defaultStep4EvaluationApprovalDateISO,
   isStep4EvaluationApprovalBeforeBidEnd,
   isStep4EvaluationApprovalOverdue,
@@ -99,42 +126,126 @@ export function ResponsibleOfficerField({
 }
 
 type Step1FormProps = {
+  checklist: Step1Checklist;
+  onChecklistChange: (key: Step1ChecklistKey, checked: boolean) => void;
   egpCode: string;
   onEgpCodeChange: (v: string) => void;
   budget: string;
   onBudgetChange: (v: string) => void;
-  estimatedPrice: string;
-  onEstimatedPriceChange: (v: string) => void;
   method: string;
   onMethodChange: (v: string) => void;
   responsibleName: string;
   onResponsibleNameChange: (v: string) => void;
 };
 
+function SmartChecklist<K extends string>({
+  stepLabel,
+  items,
+  checklist,
+  onChecklistChange,
+}: {
+  stepLabel: string;
+  items: Array<{ key: K; label: string }>;
+  checklist: Record<K, boolean>;
+  onChecklistChange: (key: K, checked: boolean) => void;
+}) {
+  const done = items.filter((item) => checklist[item.key]).length;
+  const total = items.length;
+  const allDone = done >= total;
+  const progressPct = Math.round((done / total) * 100);
+
+  return (
+    <div className="rounded-lg border border-primary/25 bg-primary/5 p-4 space-y-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <p className="text-sm font-semibold text-foreground">Smart Checklist — {stepLabel}</p>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            ติ๊กครบทุกข้อก่อนไปขั้นถัดไป (Compliance Gatekeeper)
+          </p>
+        </div>
+        <span
+          className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
+            allDone
+              ? "bg-success/15 text-success border border-success/30"
+              : "bg-background text-muted-foreground border border-border"
+          }`}
+        >
+          {done}/{total} ข้อ
+        </span>
+      </div>
+      <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+        <div
+          className={`h-full rounded-full transition-all duration-300 ${
+            allDone ? "bg-success" : "bg-primary"
+          }`}
+          style={{ width: `${progressPct}%` }}
+        />
+      </div>
+      <div className="rounded-md border bg-background p-3 space-y-2.5">
+        {items.map((item, index) => (
+          <label
+            key={item.key}
+            className={`flex items-start gap-2.5 text-sm cursor-pointer rounded-md px-2 py-1.5 -mx-2 transition-colors ${
+              checklist[item.key] ? "text-foreground" : "text-muted-foreground hover:bg-muted/50"
+            }`}
+          >
+            <input
+              type="checkbox"
+              className="mt-0.5 h-4 w-4 shrink-0 accent-primary"
+              checked={checklist[item.key]}
+              onChange={(e) => onChecklistChange(item.key, e.target.checked)}
+            />
+            <span>
+              <span className="font-medium text-muted-foreground mr-1">{index + 1}.</span>
+              {item.label}
+            </span>
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /** ขั้นตอนที่ 1 — จัดทำแผนการจัดซื้อจัดจ้าง */
 export function Step1DetailForm({
+  checklist,
+  onChecklistChange,
   egpCode,
   onEgpCodeChange,
   budget,
   onBudgetChange,
-  estimatedPrice,
-  onEstimatedPriceChange,
   method,
   onMethodChange,
   responsibleName,
   onResponsibleNameChange,
 }: Step1FormProps) {
+  const egpUnlocked = isStep1EgpCodeUnlocked(checklist);
+
   return (
-    <div className="space-y-4 rounded-lg border border-border bg-muted/20 p-4">
-      <p className="text-sm font-medium text-foreground">ข้อมูลขั้นตอนที่ 1 — จัดทำแผนการจัดซื้อจัดจ้าง</p>
-      <FieldRow label="เลขที่โครงการ (e-GP)">
-        <input
-          value={egpCode}
-          onChange={(e) => onEgpCodeChange(e.target.value)}
-          placeholder="เช่น P6805001234"
-          className={inputCls}
-        />
-      </FieldRow>
+    <div className="space-y-4 max-w-2xl">
+      <SmartChecklist
+        stepLabel="ขั้นตอนที่ 1"
+        items={STEP1_CHECKLIST_ITEMS}
+        checklist={checklist}
+        onChecklistChange={onChecklistChange}
+      />
+
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
+        <p className="text-sm font-medium text-foreground">ข้อมูลขั้นตอนที่ 1 — จัดทำแผนการจัดซื้อจัดจ้าง</p>
+        <FieldRow label="รหัสแผนจัดซื้อจัดจ้าง e-GP">
+          <input
+            value={egpCode}
+            onChange={(e) => onEgpCodeChange(e.target.value)}
+            placeholder="เช่น P6805001234"
+            disabled={!egpUnlocked}
+            className={`${inputCls}${!egpUnlocked ? " opacity-60 cursor-not-allowed bg-muted" : ""}`}
+          />
+          {!egpUnlocked && (
+            <p className="text-xs text-warning mt-1">
+              ปลดล็อกเมื่อติ๊ก Checklist ข้อที่ 2 และ 3 แล้ว
+            </p>
+          )}
+        </FieldRow>
       <FieldRow label="วงเงินงบประมาณ (บาท)">
         <input
           value={budget}
@@ -146,15 +257,6 @@ export function Step1DetailForm({
         <p className="text-xs text-muted-foreground mt-1">
           ใช้คำนวณระยะเวลาขั้นตอนที่มีกำหนดวันขั้นต่ำ (เช่น ประกาศ e-bidding)
         </p>
-      </FieldRow>
-      <FieldRow label="ราคากลาง (บาท)">
-        <input
-          value={estimatedPrice}
-          onChange={(e) => onEstimatedPriceChange(formatBudgetInput(e.target.value))}
-          placeholder="0"
-          inputMode="numeric"
-          className={inputCls}
-        />
       </FieldRow>
       <FieldRow label="วิธีการจัดซื้อจัดจ้าง">
         <select value={method} onChange={(e) => onMethodChange(e.target.value)} className={inputCls}>
@@ -173,119 +275,330 @@ export function Step1DetailForm({
         value={responsibleName}
         onChange={onResponsibleNameChange}
       />
+      </div>
     </div>
   );
 }
 
+type Step2DocBinder = {
+  project: ProjectDocRef;
+  stepNumber: number;
+  docs: StepDocRecord[];
+  onDocsChange: () => void;
+};
+
 type Step2FormProps = {
-  checklist: {
-    draft_order_done: boolean;
-    director_signed_order: boolean;
-    committee_ack_no_conflict: boolean;
-    median_price_report_done: boolean;
-    director_signed_median_price: boolean;
-  };
-  onChecklistChange: (
-    key:
-      | "draft_order_done"
-      | "director_signed_order"
-      | "committee_ack_no_conflict"
-      | "median_price_report_done"
-      | "director_signed_median_price",
-    checked: boolean,
-  ) => void;
-  committeeMembers: string[];
-  onCommitteeChange: (index: number, value: string) => void;
-  onAddCommittee: () => void;
-  onRemoveCommittee: (index: number) => void;
+  checklist: Step2Checklist;
+  onChecklistChange: (key: Step2ChecklistKey, checked: boolean) => void;
+  committees: Step2CommitteesState;
+  onCommitteeModeChange: (mode: Step2CommitteeAppointmentMode) => void;
+  onCommitteeChange: (listKey: Step2CommitteeListKey, index: number, value: string) => void;
+  onAddCommittee: (listKey: Step2CommitteeListKey) => void;
+  onRemoveCommittee: (listKey: Step2CommitteeListKey, index: number) => void;
+  committeeOrder: Step2CommitteeOrder;
+  onCommitteeOrderChange: (patch: Partial<Step2CommitteeOrder>) => void;
+  medianPrice: Step2MedianPrice;
+  onMedianPriceChange: (patch: Partial<Step2MedianPrice>) => void;
+  step1Budget: number;
   responsibleName: string;
   onResponsibleNameChange: (v: string) => void;
   step1ResponsibleDefault?: string;
+  docBinder: Step2DocBinder;
+  complianceLog?: Step2ComplianceLog;
 };
+
+function CommitteeMemberList({
+  title,
+  members,
+  listKey,
+  onCommitteeChange,
+  onAddCommittee,
+  onRemoveCommittee,
+}: {
+  title: string;
+  members: string[];
+  listKey: Step2CommitteeListKey;
+  onCommitteeChange: (listKey: Step2CommitteeListKey, index: number, value: string) => void;
+  onAddCommittee: (listKey: Step2CommitteeListKey) => void;
+  onRemoveCommittee: (listKey: Step2CommitteeListKey, index: number) => void;
+}) {
+  const safeMembers = members?.length ? members : ["", "", ""];
+  const showEvenWarning = shouldWarnEvenCommitteeCount(safeMembers);
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-sm font-medium text-foreground">{title}</p>
+        <button
+          type="button"
+          onClick={() => onAddCommittee(listKey)}
+          className="h-8 px-2.5 rounded-md border border-input text-xs hover:bg-accent inline-flex items-center gap-1"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          เพิ่มกรรมการ
+        </button>
+      </div>
+      <div className="space-y-2">
+        {safeMembers.map((name, idx) => (
+          <div key={idx} className="flex items-center gap-2">
+            <input
+              value={name}
+              onChange={(e) => onCommitteeChange(listKey, idx, e.target.value)}
+              placeholder={idx === 0 ? "ประธานกรรมการ" : `กรรมการคนที่ ${idx + 1}`}
+              className={inputCls}
+            />
+            {safeMembers.length > 3 && (
+              <button
+                type="button"
+                onClick={() => onRemoveCommittee(listKey, idx)}
+                className="h-10 w-10 rounded-md border border-input text-destructive hover:bg-destructive/10 flex items-center justify-center shrink-0"
+                title="ลบแถวนี้"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+      {showEvenWarning && (
+        <p className="text-xs text-warning mt-2">{STEP2_EVEN_COMMITTEE_MSG}</p>
+      )}
+      <p className="text-xs text-muted-foreground mt-2">
+        ต้องมีกรรมการอย่างน้อย 3 คน (ไม่สามารถลบจนเหลือน้อยกว่า 3 คน)
+      </p>
+    </div>
+  );
+}
 
 /** ขั้นตอนที่ 2 — แต่งตั้งคณะกรรมการและกำหนดราคากลาง */
 export function Step2DetailForm({
   checklist,
   onChecklistChange,
-  committeeMembers,
+  committees,
+  onCommitteeModeChange,
   onCommitteeChange,
   onAddCommittee,
   onRemoveCommittee,
+  committeeOrder,
+  onCommitteeOrderChange,
+  medianPrice,
+  onMedianPriceChange,
+  step1Budget,
   responsibleName,
   onResponsibleNameChange,
   step1ResponsibleDefault = "",
+  docBinder,
+  complianceLog,
 }: Step2FormProps) {
-  const safeChecklist = {
-    draft_order_done: checklist?.draft_order_done ?? false,
-    director_signed_order: checklist?.director_signed_order ?? false,
-    committee_ack_no_conflict: checklist?.committee_ack_no_conflict ?? false,
-    median_price_report_done: checklist?.median_price_report_done ?? false,
-    director_signed_median_price: checklist?.director_signed_median_price ?? false,
-  };
-  const safeMembers = committeeMembers?.length ? committeeMembers : ["", "", ""];
+  const medianPriceDisplay =
+    medianPrice.approved_median_price != null && medianPrice.approved_median_price > 0
+      ? formatBudgetInput(String(medianPrice.approved_median_price))
+      : "";
 
-  const items: Array<{
-    key: keyof Step2FormProps["checklist"];
-    label: string;
-  }> = [
-    { key: "draft_order_done", label: "ร่างคำสั่งแต่งตั้งคณะกรรมการจัดทำ TOR และราคากลางเสร็จเรียบร้อย" },
-    { key: "director_signed_order", label: "หัวหน้าหน่วยงาน (ผอ.) ลงนามอนุมัติคำสั่ง" },
-    { key: "committee_ack_no_conflict", label: "คณะกรรมการรับทราบคำสั่ง (ตรวจสอบแล้วไม่มีผลประโยชน์ทับซ้อน)" },
-    { key: "median_price_report_done", label: "จัดทำรายงานผลการกำหนดราคากลางเสร็จสมบูรณ์" },
-    { key: "director_signed_median_price", label: "หัวหน้าหน่วยงาน (ผอ.) ลงนามอนุมัติราคากลาง" },
-  ];
+  const medianOverBudget = isStep2MedianPriceOverBudget(
+    medianPrice.approved_median_price,
+    step1Budget,
+  );
+
+  const appointmentDate = committeeOrder.appointment_order_date?.trim() ?? "";
+  const medianApprovalDate = medianPrice.median_price_approval_date?.trim() ?? "";
+  const medianApprovalBeforeAppointment = isStep2MedianApprovalBeforeAppointment(
+    medianApprovalDate,
+    appointmentDate,
+  );
+  const medianProcessWorkdays =
+    appointmentDate && medianApprovalDate && !medianApprovalBeforeAppointment
+      ? countStep2MedianProcessWorkdays(appointmentDate, medianApprovalDate)
+      : 0;
+  const medianProcessSlow = isStep2MedianProcessSlow(appointmentDate, medianApprovalDate);
+  const medianFastApproval = isStep2MedianFastApproval(appointmentDate, medianApprovalDate);
 
   return (
-    <div className="space-y-4 rounded-lg border border-border bg-muted/20 p-4">
-      <p className="text-sm font-medium text-foreground">Smart Checklist — ขั้นตอนที่ 2</p>
-      <div className="rounded-md border bg-background p-3 space-y-2">
-        {items.map((item) => (
-          <label key={item.key} className="flex items-start gap-2.5 text-sm">
-            <input
-              type="checkbox"
-              className="mt-0.5 h-4 w-4"
-              checked={safeChecklist[item.key]}
-              onChange={(e) => onChecklistChange(item.key, e.target.checked)}
+    <div className="space-y-4 max-w-2xl">
+      <SmartChecklist
+        stepLabel="ขั้นตอนที่ 2"
+        items={STEP2_CHECKLIST_ITEMS}
+        checklist={checklist}
+        onChecklistChange={onChecklistChange}
+      />
+
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
+        <div className="space-y-3">
+          <p className="text-sm font-medium text-foreground">รูปแบบการแต่งตั้งคณะกรรมการ</p>
+          <div className="space-y-2">
+            <label className="flex items-start gap-2.5 text-sm cursor-pointer">
+              <input
+                type="radio"
+                name="step2-committee-mode"
+                className="mt-0.5 h-4 w-4 accent-primary"
+                checked={committees.appointment_mode === "combined"}
+                onChange={() => onCommitteeModeChange("combined")}
+              />
+              <span>ใช้คณะกรรมการชุดเดียวกัน (ทำทั้งร่าง TOR และราคากลาง)</span>
+            </label>
+            <label className="flex items-start gap-2.5 text-sm cursor-pointer">
+              <input
+                type="radio"
+                name="step2-committee-mode"
+                className="mt-0.5 h-4 w-4 accent-primary"
+                checked={committees.appointment_mode === "separate"}
+                onChange={() => onCommitteeModeChange("separate")}
+              />
+              <span>แยกคณะกรรมการ (ชุดร่าง TOR และ ชุดกำหนดราคากลาง)</span>
+            </label>
+          </div>
+        </div>
+
+        {committees.appointment_mode === "combined" ? (
+          <CommitteeMemberList
+            title="คณะกรรมการจัดทำร่าง TOR และกำหนดราคากลาง"
+            members={committees.combined_members}
+            listKey="combined_members"
+            onCommitteeChange={onCommitteeChange}
+            onAddCommittee={onAddCommittee}
+            onRemoveCommittee={onRemoveCommittee}
+          />
+        ) : (
+          <div className="space-y-5">
+            <CommitteeMemberList
+              title="คณะกรรมการจัดทำร่างขอบเขตของงาน (TOR)"
+              members={committees.tor_members}
+              listKey="tor_members"
+              onCommitteeChange={onCommitteeChange}
+              onAddCommittee={onAddCommittee}
+              onRemoveCommittee={onRemoveCommittee}
             />
-            <span>{item.label}</span>
-          </label>
-        ))}
+            <div className="border-t border-border pt-4">
+              <CommitteeMemberList
+                title="คณะกรรมการกำหนดราคากลาง"
+                members={committees.median_price_members}
+                listKey="median_price_members"
+                onCommitteeChange={onCommitteeChange}
+                onAddCommittee={onAddCommittee}
+                onRemoveCommittee={onRemoveCommittee}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
-      <div className="pt-2">
-        <div className="flex items-center justify-between mb-2">
-          <p className="text-sm font-medium text-foreground">รายชื่อคณะกรรมการจัดทำ TOR และราคากลาง</p>
-          <button
-            type="button"
-            onClick={onAddCommittee}
-            className="h-8 px-2.5 rounded-md border border-input text-xs hover:bg-accent inline-flex items-center gap-1"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            เพิ่มกรรมการ
-          </button>
-        </div>
-        <div className="space-y-2">
-          {safeMembers.map((name, idx) => (
-            <div key={idx} className="flex items-center gap-2">
-              <input
-                value={name}
-                onChange={(e) => onCommitteeChange(idx, e.target.value)}
-                placeholder={idx === 0 ? "ประธานกรรมการ" : `กรรมการคนที่ ${idx + 1}`}
-                className={inputCls}
-              />
-              {idx >= 3 && (
-                <button
-                  type="button"
-                  onClick={() => onRemoveCommittee(idx)}
-                  className="h-10 w-10 rounded-md border border-input text-destructive hover:bg-destructive/10 flex items-center justify-center"
-                  title="ลบแถวนี้"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              )}
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
+        <SectionTitle>กลุ่มที่ 1: ข้อมูลคำสั่งแต่งตั้งคณะกรรมการ</SectionTitle>
+        <FieldRow label="เลขที่คำสั่งแต่งตั้ง">
+          <input
+            value={committeeOrder.appointment_order_no ?? ""}
+            onChange={(e) => onCommitteeOrderChange({ appointment_order_no: e.target.value })}
+            placeholder="เช่น ที่ กษ ๐๖๐๒ / ๑๒๓"
+            className={inputCls}
+          />
+        </FieldRow>
+        <FieldRow label="วันที่ลงนามในคำสั่ง">
+          <ThaiDatePicker
+            value={committeeOrder.appointment_order_date ?? ""}
+            onChange={(v) => onCommitteeOrderChange({ appointment_order_date: v })}
+          />
+          {committeeOrder.appointment_order_date && (
+            <p className="text-xs text-muted-foreground mt-1">
+              {formatThaiDate(committeeOrder.appointment_order_date)}
+            </p>
+          )}
+        </FieldRow>
+        <FieldRow label="ไฟล์เอกสารคำสั่งแต่งตั้ง">
+          <InlineDocUpload
+            project={docBinder.project}
+            stepNumber={docBinder.stepNumber}
+            documentType={STEP2_DOC.APPOINTMENT_ORDER}
+            label={STEP2_APPOINTMENT_ORDER_UPLOAD_LABEL}
+            existing={docBinder.docs}
+            onChange={docBinder.onDocsChange}
+          />
+        </FieldRow>
+      </div>
+
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
+        <SectionTitle>กลุ่มที่ 2: ข้อมูลราคากลาง</SectionTitle>
+        <FieldRow label="ราคากลาง (บาท)">
+          <input
+            value={medianPriceDisplay}
+            onChange={(e) => {
+              const raw = e.target.value.replace(/[^\d]/g, "");
+              onMedianPriceChange({
+                approved_median_price: raw ? Number(raw) : null,
+              });
+            }}
+            placeholder="0"
+            inputMode="numeric"
+            className={inputCls}
+          />
+          {step1Budget > 0 && (
+            <div className="mt-2 rounded-md border border-border bg-background px-3 py-2 text-xs space-y-0.5">
+              <p className="text-muted-foreground">
+                ค่าเปรียบเทียบ — วงเงินงบประมาณ (ขั้นตอนที่ 1):{" "}
+                <span className="font-medium text-foreground">{formatBaht(step1Budget)} บาท</span>
+              </p>
+              <p className="text-muted-foreground">
+                กรอกราคากลางที่คณะกรรมการคำนวณและได้รับอนุมัติแล้ว
+              </p>
             </div>
-          ))}
-        </div>
+          )}
+          {medianOverBudget && (
+            <p className="text-xs text-warning mt-2 font-medium">{STEP2_MEDIAN_OVER_BUDGET_MSG}</p>
+          )}
+        </FieldRow>
+        <FieldRow label="วันที่หัวหน้าหน่วยงานอนุมัติราคากลาง">
+          <ThaiDatePicker
+            value={medianPrice.median_price_approval_date ?? ""}
+            minDate={appointmentDate || undefined}
+            onChange={(v) => onMedianPriceChange({ median_price_approval_date: v })}
+          />
+          {medianApprovalDate && !medianApprovalBeforeAppointment && (
+            <p className="text-xs text-muted-foreground mt-1">
+              {formatThaiDate(medianApprovalDate)}
+            </p>
+          )}
+          {medianApprovalBeforeAppointment && (
+            <p className="text-xs text-destructive mt-1 font-medium">
+              {STEP2_MEDIAN_APPROVAL_BEFORE_APPOINTMENT_MSG}
+            </p>
+          )}
+          {medianProcessWorkdays > 0 && !medianApprovalBeforeAppointment && (
+            <p className="text-xs text-muted-foreground mt-1">
+              ระยะเวลาที่ใช้ในการปฏิบัติงาน: {medianProcessWorkdays} วันทำการ
+              (นับจากวันคำสั่งแต่งตั้งถึงวันอนุมัติราคากลาง)
+            </p>
+          )}
+          {medianProcessSlow && !medianApprovalBeforeAppointment && (
+            <p className="text-xs text-warning mt-1 font-medium">{STEP2_MEDIAN_WORKDAYS_SLOW_MSG}</p>
+          )}
+          {medianFastApproval && !medianApprovalBeforeAppointment && (
+            <>
+              <p className="text-xs text-warning mt-1 font-medium">{STEP2_MEDIAN_FAST_APPROVAL_MSG}</p>
+              <p className="text-xs text-muted-foreground mt-1">{STEP2_MEDIAN_FAST_APPROVAL_HELPER}</p>
+            </>
+          )}
+          {complianceLog?.fast_median_approval_warning && medianFastApproval && (
+            <p className="text-xs text-muted-foreground mt-1">
+              📋 บันทึกระบบ: มีการแจ้งเตือนความเร็วในการอนุมัติ
+              {complianceLog.fast_median_approval_warning_at && (
+                <>
+                  {" "}
+                  (บันทึกเมื่อ{" "}
+                  {formatThaiDate(complianceLog.fast_median_approval_warning_at.slice(0, 10))})
+                </>
+              )}
+            </p>
+          )}
+        </FieldRow>
+        <FieldRow label="ไฟล์ตารางแสดงวงเงินราคากลาง (แบบ บก.06)">
+          <InlineDocUpload
+            project={docBinder.project}
+            stepNumber={docBinder.stepNumber}
+            documentType={STEP2_DOC.MEDIAN_PRICE_BG06}
+            label={STEP2_BG06_UPLOAD_LABEL}
+            existing={docBinder.docs}
+            onChange={docBinder.onDocsChange}
+          />
+        </FieldRow>
       </div>
 
       <ResponsibleOfficerField
@@ -830,60 +1143,13 @@ function Step4SmartChecklist({
   checklist: Step4Checklist;
   onChecklistChange: (key: Step4ChecklistKey, checked: boolean) => void;
 }) {
-  const done = countStep4ChecklistDone(checklist);
-  const total = STEP4_CHECKLIST_ITEMS.length;
-  const allDone = done >= total;
-  const progressPct = Math.round((done / total) * 100);
-
   return (
-    <div className="rounded-lg border border-primary/25 bg-primary/5 p-4 space-y-3">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div>
-          <p className="text-sm font-semibold text-foreground">Smart Checklist — ขั้นตอนที่ 4</p>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            ติ๊กครบทุกข้อก่อนไปขั้นถัดไป (Compliance Gatekeeper)
-          </p>
-        </div>
-        <span
-          className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-            allDone
-              ? "bg-success/15 text-success border border-success/30"
-              : "bg-background text-muted-foreground border border-border"
-          }`}
-        >
-          {done}/{total} ข้อ
-        </span>
-      </div>
-      <div className="h-1.5 rounded-full bg-muted overflow-hidden">
-        <div
-          className={`h-full rounded-full transition-all duration-300 ${
-            allDone ? "bg-success" : "bg-primary"
-          }`}
-          style={{ width: `${progressPct}%` }}
-        />
-      </div>
-      <div className="rounded-md border bg-background p-3 space-y-2.5">
-        {STEP4_CHECKLIST_ITEMS.map((item, index) => (
-          <label
-            key={item.key}
-            className={`flex items-start gap-2.5 text-sm cursor-pointer rounded-md px-2 py-1.5 -mx-2 transition-colors ${
-              checklist[item.key] ? "text-foreground" : "text-muted-foreground hover:bg-muted/50"
-            }`}
-          >
-            <input
-              type="checkbox"
-              className="mt-0.5 h-4 w-4 shrink-0 accent-primary"
-              checked={checklist[item.key]}
-              onChange={(e) => onChecklistChange(item.key, e.target.checked)}
-            />
-            <span>
-              <span className="font-medium text-muted-foreground mr-1">{index + 1}.</span>
-              {item.label}
-            </span>
-          </label>
-        ))}
-      </div>
-    </div>
+    <SmartChecklist
+      stepLabel="ขั้นตอนที่ 4"
+      items={STEP4_CHECKLIST_ITEMS}
+      checklist={checklist}
+      onChecklistChange={onChecklistChange}
+    />
   );
 }
 

@@ -1,3 +1,15 @@
+/** ประเภทเอกสารขั้นตอนที่ 2 — ผูกกับฟิลด์ฟอร์ม */
+export const STEP2_DOC = {
+  APPOINTMENT_ORDER: "คำสั่งแต่งตั้งคณะกรรมการจัดทำ TOR และราคากลาง",
+  MEDIAN_PRICE_BG06: "แบบรายงานผลการกำหนดราคากลาง (บก.06)",
+} as const;
+
+export const STEP2_APPOINTMENT_ORDER_UPLOAD_LABEL =
+  "📎 แนบไฟล์เอกสารคำสั่งแต่งตั้ง (PDF)";
+
+export const STEP2_BG06_UPLOAD_LABEL =
+  "📎 แนบไฟล์ตารางแสดงวงเงินราคากลาง (แบบ บก.06) (PDF)";
+
 /** ประเภทเอกสารขั้นตอนที่ 3 — ผูกกับฟิลด์ฟอร์ม (Single Page Workflow) */
 export const STEP3_DOC = {
   MEMO_APPROVAL: "PDF บันทึกข้อความเห็นชอบ",

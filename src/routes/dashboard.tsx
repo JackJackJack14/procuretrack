@@ -9,6 +9,7 @@ import {
 import { supabase } from "@/integrations/supabase/client";
 import { AppShell } from "@/components/AppShell";
 import { fetchAlerts, type Alert as AlertType } from "@/lib/alerts";
+import { fetchOrganizationProjects } from "@/lib/organization-projects";
 import { formatThaiDate } from "@/lib/utils";
 import { APPEAL_STATUS_LABELS } from "@/lib/step-form";
 
@@ -34,18 +35,24 @@ function DashboardPage() {
   const [showAllAlerts, setShowAllAlerts] = useState(false);
 
 
-  const { data: projects = [], isLoading: loading } = useQuery<Project[]>({
+  const { data: projectResult, isLoading: loading } = useQuery({
     queryKey: ["projects"],
     queryFn: async () => {
-      const { data: u } = await supabase.auth.getUser();
-      if (!u.user) { navigate({ to: "/login" }); return []; }
-      const { data } = await supabase
-        .from("projects")
-        .select("id, name, budget, status, current_step, fiscal_year, created_at, appeal_status")
-        .order("created_at", { ascending: false });
-      return (data ?? []) as Project[];
+      const result = await fetchOrganizationProjects<Project>(
+        "id, name, budget, status, current_step, fiscal_year, created_at, appeal_status",
+      );
+      if (result.errorCode === "NOT_AUTH") {
+        navigate({ to: "/login" });
+      }
+      if (result.errorCode === "NO_ORG") {
+        navigate({ to: "/onboarding" });
+      }
+      return result;
     },
   });
+  const projects = projectResult?.projects ?? [];
+  const projectsError = projectResult?.error ?? null;
+  const profileName = projectResult?.profile?.full_name;
 
   const { data: alerts = [] } = useQuery({
     queryKey: ["alerts"],
@@ -109,6 +116,27 @@ function DashboardPage() {
             ภาพรวมผู้บริหาร (10 ขั้นตอน)
           </Link>
         </div>
+
+        {projectsError && (
+          <div className="rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+            <p className="font-medium">ไม่สามารถโหลดข้อมูลโครงการได้</p>
+            <p className="mt-1 text-destructive/90">{projectsError}</p>
+            {profileName && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                ผู้ใช้: {profileName} · Supabase:{" "}
+                {import.meta.env.VITE_SUPABASE_URL ?? "ไม่พบ VITE_SUPABASE_URL ใน .env"}
+              </p>
+            )}
+          </div>
+        )}
+
+        {!loading && !projectsError && projects.length === 0 && profileName && (
+          <div className="rounded-lg border border-dashed border-border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
+            ไม่พบโครงการในหน่วยงานของ <span className="font-medium text-foreground">{profileName}</span>
+            {" "}— หากเคยมีข้อมูลแล้ว ให้ตรวจสอบว่า Login ด้วยบัญชีเดิมและไฟล์{" "}
+            <code className="text-xs">.env</code> ชี้ไป Supabase project เดียวกัน
+          </div>
+        )}
 
         {/* Metrics */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">

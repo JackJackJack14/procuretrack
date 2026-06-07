@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Search, Loader2, X, FolderKanban } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import { fetchOrganizationProjects } from "@/lib/organization-projects";
 import { AppShell } from "@/components/AppShell";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -40,18 +41,23 @@ function ProjectsPage() {
   const [methodFilter, setMethodFilter] = useState<string>("all");
   const [showCreate, setShowCreate] = useState(false);
 
-  const { data: projects = [], isLoading: loading } = useQuery<Project[]>({
+  const { data: projectResult, isLoading: loading } = useQuery({
     queryKey: ["projects"],
     queryFn: async () => {
-      const { data: u } = await supabase.auth.getUser();
-      if (!u.user) { navigate({ to: "/login" }); return []; }
-      const { data } = await supabase
-        .from("projects")
-        .select("id, name, project_code, budget, status, method, fiscal_year, current_step, appeal_status")
-        .order("created_at", { ascending: false });
-      return (data ?? []) as Project[];
+      const result = await fetchOrganizationProjects<Project>(
+        "id, name, project_code, budget, status, method, fiscal_year, current_step, appeal_status",
+      );
+      if (result.errorCode === "NOT_AUTH") {
+        navigate({ to: "/login" });
+      }
+      if (result.errorCode === "NO_ORG") {
+        navigate({ to: "/onboarding" });
+      }
+      return result;
     },
   });
+  const projects = projectResult?.projects ?? [];
+  const projectsError = projectResult?.error ?? null;
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -79,6 +85,12 @@ function ProjectsPage() {
             <Plus className="h-4 w-4" /> สร้างโครงการใหม่
           </button>
         </div>
+
+        {projectsError && (
+          <div className="rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+            {projectsError}
+          </div>
+        )}
 
         {/* Filters */}
         <div className="bg-card border rounded-[10px] p-4 flex flex-wrap items-center gap-3">

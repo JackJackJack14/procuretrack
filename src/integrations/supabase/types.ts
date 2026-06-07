@@ -511,6 +511,8 @@ export type Database = {
           project_id: string
           responsible_officer_name: string | null
           status: string
+          step1_checklist: Json | null
+          step2_checklist: Json | null
           step_name: string
           step_notes: string | null
           step_number: number
@@ -526,6 +528,8 @@ export type Database = {
           project_id: string
           responsible_officer_name?: string | null
           status?: string
+          step1_checklist?: Json | null
+          step2_checklist?: Json | null
           step_name: string
           step_notes?: string | null
           step_number: number
@@ -541,6 +545,8 @@ export type Database = {
           project_id?: string
           responsible_officer_name?: string | null
           status?: string
+          step1_checklist?: Json | null
+          step2_checklist?: Json | null
           step_name?: string
           step_notes?: string | null
           step_number?: number
@@ -618,8 +624,12 @@ export type Database = {
           appeal_consideration_status: string | null
           appeal_report_letter_no: string | null
           appeal_status: string | null
+          approved_median_price: number | null
           approving_agency: string | null
           budget: number
+          committee_appointment_mode: string | null
+          committee_appointment_order_date: string | null
+          committee_appointment_order_no: string | null
           committee_review_workdays: number | null
           created_at: string
           created_by: string | null
@@ -635,6 +645,7 @@ export type Database = {
           fiscal_year: number
           id: string
           method: string
+          median_price_approval_date: string | null
           name: string
           organization_id: string
           procurement_agency: string | null
@@ -651,8 +662,12 @@ export type Database = {
           appeal_consideration_status?: string | null
           appeal_report_letter_no?: string | null
           appeal_status?: string | null
+          approved_median_price?: number | null
           approving_agency?: string | null
           budget: number
+          committee_appointment_mode?: string | null
+          committee_appointment_order_date?: string | null
+          committee_appointment_order_no?: string | null
           committee_review_workdays?: number | null
           created_at?: string
           created_by?: string | null
@@ -668,6 +683,7 @@ export type Database = {
           fiscal_year: number
           id?: string
           method?: string
+          median_price_approval_date?: string | null
           name: string
           organization_id: string
           procurement_agency?: string | null
@@ -684,8 +700,12 @@ export type Database = {
           appeal_consideration_status?: string | null
           appeal_report_letter_no?: string | null
           appeal_status?: string | null
+          approved_median_price?: number | null
           approving_agency?: string | null
           budget?: number
+          committee_appointment_mode?: string | null
+          committee_appointment_order_date?: string | null
+          committee_appointment_order_no?: string | null
           committee_review_workdays?: number | null
           created_at?: string
           created_by?: string | null
@@ -701,6 +721,7 @@ export type Database = {
           fiscal_year?: number
           id?: string
           method?: string
+          median_price_approval_date?: string | null
           name?: string
           organization_id?: string
           procurement_agency?: string | null

@@ -43,6 +43,37 @@ import {
   mergeStep4BidResultFromProject,
   EMPTY_STEP4_BID_RESULT,
   EMPTY_STEP4_CHECKLIST,
+  EMPTY_STEP1_CHECKLIST,
+  loadStep1FormFromStep,
+  isStep1ReadyForNext,
+  getStep1ComplianceIssues,
+  type Step1ChecklistKey,
+  EMPTY_STEP2_CHECKLIST,
+  EMPTY_STEP2_COMMITTEE_ORDER,
+  EMPTY_STEP2_MEDIAN_PRICE,
+  loadStep2FormFromStep,
+  mergeStep2FormFromProject,
+  buildProjectStep2Fields,
+  getStep2ComplianceIssues,
+  isStep2ReadyForNext,
+  resolveProjectMedianPrice,
+  isStep2MedianApprovalBeforeAppointment,
+  STEP2_MEDIAN_APPROVAL_BEFORE_APPOINTMENT_MSG,
+  type Step2ChecklistKey,
+  type Step2CommitteeOrder,
+  type Step2MedianPrice,
+  EMPTY_STEP2_COMMITTEES,
+  loadStep2CommitteesFromDb,
+  buildStep2CommitteeRows,
+  STEP2_COMMITTEE_DB_TYPES,
+  STEP2_COMMITTEE_INSERT_PROFILES,
+  isStep2CommitteeTypeCheckError,
+  type Step2CommitteeListKey,
+  type Step2CommitteeAppointmentMode,
+  type Step2CommitteesState,
+  buildStep2ComplianceLog,
+  logStep2ComplianceWarnings,
+  type Step2ComplianceLog,
   isStep4AppealBlocking,
   isStep4ReadyForNext,
   getStep4ComplianceIssues,
@@ -54,7 +85,7 @@ import {
   type Step4Checklist,
   type Step4ChecklistKey,
 } from "@/lib/step-form";
-import { STEP4_DOC } from "@/lib/step-doc-types";
+import { STEP2_DOC, STEP4_DOC } from "@/lib/step-doc-types";
 import {
   getStep3HearingTier,
   shouldShowStep3HearingForm,
@@ -107,6 +138,11 @@ type Project = {
   appeal_status?: string | null;
   appeal_report_letter_no?: string | null;
   appeal_consideration_status?: string | null;
+  committee_appointment_order_no?: string | null;
+  committee_appointment_order_date?: string | null;
+  committee_appointment_mode?: string | null;
+  approved_median_price?: number | null;
+  median_price_approval_date?: string | null;
 };
 
 type Step = {
@@ -119,6 +155,8 @@ type Step = {
   note: string | null;
   responsible_officer_name?: string | null;
   step_notes?: string | null;
+  step1_checklist?: unknown;
+  step2_checklist?: unknown;
   completed_by: string | null;
 };
 
@@ -131,8 +169,7 @@ type Doc = {
   file_size: number | null;
 };
 
-// NOTE: committees.committee_type has DB CHECK constraint; use a canonical value.
-const STEP2_COMMITTEE_TYPE = "tor";
+// ประเภทคณะกรรมการขั้นตอนที่ 2 — ดู STEP2_COMMITTEE_DB_TYPES ใน step-form.ts
 
 function ProjectDetailPage() {
   const { projectId } = Route.useParams();
@@ -149,17 +186,20 @@ function ProjectDetailPage() {
   // ขั้นตอนที่ 1
   const [egpCode, setEgpCode] = useState("");
   const [step1Budget, setStep1Budget] = useState("");
-  const [estimatedPrice, setEstimatedPrice] = useState("");
   const [step1Method, setStep1Method] = useState("e_bidding");
+  const [step1Checklist, setStep1Checklist] = useState({ ...EMPTY_STEP1_CHECKLIST });
   // ขั้นตอนที่ 2
-  const [step2Checklist, setStep2Checklist] = useState({
-    draft_order_done: false,
-    director_signed_order: false,
-    committee_ack_no_conflict: false,
-    median_price_report_done: false,
-    director_signed_median_price: false,
+  const [step2Checklist, setStep2Checklist] = useState({ ...EMPTY_STEP2_CHECKLIST });
+  const [step2CommitteeOrder, setStep2CommitteeOrder] = useState<Step2CommitteeOrder>({
+    ...EMPTY_STEP2_COMMITTEE_ORDER,
   });
-  const [committeeMembers, setCommitteeMembers] = useState<string[]>(["", "", ""]);
+  const [step2MedianPrice, setStep2MedianPrice] = useState<Step2MedianPrice>({
+    ...EMPTY_STEP2_MEDIAN_PRICE,
+  });
+  const [step2Committees, setStep2Committees] = useState<Step2CommitteesState>({
+    ...EMPTY_STEP2_COMMITTEES,
+  });
+  const [step2ComplianceLog, setStep2ComplianceLog] = useState<Step2ComplianceLog>({});
   // ขั้นตอนที่ 3
   const [step3Checklist, setStep3Checklist] = useState({
     committee_tor_bid_docs_done: false,
@@ -186,7 +226,7 @@ function ProjectDetailPage() {
         supabase.from("projects").select("*").eq("id", projectId).single(),
         supabase.from("procurement_steps").select("*").eq("project_id", projectId).order("step_number"),
         supabase.from("documents").select("*").eq("project_id", projectId),
-        supabase.from("committees").select("*").eq("project_id", projectId).eq("committee_type", STEP2_COMMITTEE_TYPE).order("created_at"),
+        supabase.from("committees").select("*").eq("project_id", projectId).in("committee_type", [...STEP2_COMMITTEE_DB_TYPES]).order("created_at"),
       ]);
       return {
         project: p as Project | null,
@@ -233,30 +273,39 @@ function ProjectDetailPage() {
     if (current.step_number === 1) {
       setEgpCode(project.project_code ?? "");
       setStep1Budget(formatBudgetInput(String(project.budget ?? 0)));
-      setEstimatedPrice(
-        project.estimated_price != null
-          ? formatBudgetInput(String(project.estimated_price))
-          : "",
-      );
       const m = project.method ?? "e_bidding";
       setStep1Method(m === "e_market" ? "selection" : m);
       const draft1 = loadStepDraftFields(current);
+      const step1Form = loadStep1FormFromStep(current as { note: string | null; step1_checklist?: unknown });
+      setStep1Checklist(step1Form.checklist ?? { ...EMPTY_STEP1_CHECKLIST });
       setNote(draft1.userNote);
       setDueDate(draft1.dueDate);
       return;
     }
     if (current.step_number === 2) {
-      const { userNote, form } = parseStepNote(current.note);
-      const draft2 = loadStepDraftFields({ ...current, note: userNote });
-      setStep2Checklist({
-        draft_order_done: !!form.checklist?.draft_order_done,
-        director_signed_order: !!form.checklist?.director_signed_order,
-        committee_ack_no_conflict: !!form.checklist?.committee_ack_no_conflict,
-        median_price_report_done: !!form.checklist?.median_price_report_done,
-        director_signed_median_price: !!form.checklist?.director_signed_median_price,
+      const { userNote } = parseStepNote(current.note);
+      const step2Form = mergeStep2FormFromProject(
+        loadStep2FormFromStep(current as Step),
+        project,
+      );
+      setStep2Checklist(step2Form.checklist ?? { ...EMPTY_STEP2_CHECKLIST });
+      setStep2CommitteeOrder({
+        ...EMPTY_STEP2_COMMITTEE_ORDER,
+        ...step2Form.committeeOrder,
       });
-      const names = committees.map((cm: any) => cm.member_name).filter(Boolean);
-      setCommitteeMembers(names.length >= 3 ? names : [...names, ...Array(Math.max(0, 3 - names.length)).fill("")]);
+      setStep2MedianPrice({
+        ...EMPTY_STEP2_MEDIAN_PRICE,
+        ...step2Form.medianPrice,
+      });
+      setStep2Committees(
+        loadStep2CommitteesFromDb(
+          committees,
+          project.committee_appointment_mode,
+          step2Form.committees,
+        ),
+      );
+      setStep2ComplianceLog(step2Form.complianceLog ?? {});
+      const draft2 = loadStepDraftFields({ ...current, note: userNote });
       setNote(draft2.userNote);
       setDueDate("");
       return;
@@ -342,16 +391,16 @@ function ProjectDetailPage() {
     ]);
   };
 
-  const setStep2Check = (
-    key:
-      | "draft_order_done"
-      | "director_signed_order"
-      | "committee_ack_no_conflict"
-      | "median_price_report_done"
-      | "director_signed_median_price",
-    checked: boolean,
-  ) => {
+  const setStep2Check = (key: Step2ChecklistKey, checked: boolean) => {
     setStep2Checklist((prev) => ({ ...prev, [key]: checked }));
+  };
+
+  const patchStep2CommitteeOrder = (patch: Partial<Step2CommitteeOrder>) => {
+    setStep2CommitteeOrder((prev) => ({ ...prev, ...patch }));
+  };
+
+  const patchStep2MedianPrice = (patch: Partial<Step2MedianPrice>) => {
+    setStep2MedianPrice((prev) => ({ ...prev, ...patch }));
   };
 
   const setStep3Check = (
@@ -376,22 +425,68 @@ function ProjectDetailPage() {
     setStep4Checklist((prev) => ({ ...prev, [key]: checked }));
   };
 
-  const addCommitteeMember = () => setCommitteeMembers((prev) => [...prev, ""]);
-  const changeCommitteeMember = (index: number, value: string) =>
-    setCommitteeMembers((prev) => prev.map((v, i) => (i === index ? value : v)));
-  const removeCommitteeMember = (index: number) =>
-    setCommitteeMembers((prev) => (prev.length <= 3 ? prev : prev.filter((_, i) => i !== index)));
+  const setStep1Check = (key: Step1ChecklistKey, checked: boolean) => {
+    setStep1Checklist((prev) => ({ ...prev, [key]: checked }));
+  };
+
+  const setStep2CommitteeMode = (mode: Step2CommitteeAppointmentMode) => {
+    setStep2Committees((prev) => ({ ...prev, appointment_mode: mode }));
+  };
+
+  const changeCommitteeMember = (
+    listKey: Step2CommitteeListKey,
+    index: number,
+    value: string,
+  ) => {
+    setStep2Committees((prev) => ({
+      ...prev,
+      [listKey]: prev[listKey].map((v, i) => (i === index ? value : v)),
+    }));
+  };
+
+  const addCommitteeMember = (listKey: Step2CommitteeListKey) => {
+    setStep2Committees((prev) => ({
+      ...prev,
+      [listKey]: [...prev[listKey], ""],
+    }));
+  };
+
+  const removeCommitteeMember = (listKey: Step2CommitteeListKey, index: number) => {
+    setStep2Committees((prev) =>
+      prev[listKey].length <= 3
+        ? prev
+        : { ...prev, [listKey]: prev[listKey].filter((_, i) => i !== index) },
+    );
+  };
 
   /** บันทึกร่างขั้นตอน — ชื่อเจ้าหน้าที่เป็นข้อความใน responsible_officer_name (ไม่ใส่ใน note) */
   const patchStepDraft = async (
     stepId: string,
     fields: ReturnType<typeof buildStepDraftFields>,
-    extra?: { note?: string | null },
+    extra?: { note?: string | null; step1_checklist?: Record<string, boolean> | null; step2_checklist?: Record<string, boolean> | null },
   ) => {
     const payload: Record<string, unknown> = { ...fields };
     if (extra?.note !== undefined) payload.note = extra.note;
+    if (extra?.step1_checklist !== undefined) payload.step1_checklist = extra.step1_checklist;
+    if (extra?.step2_checklist !== undefined) payload.step2_checklist = extra.step2_checklist;
 
     const { error } = await supabase.from("procurement_steps").update(payload).eq("id", stepId);
+    if (
+      error &&
+      error.message.includes("step2_checklist") &&
+      extra?.step2_checklist !== undefined
+    ) {
+      const { step2_checklist: _omit, ...rest } = payload;
+      return supabase.from("procurement_steps").update(rest).eq("id", stepId);
+    }
+    if (
+      error &&
+      error.message.includes("step1_checklist") &&
+      extra?.step1_checklist !== undefined
+    ) {
+      const { step1_checklist: _omit, ...rest } = payload;
+      return supabase.from("procurement_steps").update(rest).eq("id", stepId);
+    }
     if (
       error &&
       (error.message.includes("responsible_officer_name") ||
@@ -422,7 +517,7 @@ function ProjectDetailPage() {
 
     if (current.step_number === 1) {
       const budgetVal = parseBudgetInput(step1Budget);
-      const estVal = estimatedPrice ? parseBudgetInput(estimatedPrice) : null;
+      const formNote = serializeStepNote(note, { checklist: step1Checklist });
       const { error: pe } = await supabase
         .from("projects")
         .update({
@@ -435,76 +530,122 @@ function ProjectDetailPage() {
         setError(pe.message);
         return;
       }
-      if (estVal != null) {
-        const { error: pe2 } = await supabase
-          .from("projects")
-          .update({ estimated_price: estVal })
-          .eq("id", project.id);
-        if (pe2 && !pe2.message.includes("estimated_price")) {
-          setError(pe2.message);
-          return;
-        }
-      }
       const { error: se } = await patchStepDraft(
         current.id,
         buildStepDraftFields(effectiveResponsibleName, note, dueDate),
+        { note: formNote || null, step1_checklist: step1Checklist },
       );
       if (se?.error) {
         setError(se.error.message);
         return;
       }
+      toast.success("บันทึกร่างขั้นตอนที่ 1 เรียบร้อย");
       await propagateResponsibleToStep1(effectiveResponsibleName);
       await invalidateAll();
       return;
     }
 
     if (current.step_number === 2) {
-      const formNote = serializeStepNote("", {
+      if (
+        isStep2MedianApprovalBeforeAppointment(
+          step2MedianPrice.median_price_approval_date ?? "",
+          step2CommitteeOrder.appointment_order_date ?? "",
+        )
+      ) {
+        toast.error(STEP2_MEDIAN_APPROVAL_BEFORE_APPOINTMENT_MSG);
+        setError(STEP2_MEDIAN_APPROVAL_BEFORE_APPOINTMENT_MSG);
+        return;
+      }
+      const complianceLog = buildStep2ComplianceLog(
+        step2CommitteeOrder,
+        step2MedianPrice,
+        step2ComplianceLog,
+      );
+      const formNote = serializeStepNote(note, {
         checklist: step2Checklist,
+        committeeOrder: step2CommitteeOrder,
+        medianPrice: step2MedianPrice,
+        committees: step2Committees,
+        complianceLog,
       });
       const { error: e } = await patchStepDraft(
         current.id,
         buildStepDraftFields(effectiveResponsibleName, note, ""),
-        { note: formNote || null },
+        { note: formNote || null, step2_checklist: step2Checklist },
       );
       if (e?.error) {
         setError(e.error.message);
         return;
       }
 
+      const { error: projErr } = await supabase
+        .from("projects")
+        .update(buildProjectStep2Fields(step2CommitteeOrder, step2MedianPrice, step2Committees))
+        .eq("id", project.id);
+      if (projErr) {
+        console.warn("[Step2] project fields sync failed", projErr);
+      }
+
       // IMPORTANT: Step2 checklist must persist even if committees table permissions are missing.
       // Therefore, committee sync is best-effort and should not block draft save.
-      const cleanedMembers = committeeMembers.map((n) => n.trim()).filter(Boolean);
+      let committeeSyncOk = true;
       try {
         const { error: delErr } = await supabase
           .from("committees")
           .delete()
           .eq("project_id", project.id)
-          .eq("committee_type", STEP2_COMMITTEE_TYPE);
+          .in("committee_type", [...STEP2_COMMITTEE_DB_TYPES]);
         if (delErr) {
           console.error("[Step2] committees delete failed", delErr);
+          committeeSyncOk = false;
           toast.error(`บันทึกรายชื่อคณะกรรมการไม่สำเร็จ: ${delErr.message}`);
-        } else if (cleanedMembers.length > 0) {
-          const rows = cleanedMembers.map((member, idx) => ({
-            organization_id: project.organization_id,
-            project_id: project.id,
-            committee_type: STEP2_COMMITTEE_TYPE,
-            member_name: member,
-            position: idx === 0 ? "ประธานกรรมการ" : "กรรมการ",
-            appointment_date: null,
-          }));
-          const { error: insErr } = await supabase.from("committees").insert(rows);
-          if (insErr) {
-            console.error("[Step2] committees insert failed", insErr);
-            toast.error(`บันทึกรายชื่อคณะกรรมการไม่สำเร็จ: ${insErr.message}`);
+        } else {
+          const candidateRows = buildStep2CommitteeRows(project, step2Committees);
+          if (candidateRows.length > 0) {
+            let inserted = false;
+            let lastInsertError: string | null = null;
+
+            for (const profile of STEP2_COMMITTEE_INSERT_PROFILES) {
+              const rows = buildStep2CommitteeRows(project, step2Committees, profile);
+              const { error: insErr } = await supabase.from("committees").insert(rows);
+              if (!insErr) {
+                inserted = true;
+                break;
+              }
+              lastInsertError = insErr.message;
+              if (!isStep2CommitteeTypeCheckError(insErr.message)) {
+                break;
+              }
+            }
+
+            if (!inserted) {
+              committeeSyncOk = false;
+              console.error("[Step2] committees insert failed", lastInsertError);
+              toast.error(
+                `บันทึกรายชื่อคณะกรรมการไม่สำเร็จ: ${lastInsertError ?? "unknown error"}`,
+              );
+            }
           }
         }
       } catch (committeeErr: any) {
+        committeeSyncOk = false;
         console.error("[Step2] committees sync exception", committeeErr);
         toast.error(`บันทึกรายชื่อคณะกรรมการไม่สำเร็จ: ${committeeErr?.message ?? "unknown error"}`);
       }
 
-      toast.success("บันทึกร่างขั้นตอนที่ 2 เรียบร้อย");
+      setStep2ComplianceLog(complianceLog);
+      logStep2ComplianceWarnings(project.id, complianceLog, {
+        appointmentDate: step2CommitteeOrder.appointment_order_date ?? "",
+        medianApprovalDate: step2MedianPrice.median_price_approval_date ?? "",
+      });
+
+      if (committeeSyncOk) {
+        toast.success("บันทึกร่างขั้นตอนที่ 2 เรียบร้อย");
+      } else {
+        toast.warning(
+          "บันทึกข้อมูลหลักขั้นตอนที่ 2 แล้ว แต่รายชื่อคณะกรรมการลงตาราง committees ไม่สำเร็จ — รัน migration 20260607080000 ใน Supabase SQL Editor",
+        );
+      }
       await propagateResponsibleToStep1(effectiveResponsibleName);
       await invalidateAll();
       return;
@@ -632,6 +773,39 @@ function ProjectDetailPage() {
           setError(pubErr);
           return;
         }
+      }
+    }
+    if (current.step_number === 2) {
+      const hasAppointmentDoc = docs
+        .filter((d) => d.step_number === 2)
+        .some((d) => d.document_type === STEP2_DOC.APPOINTMENT_ORDER);
+      const hasBg06Doc = docs
+        .filter((d) => d.step_number === 2)
+        .some((d) => d.document_type === STEP2_DOC.MEDIAN_PRICE_BG06);
+      const complianceIssues = getStep2ComplianceIssues(step2Checklist, {
+        committees: step2Committees,
+        committeeOrder: step2CommitteeOrder,
+        medianPrice: step2MedianPrice,
+        responsibleName: effectiveResponsibleName,
+        hasAppointmentOrderDoc: hasAppointmentDoc,
+        hasBg06Doc,
+      });
+      if (complianceIssues.length > 0) {
+        toast.error(complianceIssues[0].message);
+        setError(complianceIssues[0].message);
+        return;
+      }
+    }
+    if (current.step_number === 1) {
+      const complianceIssues = getStep1ComplianceIssues(step1Checklist, {
+        egpCode,
+        budget: step1Budget,
+        responsibleName: effectiveResponsibleName,
+      });
+      if (complianceIssues.length > 0) {
+        toast.error(complianceIssues[0].message);
+        setError(complianceIssues[0].message);
+        return;
       }
     }
     if (current.step_number === 4) {
@@ -764,9 +938,12 @@ function ProjectDetailPage() {
               )}
               <div className="flex flex-wrap gap-4 mt-4 text-sm">
                 <Info label="งบประมาณ" value={`฿ ${formatBaht(Number(project.budget))}`} />
-                {project.estimated_price != null && Number(project.estimated_price) > 0 && (
-                  <Info label="ราคากลาง" value={`฿ ${formatBaht(Number(project.estimated_price))}`} />
-                )}
+                {(() => {
+                  const median = resolveProjectMedianPrice(project);
+                  return median != null && median > 0 ? (
+                    <Info label="ราคากลาง" value={`฿ ${formatBaht(median)}`} />
+                  ) : null;
+                })()}
                 <Info label="วิธีจัดซื้อ" value={METHOD_LABEL[project.method] ?? project.method} />
                 <Info label="ปีงบประมาณ" value={String(project.fiscal_year)} />
                 {project.district_office && <Info label="สพข./เขต" value={project.district_office} />}
@@ -911,12 +1088,12 @@ function ProjectDetailPage() {
                   </div>
                   {current.step_number === 1 && (
                     <Step1DetailForm
+                      checklist={step1Checklist}
+                      onChecklistChange={setStep1Check}
                       egpCode={egpCode}
                       onEgpCodeChange={setEgpCode}
                       budget={step1Budget}
                       onBudgetChange={setStep1Budget}
-                      estimatedPrice={estimatedPrice}
-                      onEstimatedPriceChange={setEstimatedPrice}
                       method={step1Method}
                       onMethodChange={setStep1Method}
                       responsibleName={responsibleName}
@@ -927,13 +1104,26 @@ function ProjectDetailPage() {
                     <Step2DetailForm
                       checklist={step2Checklist}
                       onChecklistChange={setStep2Check}
-                      committeeMembers={committeeMembers}
+                      committees={step2Committees}
+                      onCommitteeModeChange={setStep2CommitteeMode}
                       onCommitteeChange={changeCommitteeMember}
                       onAddCommittee={addCommitteeMember}
                       onRemoveCommittee={removeCommitteeMember}
+                      committeeOrder={step2CommitteeOrder}
+                      onCommitteeOrderChange={patchStep2CommitteeOrder}
+                      medianPrice={step2MedianPrice}
+                      onMedianPriceChange={patchStep2MedianPrice}
+                      step1Budget={calcBudget}
                       responsibleName={responsibleName}
                       onResponsibleNameChange={setResponsibleName}
                       step1ResponsibleDefault={step1ResponsibleDefault}
+                      docBinder={{
+                        project,
+                        stepNumber: 2,
+                        docs: docsForStep,
+                        onDocsChange: invalidateAll,
+                      }}
+                      complianceLog={step2ComplianceLog}
                     />
                   )}
                   {current.step_number === 3 && showStep3HearingForm && (
@@ -1060,9 +1250,51 @@ function ProjectDetailPage() {
                 const total = requiredDocs.length;
                 const allUploaded = total === 0 || completedCount >= total;
                 const isCompleted = current.status === "completed";
+                const step2HasAppointmentDoc =
+                  current.step_number === 2 &&
+                  docsForStep.some((d) => d.document_type === STEP2_DOC.APPOINTMENT_ORDER);
+                const step2HasBg06Doc =
+                  current.step_number === 2 &&
+                  docsForStep.some((d) => d.document_type === STEP2_DOC.MEDIAN_PRICE_BG06);
+                const step2ComplianceIssues =
+                  current.step_number === 2
+                    ? getStep2ComplianceIssues(step2Checklist, {
+                        committees: step2Committees,
+                        committeeOrder: step2CommitteeOrder,
+                        medianPrice: step2MedianPrice,
+                        responsibleName: effectiveResponsibleName,
+                        hasAppointmentOrderDoc: step2HasAppointmentDoc,
+                        hasBg06Doc: step2HasBg06Doc,
+                      })
+                    : [];
+                const step2Ready =
+                  current.step_number !== 2 ||
+                  isStep2ReadyForNext(step2Checklist, {
+                    committees: step2Committees,
+                    committeeOrder: step2CommitteeOrder,
+                    medianPrice: step2MedianPrice,
+                    responsibleName: effectiveResponsibleName,
+                    hasAppointmentOrderDoc: step2HasAppointmentDoc,
+                    hasBg06Doc: step2HasBg06Doc,
+                  });
                 const step4HasEvalDoc =
                   current.step_number === 4 &&
                   docsForStep.some((d) => d.document_type === STEP4_DOC.EVALUATION_REPORT);
+                const step1ComplianceIssues =
+                  current.step_number === 1
+                    ? getStep1ComplianceIssues(step1Checklist, {
+                        egpCode,
+                        budget: step1Budget,
+                        responsibleName: effectiveResponsibleName,
+                      })
+                    : [];
+                const step1Ready =
+                  current.step_number !== 1 ||
+                  isStep1ReadyForNext(step1Checklist, {
+                    egpCode,
+                    budget: step1Budget,
+                    responsibleName: effectiveResponsibleName,
+                  });
                 const step4ComplianceIssues =
                   current.step_number === 4
                     ? getStep4ComplianceIssues(step4Checklist, step4BidResult, {
@@ -1084,7 +1316,13 @@ function ProjectDetailPage() {
                   current.step_number === 4 && isStep4AppealBlocking(step4BidResult);
                 const disabled =
                   isCompleted ||
-                  (current.step_number === 4 ? !step4Ready : !allUploaded);
+                  (current.step_number === 1
+                    ? !step1Ready
+                    : current.step_number === 2
+                      ? !step2Ready
+                      : current.step_number === 4
+                        ? !step4Ready
+                        : !allUploaded);
                 const showCompleteBtn =
                   isCompleted ||
                   current.step_number !== 3 ||
@@ -1144,6 +1382,38 @@ function ProjectDetailPage() {
                         ⚠️ แจ้งเตือน: โครงการนี้ติดสถานะอุทธรณ์ ไม่สามารถไปขั้นตอนทำสัญญาได้
                       </p>
                     )}
+                    {current.step_number === 2 && !isCompleted && !step2Ready && step2ComplianceIssues.length > 0 && (
+                      <div className="text-sm text-muted-foreground mt-3 space-y-1 rounded-md border border-dashed border-border bg-muted/30 p-3">
+                        <p className="font-medium text-foreground flex items-center gap-1.5">
+                          <AlertTriangle className="h-4 w-4 text-warning shrink-0" />
+                          กรุณาดำเนินการให้ครบก่อนไปขั้นถัดไป:
+                        </p>
+                        <ul className="list-disc list-inside space-y-0.5 text-xs">
+                          {step2ComplianceIssues.slice(0, 4).map((issue) => (
+                            <li key={issue.id}>{issue.message}</li>
+                          ))}
+                          {step2ComplianceIssues.length > 4 && (
+                            <li>และอีก {step2ComplianceIssues.length - 4} รายการ...</li>
+                          )}
+                        </ul>
+                      </div>
+                    )}
+                    {current.step_number === 1 && !isCompleted && !step1Ready && step1ComplianceIssues.length > 0 && (
+                      <div className="text-sm text-muted-foreground mt-3 space-y-1 rounded-md border border-dashed border-border bg-muted/30 p-3">
+                        <p className="font-medium text-foreground flex items-center gap-1.5">
+                          <AlertTriangle className="h-4 w-4 text-warning shrink-0" />
+                          กรุณาดำเนินการให้ครบก่อนไปขั้นถัดไป:
+                        </p>
+                        <ul className="list-disc list-inside space-y-0.5 text-xs">
+                          {step1ComplianceIssues.slice(0, 4).map((issue) => (
+                            <li key={issue.id}>{issue.message}</li>
+                          ))}
+                          {step1ComplianceIssues.length > 4 && (
+                            <li>และอีก {step1ComplianceIssues.length - 4} รายการ...</li>
+                          )}
+                        </ul>
+                      </div>
+                    )}
                     {current.step_number === 4 && !isCompleted && !step4Ready && step4ComplianceIssues.length > 0 && (
                       <div className="text-sm text-muted-foreground mt-3 space-y-1 rounded-md border border-dashed border-border bg-muted/30 p-3">
                         <p className="font-medium text-foreground flex items-center gap-1.5">
@@ -1160,7 +1430,11 @@ function ProjectDetailPage() {
                         </ul>
                       </div>
                     )}
-                    {current.step_number !== 4 && !allUploaded && !isCompleted && (
+                    {current.step_number !== 4 &&
+                      current.step_number !== 1 &&
+                      current.step_number !== 2 &&
+                      !allUploaded &&
+                      !isCompleted && (
                       <p className="text-sm text-warning mt-3 flex items-center gap-1.5">
                         <AlertTriangle className="h-4 w-4" />
                         กรุณาอัปโหลดเอกสารบังคับให้ครบ {completedCount}/{total} รายการก่อนดำเนินการต่อ

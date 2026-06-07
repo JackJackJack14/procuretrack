@@ -25,6 +25,18 @@ function LoginPage() {
       setError("อีเมลหรือรหัสผ่านไม่ถูกต้อง");
       return;
     }
+    const { data: auth } = await supabase.auth.getUser();
+    if (auth.user) {
+      const { data: prof } = await supabase
+        .from("profiles")
+        .select("organization_id")
+        .eq("id", auth.user.id)
+        .maybeSingle();
+      if (!prof?.organization_id) {
+        navigate({ to: "/onboarding" });
+        return;
+      }
+    }
     navigate({ to: "/dashboard" });
   };
 
