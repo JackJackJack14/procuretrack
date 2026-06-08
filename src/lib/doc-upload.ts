@@ -1,5 +1,6 @@
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import { validateDocFile } from "@/lib/doc-file-types";
 import { checkStorageQuota, decrementStorageUsage, incrementStorageUsage } from "@/lib/storage";
 
 export type ProjectDocRef = {
@@ -22,6 +23,12 @@ export async function uploadStepDocument(
   documentType: string,
   file: File,
 ): Promise<boolean> {
+  const typeCheck = validateDocFile(file, documentType);
+  if (!typeCheck.ok) {
+    toast.error(typeCheck.message);
+    return false;
+  }
+
   if (file.size > 50 * 1024 * 1024) {
     toast.error("ขนาดไฟล์เกิน 50MB");
     return false;

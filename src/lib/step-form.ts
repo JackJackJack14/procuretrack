@@ -1,4 +1,5 @@
 /** ตัวเลือกวิธีจัดซื้อในฟอร์มขั้นตอนที่ 1 (3 วิธีหลัก) */
+import { buildEffectiveChecklist, computeAutoChecklistState } from "@/lib/smart-checklist";
 import {
   countWorkdaysAfterStartISO,
   countWorkdaysBetweenISO,
@@ -108,7 +109,7 @@ export const EMPTY_STEP2_MEDIAN_PRICE: Required<
 
 /** ประเภทคณะกรรมการใน DB — ขั้นตอนที่ 2 (ตรง check constraint บน Supabase) */
 export const STEP2_COMMITTEE_TYPE = {
-  /** โหมดชุดเดียว — บันทึกเป็น tor (คณะเดียวทำ TOR + ราคากlาง) */
+  /** โหมดชุดเดียว — บันทึกเป็น tor (คณะเดียวทำ TOR + ราคากลาง) */
   COMBINED: "tor",
   TOR: "tor",
   MEDIAN: "price_median",
@@ -169,6 +170,16 @@ export const EMPTY_STEP2_COMMITTEES: Step2CommitteesState = {
   median_price_members: ["", "", ""],
 };
 
+/** โปรไฟล์ insert — โหมดแยกชุดห้าม fallback บันทึกราคากลางเป็น tor */
+export function getStep2CommitteeInsertProfiles(
+  mode: Step2CommitteeAppointmentMode,
+): Step2CommitteeInsertProfile[] {
+  if (mode === "separate") {
+    return STEP2_COMMITTEE_INSERT_PROFILES.filter((p) => p.median !== p.tor);
+  }
+  return STEP2_COMMITTEE_INSERT_PROFILES;
+}
+
 function padCommitteeMemberList(names: string[]): string[] {
   const trimmed = names.map((n) => n.trim()).filter(Boolean);
   if (trimmed.length === 0) return ["", "", ""];
@@ -177,53 +188,95 @@ function padCommitteeMemberList(names: string[]): string[] {
     : [...trimmed, ...Array(Math.max(0, 3 - trimmed.length)).fill("")];
 }
 
+export type Step2CommitteeDbRow = {
+  committee_type: string;
+  member_name: string;
+  position?: string;
+};
+
+function resolveStep2CommitteeAppointmentMode(
+  savedMode: Step2CommitteeAppointmentMode | string | null | undefined,
+  noteBackup: Partial<Step2CommitteesState> | null | undefined,
+  rows: Step2CommitteeDbRow[],
+): Step2CommitteeAppointmentMode {
+  if (savedMode === "separate" || savedMode === "combined") return savedMode;
+  if (
+    noteBackup?.appointment_mode === "separate" ||
+    noteBackup?.appointment_mode === "combined"
+  ) {
+    return noteBackup.appointment_mode;
+  }
+
+  const torRows = rows.filter((r) => r.committee_type === STEP2_COMMITTEE_TYPE.TOR);
+  const medianRows = rows.filter((r) => isStep2MedianCommitteeType(r.committee_type));
+  const combinedRows = rows.filter((r) => r.committee_type === STEP2_COMMITTEE_LEGACY_COMBINED);
+  const medianMislabeled = torRows.filter((r) => (r.position ?? "").includes("ราคากลาง"));
+  const torClean = torRows.filter((r) => !(r.position ?? "").includes("ราคากลาง"));
+
+  if (torClean.length > 0 && (medianRows.length > 0 || medianMislabeled.length > 0)) {
+    return "separate";
+  }
+  if (combinedRows.length > 0) return "combined";
+  if (torRows.length > 0 && medianRows.length === 0) return "combined";
+  return "combined";
+}
+
 /** โหลดรายชื่อคณะกรรมการจากตาราง committees + โหมดที่บันทึกไว้ */
 export function loadStep2CommitteesFromDb(
-  rows: Array<{ committee_type: string; member_name: string }>,
+  rows: Step2CommitteeDbRow[],
   savedMode?: Step2CommitteeAppointmentMode | string | null,
   noteBackup?: Partial<Step2CommitteesState> | null,
 ): Step2CommitteesState {
   const combined = rows
     .filter((r) => r.committee_type === STEP2_COMMITTEE_LEGACY_COMBINED)
     .map((r) => r.member_name);
-  const tor = rows
-    .filter((r) => r.committee_type === STEP2_COMMITTEE_TYPE.TOR)
+
+  const torRows = rows.filter((r) => r.committee_type === STEP2_COMMITTEE_TYPE.TOR);
+  const torClean = torRows
+    .filter((r) => !(r.position ?? "").includes("ราคากลาง"))
     .map((r) => r.member_name);
-  const median = rows
+  const medianFromType = rows
     .filter((r) => isStep2MedianCommitteeType(r.committee_type))
     .map((r) => r.member_name);
+  const medianFromMislabeled = torRows
+    .filter((r) => (r.position ?? "").includes("ราคากลาง"))
+    .map((r) => r.member_name);
 
-  const modeFromProject =
-    savedMode === "separate" || savedMode === "combined" ? savedMode : null;
-  const modeFromNote =
-    noteBackup?.appointment_mode === "separate" || noteBackup?.appointment_mode === "combined"
-      ? noteBackup.appointment_mode
-      : null;
-
-  let appointment_mode: Step2CommitteeAppointmentMode =
-    modeFromProject ?? modeFromNote ?? "combined";
-
-  if (!modeFromProject && !modeFromNote) {
-    if (tor.length > 0 && median.length > 0) appointment_mode = "separate";
-    else if (combined.length > 0) appointment_mode = "combined";
-    else if (tor.length > 0 && median.length === 0) appointment_mode = "combined";
-  }
+  const appointment_mode = resolveStep2CommitteeAppointmentMode(
+    savedMode,
+    noteBackup,
+    rows,
+  );
 
   if (appointment_mode === "separate") {
+    const dbTor = torClean.length > 0 ? torClean : [];
+    const dbMedian =
+      medianFromType.length > 0
+        ? medianFromType
+        : medianFromMislabeled.length > 0
+          ? medianFromMislabeled
+          : [];
+
     return {
       appointment_mode: "separate",
       combined_members: padCommitteeMemberList(noteBackup?.combined_members ?? []),
       tor_members: padCommitteeMemberList(
-        tor.length > 0 ? tor : (noteBackup?.tor_members ?? []),
+        dbTor.length > 0 ? dbTor : (noteBackup?.tor_members ?? []),
       ),
       median_price_members: padCommitteeMemberList(
-        median.length > 0 ? median : (noteBackup?.median_price_members ?? []),
+        dbMedian.length > 0 ? dbMedian : (noteBackup?.median_price_members ?? []),
       ),
     };
   }
 
+  const torAllNames = torRows.map((r) => r.member_name);
   const combinedSource =
-    combined.length > 0 ? combined : tor.length > 0 ? tor : (noteBackup?.combined_members ?? []);
+    combined.length > 0
+      ? combined
+      : torAllNames.length > 0
+        ? torAllNames
+        : (noteBackup?.combined_members ?? []);
+
   return {
     appointment_mode: "combined",
     combined_members: padCommitteeMemberList(combinedSource),
@@ -268,8 +321,8 @@ export function buildStep2CommitteeRows(
           member_name,
           position: isMedianTorFallback
             ? idx === 0
-              ? "ประธานกรรมการ (ราคากlาง)"
-              : "กรรมการ (ราคากlาง)"
+              ? "ประธานกรรมการ (ราคากลาง)"
+              : "กรรมการ (ราคากลาง)"
             : idx === 0
               ? "ประธานกรรมการ"
               : "กรรมการ",
@@ -332,13 +385,13 @@ export const STEP3_CHECKLIST_ITEMS: Array<{
   },
   {
     key: "median_price_step2_verified",
-    label: 'ตรวจสอบสถานะการอนุมัติ "ราคากlาง" จากขั้นตอนที่ 2',
-    hint: "ยืนยันว่าราคากlางได้รับอนุมัติเรียบร้อยแล้วและตัวเลขตรงกันก่อนนำไปบันทึกลงในระบบ e-GP",
+    label: 'ตรวจสอบสถานะการอนุมัติ "ราคากลาง" จากขั้นตอนที่ 2',
+    hint: "ยืนยันว่าราคากลางได้รับอนุมัติเรียบร้อยแล้วและตัวเลขตรงกันก่อนนำไปบันทึกลงในระบบ e-GP",
   },
   {
     key: "hearing_files_prepared",
     label: 'เตรียมไฟล์สำหรับ "เผยแพร่รับฟังคำวิจารณ์" ให้ครบ',
-    hint: "ไฟล์ร่างประกาศ + ร่างเอกสารประกวดราคา + ไฟล์ตารางราคากlาง บก.06",
+    hint: "ไฟล์ร่างประกาศ + ร่างเอกสารประกวดราคา + ไฟล์ตารางราคากลาง บก.06",
   },
   {
     key: "egp_published_for_comment",
@@ -452,7 +505,7 @@ export type Step4BidResult = {
 };
 
 export type Step2ComplianceLog = {
-  /** มีการแจ้งเตือนความเร็วในการอนุมัติราคากlาง (ไม่บล็อก — บันทึกเพื่อ audit) */
+  /** มีการแจ้งเตือนความเร็วในการอนุมัติราคากลาง (ไม่บล็อก — บันทึกเพื่อ audit) */
   fast_median_approval_warning?: boolean;
   fast_median_approval_warning_at?: string;
 };
@@ -768,9 +821,13 @@ export function countStep1ChecklistDone(checklist: Step1Checklist): number {
   return STEP1_CHECKLIST_ITEMS.filter((item) => checklist[item.key]).length;
 }
 
-/** ปลดล็อกช่องรหัส e-GP เมื่อติ๊กข้อ 2 และ 3 แล้ว */
-export function isStep1EgpCodeUnlocked(checklist: Step1Checklist): boolean {
-  return checklist.annual_plan_published && checklist.egp_plan_code_verified;
+/** ปลดล็อกช่องรหัส e-GP — Manual ข้อ 2 + Auto/Manual รหัส e-GP พร้อม */
+export function isStep1EgpCodeUnlocked(
+  checklist: Step1Checklist,
+  opts?: { egpCode?: string },
+): boolean {
+  const egpReady = !!opts?.egpCode?.trim() || checklist.egp_plan_code_verified;
+  return checklist.annual_plan_published && egpReady;
 }
 
 export type Step1ComplianceIssue = { id: string; message: string };
@@ -782,14 +839,25 @@ export function getStep1ComplianceIssues(
     budget: string;
     responsibleName: string;
   },
+  autoStates?: Record<string, boolean>,
 ): Step1ComplianceIssue[] {
   const issues: Step1ComplianceIssue[] = [];
+  const auto =
+    autoStates ??
+    computeAutoChecklistState({
+      stepNumber: 1,
+      egpCode: opts.egpCode,
+      budget: opts.budget,
+      responsibleName: opts.responsibleName,
+    });
+  const effective = buildEffectiveChecklist(1, checklist as Record<string, boolean>, auto);
 
   STEP1_CHECKLIST_ITEMS.forEach((item, index) => {
-    if (!checklist[item.key]) {
+    if (!effective[item.key]) {
+      const prefix = auto[item.key] !== undefined && !auto[item.key] ? "ระบบตรวจพบยังไม่ครบ" : "ยังไม่ได้ติ๊กยืนยัน";
       issues.push({
         id: `checklist-${item.key}`,
-        message: `ยังไม่ได้ติ๊กข้อที่ ${index + 1}: ${item.label}`,
+        message: `${prefix} ข้อที่ ${index + 1}: ${item.label}`,
       });
     }
   });
@@ -964,7 +1032,7 @@ export function isStep2MedianApprovalBeforeAppointment(
   return approval < appointment;
 }
 
-/** จำนวนวันทำการจากวันคำสั่งแต่งตั้งถึงวันอนุมัติราคากlาง (รวมทั้งสองวัน) */
+/** จำนวนวันทำการจากวันคำสั่งแต่งตั้งถึงวันอนุมัติราคากลาง (รวมทั้งสองวัน) */
 export function countStep2MedianProcessWorkdays(
   appointmentOrderISO: string,
   medianApprovalISO: string,
@@ -972,7 +1040,7 @@ export function countStep2MedianProcessWorkdays(
   return countWorkdaysBetweenISO(appointmentOrderISO.trim(), medianApprovalISO.trim());
 }
 
-/** ใช้เวลาจัดทำราคากlางเกินเกณฑ์ (Warning — ไม่บล็อก) */
+/** ใช้เวลาจัดทำราคากลางเกินเกณฑ์ (Warning — ไม่บล็อก) */
 export function isStep2MedianProcessSlow(
   appointmentOrderISO: string,
   medianApprovalISO: string,
@@ -994,14 +1062,27 @@ export function getStep2ComplianceIssues(
     hasAppointmentOrderDoc: boolean;
     hasBg06Doc: boolean;
   },
+  autoStates?: Record<string, boolean>,
 ): Step2ComplianceIssue[] {
   const issues: Step2ComplianceIssue[] = [];
+  const auto =
+    autoStates ??
+    computeAutoChecklistState({
+      stepNumber: 2,
+      committees: opts.committees,
+      committeeOrder: opts.committeeOrder,
+      medianPrice: opts.medianPrice,
+      hasAppointmentOrderDoc: opts.hasAppointmentOrderDoc,
+      hasBg06Doc: opts.hasBg06Doc,
+    });
+  const effective = buildEffectiveChecklist(2, checklist as Record<string, boolean>, auto);
 
   STEP2_CHECKLIST_ITEMS.forEach((item, index) => {
-    if (!checklist[item.key]) {
+    if (!effective[item.key]) {
+      const prefix = auto[item.key] !== undefined && !auto[item.key] ? "ระบบตรวจพบยังไม่ครบ" : "ยังไม่ได้ติ๊กยืนยัน";
       issues.push({
         id: `checklist-${item.key}`,
-        message: `ยังไม่ได้ติ๊กข้อที่ ${index + 1}: ${item.label}`,
+        message: `${prefix} ข้อที่ ${index + 1}: ${item.label}`,
       });
     }
   });
@@ -1226,14 +1307,24 @@ export function getStep4ComplianceIssues(
     bidSubmissionEndDate?: string;
     committeeReviewWorkdays?: number | null;
   },
+  autoStates?: Record<string, boolean>,
 ): Step4ComplianceIssue[] {
   const issues: Step4ComplianceIssue[] = [];
+  const auto =
+    autoStates ??
+    computeAutoChecklistState({
+      stepNumber: 4,
+      bidResult,
+      hasEvaluationReportDoc: opts.hasEvaluationReportDoc,
+    });
+  const effective = buildEffectiveChecklist(4, checklist as Record<string, boolean>, auto);
 
   STEP4_CHECKLIST_ITEMS.forEach((item, index) => {
-    if (!checklist[item.key]) {
+    if (!effective[item.key]) {
+      const prefix = auto[item.key] !== undefined && !auto[item.key] ? "ระบบตรวจพบยังไม่ครบ" : "ยังไม่ได้ติ๊กยืนยัน";
       issues.push({
         id: `checklist-${item.key}`,
-        message: `ยังไม่ได้ติ๊กข้อที่ ${index + 1}: ${item.label}`,
+        message: `${prefix} ข้อที่ ${index + 1}: ${item.label}`,
       });
     }
   });
@@ -1356,9 +1447,38 @@ export function isStep4ReadyForNext(
   return getStep4ComplianceIssues(checklist, bidResult, opts).length === 0;
 }
 
+function step2FormHasPersistedData(form: Step2FormData): boolean {
+  if (form.committeeOrder?.appointment_order_no?.trim()) return true;
+  if (form.committeeOrder?.appointment_order_date?.trim()) return true;
+  if (
+    form.medianPrice?.approved_median_price != null &&
+    Number.isFinite(form.medianPrice.approved_median_price) &&
+    form.medianPrice.approved_median_price > 0
+  ) {
+    return true;
+  }
+  if (form.medianPrice?.median_price_approval_date?.trim()) return true;
+  if (form.committees) {
+    const c = form.committees;
+    if (c.appointment_mode === "separate" || c.appointment_mode === "combined") return true;
+    const lists = [c.combined_members, c.tor_members, c.median_price_members];
+    if (lists.some((list) => list?.some((name) => name?.trim()))) return true;
+  }
+  if (form.complianceLog && Object.keys(form.complianceLog).length > 0) return true;
+  return false;
+}
+
 function formHasPersistedData(form: StepFormData): boolean {
   if (checklistHasAnyTrue(form.checklist as Record<string, boolean | undefined> | undefined)) {
     return true;
+  }
+  if (
+    "committeeOrder" in form ||
+    "medianPrice" in form ||
+    "committees" in form ||
+    "complianceLog" in form
+  ) {
+    if (step2FormHasPersistedData(form as Step2FormData)) return true;
   }
   if (announcementHasData((form as Step3FormData).announcement)) return true;
   return step4BidResultHasData((form as Step4FormData).bidResult);
@@ -1405,16 +1525,32 @@ export function getStep3ComplianceIssues(
     hasEgpScreenshotDoc: boolean;
     hearingFormActive: boolean;
   },
+  autoStates?: Record<string, boolean>,
 ): Step3ComplianceIssue[] {
   if (!opts.hearingFormActive) return [];
 
   const issues: Step3ComplianceIssue[] = [];
+  const auto =
+    autoStates ??
+    computeAutoChecklistState({
+      stepNumber: 3,
+      announcement: opts.announcement,
+      approvedMedianPrice: opts.approvedMedianPrice,
+      medianPriceApprovalDate: opts.medianPriceApprovalDate,
+      hasDraftTorDoc: opts.hasDraftTorDoc,
+      hasDraftAnnouncementDoc: opts.hasDraftAnnouncementDoc,
+      hasBg06Doc: opts.hasBg06Doc,
+      hasEgpAnnouncementDoc: opts.hasEgpAnnouncementDoc,
+      hasEgpScreenshotDoc: opts.hasEgpScreenshotDoc,
+    });
+  const effective = buildEffectiveChecklist(3, checklist as Record<string, boolean>, auto);
 
   STEP3_CHECKLIST_ITEMS.forEach((item, index) => {
-    if (!checklist[item.key]) {
+    if (!effective[item.key]) {
+      const prefix = auto[item.key] !== undefined && !auto[item.key] ? "ระบบตรวจพบยังไม่ครบ" : "ยังไม่ได้ติ๊กยืนยัน";
       issues.push({
         id: `checklist-${item.key}`,
-        message: `ยังไม่ได้ติ๊กข้อที่ ${index + 1}: ${item.label}`,
+        message: `${prefix} ข้อที่ ${index + 1}: ${item.label}`,
       });
     }
   });
@@ -1445,13 +1581,13 @@ export function getStep3ComplianceIssues(
   if (!median) {
     issues.push({
       id: "median_price_missing",
-      message: "ยังไม่มีราคากlางที่อนุมัติจากขั้นตอนที่ 2 — กรุณากลับไปบันทึกขั้นตอนที่ 2",
+      message: "ยังไม่มีราคากลางที่อนุมัติจากขั้นตอนที่ 2 — กรุณากลับไปบันทึกขั้นตอนที่ 2",
     });
   }
   if (!opts.medianPriceApprovalDate?.trim()) {
     issues.push({
       id: "median_price_approval_date",
-      message: "ยังไม่มีวันที่อนุมัติราคากlางจากขั้นตอนที่ 2",
+      message: "ยังไม่มีวันที่อนุมัติราคากลางจากขั้นตอนที่ 2",
     });
   }
 
@@ -1470,7 +1606,7 @@ export function getStep3ComplianceIssues(
   if (!opts.hasBg06Doc) {
     issues.push({
       id: "bg06_doc",
-      message: "กรุณาแนบไฟล์ตารางราคากlาง (บก.06) — อัปโหลดในขั้นตอนนี้หรือขั้นตอนที่ 2",
+      message: "กรุณาแนบไฟล์ตารางราคากลาง (บก.06) — อัปโหลดในขั้นตอนนี้หรือขั้นตอนที่ 2",
     });
   }
 

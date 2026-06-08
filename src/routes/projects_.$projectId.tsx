@@ -2,7 +2,7 @@ import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useState, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeft, Check, Upload, Eye, Trash2, FileText, Loader2, AlertTriangle, Undo2,
+  ArrowLeft, Check, Upload, Eye, Trash2, FileText, Loader2, AlertTriangle,
   FolderOpen, Download, FileImage, FileSpreadsheet, File as FileLucide, RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -15,10 +15,28 @@ import {
   getMilestoneLabel,
 } from "@/lib/egp-milestones";
 import { formatThaiDate } from "@/lib/utils";
+import { resolveDocFilePolicy, validateDocFile } from "@/lib/doc-file-types";
+import { uploadStepDocument } from "@/lib/doc-upload";
 import { checkStorageQuota, incrementStorageUsage, decrementStorageUsage } from "@/lib/storage";
 import { ThaiDatePicker } from "@/components/ThaiDatePicker";
 import { GuidelineBox } from "@/components/GuidelineBox";
-import { Step1DetailForm, Step2DetailForm, Step3DetailForm, Step4DetailForm, ResponsibleOfficerField } from "@/components/steps/ProjectStepForms";
+import { StepWorkflowBanner } from "@/components/StepWorkflowBanner";
+import {
+  Step1DetailForm,
+  Step2DetailForm,
+  Step3DetailForm,
+  Step4DetailForm,
+  GenericStepChecklistPanel,
+  ResponsibleOfficerField,
+} from "@/components/steps/ProjectStepForms";
+import {
+  computeAutoChecklistState,
+  createEmptyManualChecklist,
+  getGenericStepComplianceIssues,
+  getSmartChecklistItems,
+  isGenericStepReadyForNext,
+  loadManualChecklistFromNote,
+} from "@/lib/smart-checklist";
 import { StepDocumentHub } from "@/components/steps/StepDocumentHub";
 import { StepInlineDocList } from "@/components/steps/StepInlineDocList";
 import {
@@ -70,7 +88,7 @@ import {
   loadStep2CommitteesFromDb,
   buildStep2CommitteeRows,
   STEP2_COMMITTEE_DB_TYPES,
-  STEP2_COMMITTEE_INSERT_PROFILES,
+  getStep2CommitteeInsertProfiles,
   isStep2CommitteeTypeCheckError,
   type Step2CommitteeListKey,
   type Step2CommitteeAppointmentMode,
@@ -96,16 +114,20 @@ import {
   type Step3SkipReason,
 } from "@/lib/step3-hearing";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
+  getRollbackConfirmMessage,
+  getPreviousStepReopenPatch,
+  getStepRollbackProcurementStepWipe,
+  getStepRollbackProjectWipe,
+} from "@/lib/step-rollback";
+import {
+  canCompleteWorkflowStep,
+  canNavigateToStep,
+  canRollbackWorkflowStep,
+  canSaveHistoricalEdit,
+  getStepWorkflowMode,
+  isStepForwardLocked,
+  isWorkflowReadOnly,
+} from "@/lib/step-workflow";
 
 export const Route = createFileRoute("/projects_/$projectId")({
   head: () => ({ meta: [{ title: "รายละเอียดโครงการ — ProcureTrack" }] }),
@@ -211,12 +233,18 @@ function ProjectDetailPage() {
     ...EMPTY_STEP3_ANNOUNCEMENT,
   });
   const [step3Skipping, setStep3Skipping] = useState(false);
+  const [historicalEditUnlocked, setHistoricalEditUnlocked] = useState(false);
+  const [rollingBack, setRollingBack] = useState(false);
   const [step4BidResult, setStep4BidResult] = useState<Step4BidResult>({
     ...EMPTY_STEP4_BID_RESULT,
   });
   const [step4Checklist, setStep4Checklist] = useState<Step4Checklist>({
     ...EMPTY_STEP4_CHECKLIST,
   });
+  /** Manual checklist — ขั้นตอนที่ 5–10 */
+  const [genericManualChecklist, setGenericManualChecklist] = useState<Record<string, boolean>>(
+    {},
+  );
 
   const { data, isLoading: loading, refetch } = useQuery({
     queryKey: ["project", projectId],
@@ -241,6 +269,130 @@ function ProjectDetailPage() {
   const steps = data?.steps ?? [];
   const docs = data?.docs ?? [];
   const committees = data?.committees ?? [];
+
+  const workflowStep = project?.current_step ?? 1;
+  const workflowMode = useMemo(
+    () => getStepWorkflowMode(activeStep, workflowStep, historicalEditUnlocked),
+    [activeStep, workflowStep, historicalEditUnlocked],
+  );
+  const workflowReadOnly = isWorkflowReadOnly(workflowMode);
+
+  useEffect(() => {
+    setHistoricalEditUnlocked(false);
+  }, [activeStep]);
+
+  const handleStepNavigation = (stepNumber: number) => {
+    if (!project) return;
+    if (!canNavigateToStep(stepNumber, project.current_step)) {
+      toast.message(
+        "ไม่สามารถข้ามไปขั้นตอนถัดไปได้ — กรุณาดำเนินการตามลำดับและกด «บันทึกและไปขั้นตอนถัดไป»",
+      );
+      return;
+    }
+    setActiveStep(stepNumber);
+  };
+
+  const rollbackCurrentStep = async () => {
+    if (!current || !project) return;
+    if (!canRollbackWorkflowStep(activeStep, project.current_step)) {
+      toast.error("ปุ่มย้อนกลับใช้ได้เฉพาะขั้นตอนปัจจุบันที่กำลังดำเนินการเท่านั้น");
+      return;
+    }
+
+    const stepNum = current.step_number;
+    const prevStep = stepNum - 1;
+    const prevStepRecord = steps.find((s) => s.step_number === prevStep);
+    if (!prevStepRecord) return;
+
+    if (!window.confirm(getRollbackConfirmMessage(stepNum))) return;
+
+    setRollingBack(true);
+    setError(null);
+    try {
+      const stepDocs = docs.filter((d) => d.step_number === stepNum);
+      if (stepDocs.length > 0) {
+        const paths = stepDocs.map((d) => d.storage_path);
+        const { error: storageErr } = await supabase.storage
+          .from("procurement-docs")
+          .remove(paths);
+        if (storageErr) {
+          console.warn("[Rollback] storage delete partial fail", storageErr);
+        }
+        const totalBytes = stepDocs.reduce((sum, d) => sum + Number(d.file_size ?? 0), 0);
+        if (totalBytes > 0) {
+          await decrementStorageUsage(project.organization_id, totalBytes);
+        }
+        const { error: docErr } = await supabase
+          .from("documents")
+          .delete()
+          .eq("project_id", project.id)
+          .eq("step_number", stepNum);
+        if (docErr) throw new Error(docErr.message);
+      }
+
+      if (stepNum === 2) {
+        const { error: committeeErr } = await supabase
+          .from("committees")
+          .delete()
+          .eq("project_id", project.id)
+          .in("committee_type", [...STEP2_COMMITTEE_DB_TYPES]);
+        if (committeeErr) console.warn("[Rollback] committees delete failed", committeeErr);
+      }
+
+      const wipePayload = getStepRollbackProcurementStepWipe(stepNum);
+      let { error: wipeErr } = await supabase
+        .from("procurement_steps")
+        .update(wipePayload)
+        .eq("id", current.id);
+      if (wipeErr) {
+        const msg = wipeErr.message;
+        const fallback = { ...wipePayload };
+        if (msg.includes("step3_checklist")) delete (fallback as { step3_checklist?: unknown }).step3_checklist;
+        if (msg.includes("step2_checklist")) delete (fallback as { step2_checklist?: unknown }).step2_checklist;
+        if (msg.includes("step1_checklist")) delete (fallback as { step1_checklist?: unknown }).step1_checklist;
+        if (msg.includes("responsible_officer_name") || msg.includes("step_notes")) {
+          delete (fallback as { responsible_officer_name?: unknown }).responsible_officer_name;
+          delete (fallback as { step_notes?: unknown }).step_notes;
+        }
+        const retry = await supabase.from("procurement_steps").update(fallback).eq("id", current.id);
+        wipeErr = retry.error;
+      }
+      if (wipeErr) throw new Error(wipeErr.message);
+
+      const { error: reopenErr } = await supabase
+        .from("procurement_steps")
+        .update(getPreviousStepReopenPatch())
+        .eq("id", prevStepRecord.id);
+      if (reopenErr) throw new Error(reopenErr.message);
+
+      const projectUpdates: Record<string, unknown> = {
+        current_step: prevStep,
+        ...getStepRollbackProjectWipe(stepNum),
+      };
+      if (stepNum === 10 && project.status === "completed") {
+        projectUpdates.status = "in_progress";
+      }
+      const { error: projErr } = await supabase
+        .from("projects")
+        .update(projectUpdates)
+        .eq("id", project.id);
+      if (projErr) throw new Error(projErr.message);
+
+      setHistoricalEditUnlocked(false);
+      setGenericManualChecklist(createEmptyManualChecklist(stepNum));
+      setActiveStep(prevStep);
+      await invalidateAll();
+      toast.success(
+        `ย้อนกลับไปขั้นตอนที่ ${prevStep} แล้ว — ล้างข้อมูลขั้นที่ ${stepNum} และเปิดให้แก้ไขขั้นก่อนหน้าได้`,
+      );
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "ย้อนกลับไม่สำเร็จ";
+      setError(message);
+      toast.error(message);
+    } finally {
+      setRollingBack(false);
+    }
+  };
 
   // Sync activeStep to project's current_step on first load
   useEffect(() => {
@@ -352,9 +504,10 @@ function ProjectDetailPage() {
       return;
     }
     const draft = loadStepDraftFields(current);
+    setGenericManualChecklist(loadManualChecklistFromNote(current.step_number, current.note));
     setNote(draft.userNote);
     setDueDate(draft.dueDate);
-  }, [current?.id, project?.id, committees.length]); // eslint-disable-line
+  }, [current?.id, project?.id, project?.committee_appointment_mode, committees.length]); // eslint-disable-line
 
   const effectiveResponsibleName =
     responsibleName.trim() || step1ResponsibleDefault.trim();
@@ -389,6 +542,7 @@ function ProjectDetailPage() {
   };
 
   const setStep2Check = (key: Step2ChecklistKey, checked: boolean) => {
+    if (!isManualChecklistKey(2, key)) return;
     setStep2Checklist((prev) => ({ ...prev, [key]: checked }));
   };
 
@@ -401,6 +555,7 @@ function ProjectDetailPage() {
   };
 
   const setStep3Check = (key: Step3ChecklistKey, checked: boolean) => {
+    if (!isManualChecklistKey(3, key)) return;
     setStep3Checklist((prev) => ({ ...prev, [key]: checked }));
   };
 
@@ -413,10 +568,20 @@ function ProjectDetailPage() {
   };
 
   const setStep4Check = (key: Step4ChecklistKey, checked: boolean) => {
+    if (!isManualChecklistKey(4, key)) return;
     setStep4Checklist((prev) => ({ ...prev, [key]: checked }));
   };
 
+  const setGenericManualCheck = (key: string, checked: boolean) => {
+    if (!current || !isManualChecklistKey(current.step_number, key)) return;
+    setGenericManualChecklist((prev) => ({ ...prev, [key]: checked }));
+  };
+
+  const isManualChecklistKey = (stepNumber: number, key: string) =>
+    getSmartChecklistItems(stepNumber).find((i) => i.key === key)?.mode === "manual";
+
   const setStep1Check = (key: Step1ChecklistKey, checked: boolean) => {
+    if (!isManualChecklistKey(1, key)) return;
     setStep1Checklist((prev) => ({ ...prev, [key]: checked }));
   };
 
@@ -519,6 +684,18 @@ function ProjectDetailPage() {
   const saveDraft = async () => {
     if (!current || !project) return;
     setError(null);
+    if (workflowReadOnly) {
+      toast.error("อยู่ในโหมดดูอย่างเดียว — กด «แก้ไขข้อมูลในขั้นตอนนี้» ก่อนบันทึก");
+      return;
+    }
+
+    const draftSavedToast = (stepLabel: string) => {
+      if (canSaveHistoricalEdit(workflowMode)) {
+        toast.success(`บันทึกการแก้ไข${stepLabel}เรียบร้อย — ระบบอัปเดต Data Flow แล้ว`);
+      } else {
+        toast.success(`บันทึกร่าง${stepLabel}เรียบร้อย`);
+      }
+    };
 
     if (current.step_number === 1) {
       const budgetVal = parseBudgetInput(step1Budget);
@@ -544,7 +721,7 @@ function ProjectDetailPage() {
         setError(se.error.message);
         return;
       }
-      toast.success("บันทึกร่างขั้นตอนที่ 1 เรียบร้อย");
+      draftSavedToast("ขั้นตอนที่ 1 ");
       await propagateResponsibleToStep1(effectiveResponsibleName);
       await invalidateAll();
       return;
@@ -589,6 +766,9 @@ function ProjectDetailPage() {
         .eq("id", project.id);
       if (projErr) {
         console.warn("[Step2] project fields sync failed", projErr);
+        toast.warning(
+          `บันทึกรูปแบบคณะกรรมการลงตาราง projects ไม่สำเร็จ: ${projErr.message} — รัน migration 20260607060000 ใน Supabase SQL Editor`,
+        );
       }
 
       // IMPORTANT: Step2 checklist must persist even if committees table permissions are missing.
@@ -610,7 +790,10 @@ function ProjectDetailPage() {
             let inserted = false;
             let lastInsertError: string | null = null;
 
-            for (const profile of STEP2_COMMITTEE_INSERT_PROFILES) {
+            const insertProfiles = getStep2CommitteeInsertProfiles(
+              step2Committees.appointment_mode,
+            );
+            for (const profile of insertProfiles) {
               const rows = buildStep2CommitteeRows(project, step2Committees, profile);
               const { error: insErr } = await supabase.from("committees").insert(rows);
               if (!insErr) {
@@ -645,7 +828,7 @@ function ProjectDetailPage() {
       });
 
       if (committeeSyncOk) {
-        toast.success("บันทึกร่างขั้นตอนที่ 2 เรียบร้อย");
+        draftSavedToast("ขั้นตอนที่ 2 ");
       } else {
         toast.warning(
           "บันทึกข้อมูลหลักขั้นตอนที่ 2 แล้ว แต่รายชื่อคณะกรรมการลงตาราง committees ไม่สำเร็จ — รัน migration 20260607080000 ใน Supabase SQL Editor",
@@ -677,7 +860,7 @@ function ProjectDetailPage() {
       if (projErr) {
         console.warn("[Step3] project procurement fields sync failed", projErr);
       }
-      toast.success("บันทึกร่างขั้นตอนที่ 3 เรียบร้อย");
+      draftSavedToast("ขั้นตอนที่ 3 ");
       await propagateResponsibleToStep1(effectiveResponsibleName);
       await invalidateAll();
       return;
@@ -704,15 +887,20 @@ function ProjectDetailPage() {
       if (projErr) {
         console.warn("[Step4] project bid result sync failed", projErr);
       }
-      toast.success("บันทึกร่างขั้นตอนที่ 4 เรียบร้อย");
+      draftSavedToast("ขั้นตอนที่ 4 ");
       await propagateResponsibleToStep1(effectiveResponsibleName);
       await invalidateAll();
       return;
     }
 
+    const formNote =
+      current.step_number >= 5
+        ? serializeStepNote(note, { checklist: genericManualChecklist })
+        : null;
     const { error: e } = await patchStepDraft(
       current.id,
       buildStepDraftFields(effectiveResponsibleName, note, dueDate),
+      formNote ? { note: formNote || null } : undefined,
     );
     if (e?.error) {
       setError(e.error.message);
@@ -761,6 +949,10 @@ function ProjectDetailPage() {
 
   const completeStep = async (opts?: { skipDocValidation?: boolean }) => {
     if (!current || !project) return;
+    if (!canCompleteWorkflowStep(activeStep, project.current_step, current.status)) {
+      toast.error("ดำเนินการไปขั้นถัดไปได้เฉพาะขั้นตอนปัจจุบันเท่านั้น");
+      return;
+    }
     if (current.step_number === 3) {
       const tier = getStep3HearingTier(Number(project.budget));
       const hearingFormActive = shouldShowStep3HearingForm(
@@ -842,6 +1034,34 @@ function ProjectDetailPage() {
         return;
       }
     }
+    if (current.step_number >= 5 && current.step_number <= 10) {
+      const stepDocs = docs.filter((d) => d.step_number === current.step_number);
+      const requiredDocs = (STEP_DOCS_DETAILED[current.step_number - 1] ?? []).filter(
+        (d) => d.required,
+      );
+      const complianceIssues = getGenericStepComplianceIssues(
+        current.step_number,
+        genericManualChecklist,
+        computeAutoChecklistState({
+          stepNumber: current.step_number,
+          responsibleName: effectiveResponsibleName,
+          appealStatus: project.appeal_status ?? step4BidResult.appeal_status,
+          bidResult: step4BidResult,
+          requiredDocs,
+          uploadedDocTypes: stepDocs.map((d) => d.document_type),
+        }),
+        {
+          responsibleName: effectiveResponsibleName,
+          requiredDocs,
+          uploadedDocTypes: stepDocs.map((d) => d.document_type),
+        },
+      );
+      if (complianceIssues.length > 0) {
+        toast.error(complianceIssues[0].message);
+        setError(complianceIssues[0].message);
+        return;
+      }
+    }
     if (current.step_number === 4) {
       const hasEvalDoc = docs
         .filter((d) => d.step_number === 4)
@@ -882,12 +1102,14 @@ function ProjectDetailPage() {
   };
 
   const proceedStep3Hearing = () => {
+    if (!project || activeStep !== project.current_step || workflowReadOnly) return;
     patchStep3Announcement({ hearing_proceed: true, hearing_skipped: false, skip_reason: undefined });
     toast.message("ดำเนินการจัดฟังคำวิจารณ์ร่างประกาศ — กรุณากรอกข้อมูลและแนบเอกสารให้ครบ");
   };
 
   const skipStep3 = async (reason: Step3SkipReason) => {
     if (!current || !project || current.step_number !== 3) return;
+    if (activeStep !== project.current_step || workflowReadOnly) return;
     const label =
       reason === "exempt"
         ? "ข้ามขั้นตอนรับฟังความคิดเห็น (ยกเว้นตามวงเงิน)"
@@ -922,27 +1144,6 @@ function ProjectDetailPage() {
     } finally {
       setStep3Skipping(false);
     }
-  };
-
-  const revertStep = async () => {
-    if (!current || !project) return;
-    if (current.step_number <= 1) return;
-    const prevStep = current.step_number - 1;
-    const updates: any = { current_step: prevStep };
-    if (project.status === "completed") updates.status = "active";
-    await supabase.from("projects").update(updates).eq("id", project.id);
-    await supabase.from("procurement_steps").update({
-      status: "pending",
-      completed_at: null,
-      completed_by: null,
-    }).eq("id", current.id);
-    await supabase.from("procurement_steps").update({
-      status: "in_progress",
-      completed_at: null,
-      completed_by: null,
-    }).eq("project_id", project.id).eq("step_number", prevStep);
-    setActiveStep(prevStep);
-    await invalidateAll();
   };
 
   if (loading) {
@@ -1014,24 +1215,45 @@ function ProjectDetailPage() {
 
         {/* Step progress */}
         <div className="bg-card border rounded-[10px] p-5">
-          <h3 className="font-semibold mb-4">ความคืบหน้า 10 ขั้นตอน</h3>
+          <h3 className="font-semibold mb-1">ความคืบหน้า 10 ขั้นตอน</h3>
+          <p className="text-xs text-muted-foreground mb-4">
+            คลิกขั้นตอนที่เคยทำแล้วเพื่อย้อนกลับดู/แก้ไขได้ — ขั้นตอนในอนาคตล็อกจนกว่าจะกด «บันทึกและไปขั้นตอนถัดไป»
+          </p>
           <div className="grid grid-cols-5 lg:grid-cols-10 gap-2">
             {steps.map((s) => {
               const isActive = s.step_number === activeStep;
               const isDone = s.status === "completed";
+              const isPast = s.step_number < workflowStep;
+              const isLocked = isStepForwardLocked(s.step_number, workflowStep);
+              const canNav = canNavigateToStep(s.step_number, workflowStep);
               return (
                 <button
                   key={s.id}
-                  onClick={() => setActiveStep(s.step_number)}
+                  type="button"
+                  disabled={!canNav}
+                  onClick={() => handleStepNavigation(s.step_number)}
+                  title={
+                    isLocked
+                      ? "ล็อก — ดำเนินการตามลำดับและกด «บันทึกและไปขั้นตอนถัดไป»"
+                      : isPast || isDone
+                        ? "คลิกเพื่อย้อนกลับดูข้อมูลขั้นตอนนี้"
+                        : isActive
+                          ? "ขั้นตอนที่กำลังดูอยู่"
+                          : "ขั้นตอนปัจจุบัน"
+                  }
                   className={`relative p-3 rounded-md text-xs text-center transition border-2 ${
-                    isDone
-                      ? "bg-success/15 border-success/30 text-success-foreground"
+                    !canNav
+                      ? "bg-muted/30 border-transparent text-muted-foreground/50 cursor-not-allowed opacity-60"
                       : isActive
-                      ? "bg-primary/5 border-primary text-primary font-medium"
-                      : "bg-muted/50 border-transparent text-muted-foreground hover:bg-muted"
+                        ? "bg-primary/5 border-primary text-primary font-medium cursor-pointer"
+                        : isPast || isDone
+                          ? "bg-success/15 border-success/30 text-success-foreground hover:bg-success/20 cursor-pointer"
+                          : "bg-muted/50 border-transparent text-muted-foreground hover:bg-muted cursor-pointer"
                   }`}
                 >
-                  {isDone && <Check className="absolute top-1 right-1 h-3 w-3 text-success" />}
+                  {(isDone || isPast) && (
+                    <Check className="absolute top-1 right-1 h-3 w-3 text-success" />
+                  )}
                   <div className="font-medium">{EGP_MILESTONE_SHORT[s.step_number - 1]}</div>
                 </button>
               );
@@ -1077,8 +1299,59 @@ function ProjectDetailPage() {
             !!contractMaxDeadline &&
             dueValid &&
             dueDateObj! > contractMaxDeadline;
+          const stepDocsForAuto = docs.filter((d) => d.step_number === current.step_number);
+          const uploadedDocTypesForAuto = stepDocsForAuto.map((d) => d.document_type);
+          const requiredDocsForStep = STEP_DOCS_DETAILED[current.step_number - 1] ?? [];
+          const step3DocsForAuto = docs.filter((d) => d.step_number === 3);
+          const autoCheckStates = computeAutoChecklistState({
+            stepNumber: current.step_number,
+            responsibleName: effectiveResponsibleName,
+            egpCode,
+            budget: step1Budget,
+            committees: step2Committees,
+            committeeOrder: step2CommitteeOrder,
+            medianPrice: step2MedianPrice,
+            announcement: step3Announcement,
+            bidResult: step4BidResult,
+            approvedMedianPrice: project.approved_median_price ?? null,
+            medianPriceApprovalDate: project.median_price_approval_date ?? null,
+            hasAppointmentOrderDoc: stepDocsForAuto.some(
+              (d) => d.document_type === STEP2_DOC.APPOINTMENT_ORDER,
+            ),
+            hasBg06Doc:
+              docs.some(
+                (d) =>
+                  d.step_number === 2 && d.document_type === STEP2_DOC.MEDIAN_PRICE_BG06,
+              ) ||
+              step3DocsForAuto.some((d) => d.document_type === STEP3_DOC.MEDIAN_BG06) ||
+              stepDocsForAuto.some((d) => d.document_type === STEP2_DOC.MEDIAN_PRICE_BG06),
+            hasDraftTorDoc: step3DocsForAuto.some(
+              (d) => d.document_type === STEP3_DOC.DRAFT_TOR_SPEC,
+            ),
+            hasDraftAnnouncementDoc: step3DocsForAuto.some(
+              (d) => d.document_type === STEP3_DOC.DRAFT_ANNOUNCEMENT_BID,
+            ),
+            hasEgpAnnouncementDoc: step3DocsForAuto.some(
+              (d) => d.document_type === STEP3_DOC.EGP_ANNOUNCEMENT,
+            ),
+            hasEgpScreenshotDoc: step3DocsForAuto.some(
+              (d) => d.document_type === STEP3_DOC.EGP_SCREENSHOT,
+            ),
+            hasEvaluationReportDoc: stepDocsForAuto.some(
+              (d) => d.document_type === STEP4_DOC.EVALUATION_REPORT,
+            ),
+            appealStatus: project.appeal_status ?? step4BidResult.appeal_status,
+            requiredDocs: requiredDocsForStep,
+            uploadedDocTypes: uploadedDocTypesForAuto,
+          });
           return (
           <>
+            <StepWorkflowBanner
+              mode={workflowMode}
+              stepNumber={current.step_number}
+              currentWorkflowStep={workflowStep}
+              onUnlockEdit={() => setHistoricalEditUnlocked(true)}
+            />
             <GuidelineBox
               stepNumber={current.step_number}
               method={calcMethod}
@@ -1087,9 +1360,14 @@ function ProjectDetailPage() {
               committeeReviewWorkdays={
                 current.step_number === 4 ? committeeReviewWorkdays : undefined
               }
-              onSkipStep3={current.step_number === 3 ? skipStep3 : undefined}
+              readOnly={workflowReadOnly}
+              onSkipStep3={
+                current.step_number === 3 && !workflowReadOnly ? skipStep3 : undefined
+              }
               onProceedStep3Hearing={
-                current.step_number === 3 ? proceedStep3Hearing : undefined
+                current.step_number === 3 && !workflowReadOnly
+                  ? proceedStep3Hearing
+                  : undefined
               }
               step3HearingProceed={!!step3Announcement.hearing_proceed}
               step3Skipping={step3Skipping}
@@ -1108,7 +1386,12 @@ function ProjectDetailPage() {
               {tab === "contract" && current.step_number === 8 ? (
                 <ContractForm project={project} onSaved={invalidateAll} />
               ) : (
-                <div className="space-y-4 max-w-2xl">
+                <fieldset
+                  disabled={workflowReadOnly}
+                  className={`space-y-4 max-w-2xl min-w-0 border-0 p-0 m-0 ${
+                    workflowReadOnly ? "opacity-90" : ""
+                  }`}
+                >
                   <div>
                     <h3 className="text-lg font-semibold">
                       ขั้นตอนที่ {current.step_number}: {getMilestoneLabel(current.step_number)}
@@ -1124,6 +1407,8 @@ function ProjectDetailPage() {
                     <Step1DetailForm
                       checklist={step1Checklist}
                       onChecklistChange={setStep1Check}
+                      autoCheckStates={autoCheckStates}
+                      readOnly={workflowReadOnly}
                       egpCode={egpCode}
                       onEgpCodeChange={setEgpCode}
                       budget={step1Budget}
@@ -1138,6 +1423,8 @@ function ProjectDetailPage() {
                     <Step2DetailForm
                       checklist={step2Checklist}
                       onChecklistChange={setStep2Check}
+                      autoCheckStates={autoCheckStates}
+                      readOnly={workflowReadOnly}
                       committees={step2Committees}
                       onCommitteeModeChange={setStep2CommitteeMode}
                       onCommitteeChange={changeCommitteeMember}
@@ -1164,6 +1451,8 @@ function ProjectDetailPage() {
                     <Step3DetailForm
                       checklist={step3Checklist}
                       onChecklistChange={setStep3Check}
+                      autoCheckStates={autoCheckStates}
+                      readOnly={workflowReadOnly}
                       announcement={step3Announcement}
                       onAnnouncementChange={patchStep3Announcement}
                       approvedMedianPrice={project.approved_median_price ?? null}
@@ -1195,6 +1484,8 @@ function ProjectDetailPage() {
                     <Step4DetailForm
                       checklist={step4Checklist}
                       onChecklistChange={setStep4Check}
+                      autoCheckStates={autoCheckStates}
+                      readOnly={workflowReadOnly}
                       bidResult={step4BidResult}
                       onBidResultChange={patchStep4BidResult}
                       responsibleName={responsibleName}
@@ -1208,6 +1499,15 @@ function ProjectDetailPage() {
                         docs: docsForStep,
                         onDocsChange: invalidateAll,
                       }}
+                    />
+                  )}
+                  {current.step_number >= 5 && current.step_number <= 10 && (
+                    <GenericStepChecklistPanel
+                      stepNumber={current.step_number}
+                      manualChecklist={genericManualChecklist}
+                      onManualChange={setGenericManualCheck}
+                      autoCheckStates={autoCheckStates}
+                      readOnly={workflowReadOnly}
                     />
                   )}
                   {current.step_number !== 1 &&
@@ -1275,7 +1575,7 @@ function ProjectDetailPage() {
                       projectName={project.name}
                     />
                   )}
-                </div>
+                </fieldset>
               )}
 
               {error && <p className="text-sm text-destructive mt-3">{error}</p>}
@@ -1299,25 +1599,32 @@ function ProjectDetailPage() {
                   docsForStep.some((d) => d.document_type === STEP2_DOC.MEDIAN_PRICE_BG06);
                 const step2ComplianceIssues =
                   current.step_number === 2
-                    ? getStep2ComplianceIssues(step2Checklist, {
-                        committees: step2Committees,
-                        committeeOrder: step2CommitteeOrder,
-                        medianPrice: step2MedianPrice,
-                        responsibleName: effectiveResponsibleName,
-                        hasAppointmentOrderDoc: step2HasAppointmentDoc,
-                        hasBg06Doc: step2HasBg06Doc,
-                      })
+                    ? getStep2ComplianceIssues(
+                        step2Checklist,
+                        {
+                          committees: step2Committees,
+                          committeeOrder: step2CommitteeOrder,
+                          medianPrice: step2MedianPrice,
+                          responsibleName: effectiveResponsibleName,
+                          hasAppointmentOrderDoc: step2HasAppointmentDoc,
+                          hasBg06Doc: step2HasBg06Doc,
+                        },
+                        autoCheckStates,
+                      )
                     : [];
                 const step2Ready =
                   current.step_number !== 2 ||
-                  isStep2ReadyForNext(step2Checklist, {
-                    committees: step2Committees,
-                    committeeOrder: step2CommitteeOrder,
-                    medianPrice: step2MedianPrice,
-                    responsibleName: effectiveResponsibleName,
-                    hasAppointmentOrderDoc: step2HasAppointmentDoc,
-                    hasBg06Doc: step2HasBg06Doc,
-                  });
+                  isStep2ReadyForNext(
+                    step2Checklist,
+                    {
+                      committees: step2Committees,
+                      committeeOrder: step2CommitteeOrder,
+                      medianPrice: step2MedianPrice,
+                      responsibleName: effectiveResponsibleName,
+                      hasAppointmentOrderDoc: step2HasAppointmentDoc,
+                      hasBg06Doc: step2HasBg06Doc,
+                    },
+                  );
                 const step4HasEvalDoc =
                   current.step_number === 4 &&
                   docsForStep.some((d) => d.document_type === STEP4_DOC.EVALUATION_REPORT);
@@ -1358,7 +1665,11 @@ function ProjectDetailPage() {
                     : null;
                 const step3ComplianceIssues =
                   step3ComplianceOpts != null
-                    ? getStep3ComplianceIssues(step3Checklist, step3ComplianceOpts)
+                    ? getStep3ComplianceIssues(
+                        step3Checklist,
+                        step3ComplianceOpts,
+                        autoCheckStates,
+                      )
                     : [];
                 const step3Ready =
                   current.step_number !== 3 ||
@@ -1367,11 +1678,15 @@ function ProjectDetailPage() {
                     isStep3ReadyForNext(step3Checklist, step3ComplianceOpts));
                 const step1ComplianceIssues =
                   current.step_number === 1
-                    ? getStep1ComplianceIssues(step1Checklist, {
-                        egpCode,
-                        budget: step1Budget,
-                        responsibleName: effectiveResponsibleName,
-                      })
+                    ? getStep1ComplianceIssues(
+                        step1Checklist,
+                        {
+                          egpCode,
+                          budget: step1Budget,
+                          responsibleName: effectiveResponsibleName,
+                        },
+                        autoCheckStates,
+                      )
                     : [];
                 const step1Ready =
                   current.step_number !== 1 ||
@@ -1382,13 +1697,44 @@ function ProjectDetailPage() {
                   });
                 const step4ComplianceIssues =
                   current.step_number === 4
-                    ? getStep4ComplianceIssues(step4Checklist, step4BidResult, {
-                        responsibleName: effectiveResponsibleName,
-                        hasEvaluationReportDoc: step4HasEvalDoc,
-                        bidSubmissionEndDate,
-                        committeeReviewWorkdays,
-                      })
+                    ? getStep4ComplianceIssues(
+                        step4Checklist,
+                        step4BidResult,
+                        {
+                          responsibleName: effectiveResponsibleName,
+                          hasEvaluationReportDoc: step4HasEvalDoc,
+                          bidSubmissionEndDate,
+                          committeeReviewWorkdays,
+                        },
+                        autoCheckStates,
+                      )
                     : [];
+                const genericComplianceIssues =
+                  current.step_number >= 5 && current.step_number <= 10
+                    ? getGenericStepComplianceIssues(
+                        current.step_number,
+                        genericManualChecklist,
+                        autoCheckStates,
+                        {
+                          responsibleName: effectiveResponsibleName,
+                          requiredDocs,
+                          uploadedDocTypes,
+                        },
+                      )
+                    : [];
+                const genericReady =
+                  current.step_number < 5 ||
+                  current.step_number > 10 ||
+                  isGenericStepReadyForNext(
+                    current.step_number,
+                    genericManualChecklist,
+                    autoCheckStates,
+                    {
+                      responsibleName: effectiveResponsibleName,
+                      requiredDocs,
+                      uploadedDocTypes,
+                    },
+                  );
                 const step4Ready =
                   current.step_number !== 4 ||
                   isStep4ReadyForNext(step4Checklist, step4BidResult, {
@@ -1407,54 +1753,57 @@ function ProjectDetailPage() {
                       ? !step2Ready
                       : current.step_number === 3
                         ? !step3Ready
-                      : current.step_number === 4
-                        ? !step4Ready
-                        : !allUploaded);
+                        : current.step_number === 4
+                          ? !step4Ready
+                          : current.step_number >= 5
+                            ? !genericReady
+                            : !allUploaded);
                 const showCompleteBtn =
-                  isCompleted ||
-                  current.step_number !== 3 ||
-                  showStep3HearingForm;
+                  workflowMode === "current" &&
+                  !isCompleted &&
+                  (current.step_number !== 3 || showStep3HearingForm);
                 const showSaveDraft =
-                  current.step_number !== 3 || showStep3HearingForm;
-                const completeBtnLabel =
-                  current.step_number === 4
-                    ? "ขั้นตอนถัดไป (ทำสัญญา)"
-                    : "ยืนยันเสร็จสิ้น → ขั้นตอนถัดไป";
+                  !workflowReadOnly &&
+                  (workflowMode === "historical_edit" ||
+                    (workflowMode === "current" &&
+                      (current.step_number !== 3 || showStep3HearingForm)));
+                const saveDraftLabel =
+                  workflowMode === "historical_edit" ? "บันทึกการแก้ไข" : "บันทึกร่าง";
+                const completeBtnLabel = "บันทึกและไปขั้นตอนถัดไป";
+                const showBackButton = canRollbackWorkflowStep(
+                  current.step_number,
+                  workflowStep,
+                );
                 return (
                   <div className="mt-6 pt-5 border-t">
-                    <div className="flex gap-3 flex-wrap">
-                      {showSaveDraft && (
-                      <button onClick={saveDraft}
-                        className="h-10 px-4 rounded-md border border-input bg-background text-sm font-medium hover:bg-accent">
-                        บันทึกร่าง
-                      </button>
-                      )}
-                      {current.step_number > 1 && (
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <button
-                              className="h-10 px-4 rounded-md border border-input bg-muted text-muted-foreground text-sm font-medium hover:bg-muted/70 flex items-center gap-2"
-                            >
-                              <Undo2 className="h-4 w-4" /> ย้อนกลับขั้นตอน
-                            </button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent>
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>ย้อนกลับขั้นตอน?</AlertDialogTitle>
-                              <AlertDialogDescription>
-                                ต้องการย้อนกลับไปขั้นตอนที่ {current.step_number - 1} เพื่อแก้ไขเอกสารใช่หรือไม่?
-                                <br />
-                                ขั้นตอนปัจจุบันจะถูกรีเซ็ตกลับเป็น pending
-                              </AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel>ยกเลิก</AlertDialogCancel>
-                              <AlertDialogAction onClick={revertStep}>ยืนยัน</AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
-                      )}
-                      {showCompleteBtn && !isCompleted && (
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex flex-wrap gap-3">
+                        {showBackButton && (
+                          <button
+                            type="button"
+                            onClick={() => rollbackCurrentStep()}
+                            disabled={rollingBack}
+                            title="ล้างข้อมูลขั้นตอนนี้แล้วย้อนกลับไปขั้นก่อนหน้า"
+                            className="h-10 px-4 rounded-md border border-destructive/40 bg-background text-sm font-medium text-destructive hover:bg-destructive/5 disabled:opacity-50 flex items-center gap-2"
+                          >
+                            {rollingBack ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <ArrowLeft className="h-4 w-4" />
+                            )}
+                            ย้อนกลับ
+                          </button>
+                        )}
+                        {showSaveDraft && (
+                          <button
+                            onClick={saveDraft}
+                            className="h-10 px-4 rounded-md border border-input bg-background text-sm font-medium hover:bg-accent"
+                          >
+                            {saveDraftLabel}
+                          </button>
+                        )}
+                      </div>
+                      {showCompleteBtn && (
                         <button
                           onClick={() => completeStep()}
                           disabled={disabled}
@@ -1537,15 +1886,25 @@ function ProjectDetailPage() {
                         </ul>
                       </div>
                     )}
-                    {current.step_number !== 4 &&
-                      current.step_number !== 1 &&
-                      current.step_number !== 2 &&
-                      !allUploaded &&
-                      !isCompleted && (
-                      <p className="text-sm text-warning mt-3 flex items-center gap-1.5">
-                        <AlertTriangle className="h-4 w-4" />
-                        กรุณาอัปโหลดเอกสารบังคับให้ครบ {completedCount}/{total} รายการก่อนดำเนินการต่อ
-                      </p>
+                    {current.step_number >= 5 &&
+                      current.step_number <= 10 &&
+                      !isCompleted &&
+                      !genericReady &&
+                      genericComplianceIssues.length > 0 && (
+                      <div className="text-sm text-muted-foreground mt-3 space-y-1 rounded-md border border-dashed border-border bg-muted/30 p-3">
+                        <p className="font-medium text-foreground flex items-center gap-1.5">
+                          <AlertTriangle className="h-4 w-4 text-warning shrink-0" />
+                          กรุณาดำเนินการให้ครบก่อนไปขั้นถัดไป:
+                        </p>
+                        <ul className="list-disc list-inside space-y-0.5 text-xs">
+                          {genericComplianceIssues.slice(0, 4).map((issue) => (
+                            <li key={issue.id}>{issue.message}</li>
+                          ))}
+                          {genericComplianceIssues.length > 4 && (
+                            <li>และอีก {genericComplianceIssues.length - 4} รายการ...</li>
+                          )}
+                        </ul>
+                      </div>
                     )}
                   </div>
                 );
@@ -1818,7 +2177,7 @@ function DocChecklist({
   const requiredList = docList.filter((d) => d.required);
   const requiredUploaded = requiredList.filter((d) => existing.some((e) => e.document_type === d.name)).length;
   const [uploading, setUploading] = useState<string | null>(null);
-  const [dragOver, setDragOver] = useState(false);
+  const [dragOverDoc, setDragOverDoc] = useState<string | null>(null);
   const [archiveTick, setArchiveTick] = useState(0);
   const fileInputs = useRef<Record<string, HTMLInputElement | null>>({});
 
@@ -1828,64 +2187,15 @@ function DocChecklist({
   };
 
   const uploadFile = async (docType: string, file: File) => {
-    if (file.size > 50 * 1024 * 1024) {
-      toast.error("ขนาดไฟล์เกิน 50MB");
+    const check = validateDocFile(file, docType);
+    if (!check.ok) {
+      toast.error(check.message);
       return;
     }
-    console.log("[DocUpload] start", {
-      docType,
-      fileName: file.name,
-      fileSize: file.size,
-      projectId: project.id,
-      stepNumber,
-      orgId: project.organization_id,
-    });
-    const quota = await checkStorageQuota(project.organization_id, file.size);
-    console.log("[DocUpload] quota", quota);
-    if (!quota.ok) return;
     setUploading(docType);
     try {
-      const { data: u, error: authErr } = await supabase.auth.getUser();
-      if (authErr) {
-        console.error("[DocUpload] auth:error", authErr);
-        toast.error(`ไม่สามารถตรวจสอบผู้ใช้ได้: ${authErr.message}`);
-        return;
-      }
-      const ext = file.name.split(".").pop() ?? "bin";
-      const path = `${project.organization_id}/${project.id}/step-${stepNumber}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-      console.log("[DocUpload] storage:upload:start", { path });
-      const { error: upErr } = await supabase.storage.from("procurement-docs").upload(path, file);
-      if (upErr) {
-        console.error("[DocUpload] storage:upload:error", upErr);
-        toast.error(`อัปโหลดไฟล์ไป Storage ไม่สำเร็จ: ${upErr.message}`);
-        return;
-      }
-      console.log("[DocUpload] storage:upload:done", { path });
-      console.log("[DocUpload] db:insert:start");
-      const { error: dbErr } = await supabase.from("documents").insert({
-        organization_id: project.organization_id,
-        project_id: project.id,
-        step_number: stepNumber,
-        document_type: docType,
-        file_name: file.name,
-        storage_path: path,
-        file_size: file.size,
-        mime_type: file.type,
-        uploaded_by: u.user?.id ?? null,
-      });
-      if (dbErr) {
-        console.error("[DocUpload] db:insert:error", dbErr);
-        toast.error(`บันทึกข้อมูลเอกสารไม่สำเร็จ: ${dbErr.message}`);
-        return;
-      }
-      console.log("[DocUpload] db:insert:done");
-      await incrementStorageUsage(project.organization_id, file.size);
-      refreshArchive();
-      toast.success("อัปโหลดไฟล์เรียบร้อย");
-      console.log("[DocUpload] done");
-    } catch (e: any) {
-      console.error("[DocUpload] exception", e);
-      toast.error("อัปโหลดไม่สำเร็จ: " + (e.message ?? "unknown"));
+      const ok = await uploadStepDocument(project, stepNumber, docType, file);
+      if (ok) refreshArchive();
     } finally {
       setUploading(null);
     }
@@ -1940,27 +2250,32 @@ function DocChecklist({
         Checklist เอกสาร (เอกสารบังคับ {requiredUploaded}/{requiredList.length} รายการ)
       </p>
 
-      <div
-        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={(e) => {
-          e.preventDefault(); setDragOver(false);
-          const file = e.dataTransfer.files[0];
-          if (file) uploadFile("เอกสารทั่วไป", file);
-        }}
-        className={`mb-4 border-2 border-dashed rounded-md p-4 text-center text-xs transition ${
-          dragOver ? "border-primary bg-primary/5" : "border-input text-muted-foreground"
-        }`}
-      >
-        ลากไฟล์มาวางที่นี่ได้ (PDF, Word, Excel, รูปภาพ — สูงสุด 50MB)
-      </div>
-
       <ul className="space-y-2">
         {docList.map((item) => {
           const docType = item.name;
+          const policy = resolveDocFilePolicy(docType);
           const file = existing.find((d) => d.document_type === docType);
+          const isDragOver = dragOverDoc === docType;
           return (
-            <li key={docType} className="flex items-center gap-3 p-3 rounded-md border bg-background">
+            <li
+              key={docType}
+              className={`flex items-center gap-3 p-3 rounded-md border bg-background transition ${
+                isDragOver ? "border-primary bg-primary/5" : ""
+              }`}
+              onDragOver={(e) => {
+                if (file) return;
+                e.preventDefault();
+                setDragOverDoc(docType);
+              }}
+              onDragLeave={() => setDragOverDoc((prev) => (prev === docType ? null : prev))}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragOverDoc(null);
+                if (file) return;
+                const f = e.dataTransfer.files[0];
+                if (f) void uploadFile(docType, f);
+              }}
+            >
               <div className={`h-5 w-5 rounded border-2 flex items-center justify-center flex-shrink-0 ${
                 file ? "bg-success border-success" : "border-input"
               }`}>
@@ -1973,16 +2288,20 @@ function DocChecklist({
                     <span className="ml-2 text-xs font-normal text-muted-foreground">(ไม่บังคับ)</span>
                   )}
                 </p>
-                {file && <p className="text-xs text-muted-foreground truncate">{file.file_name}</p>}
+                {file ? (
+                  <p className="text-xs text-muted-foreground truncate">{file.file_name}</p>
+                ) : (
+                  <p className="text-[11px] text-muted-foreground">{policy.helperText}</p>
+                )}
               </div>
               <input
                 ref={(el) => { fileInputs.current[docType] = el; }}
                 type="file"
                 hidden
-                accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png"
+                accept={policy.accept}
                 onChange={(e) => {
                   const f = e.target.files?.[0];
-                  if (f) uploadFile(docType, f);
+                  if (f) void uploadFile(docType, f);
                   e.target.value = "";
                 }}
               />

@@ -39,7 +39,7 @@ alter table public.projects
 alter table public.procurement_steps
   add column if not exists step2_checklist jsonb null;
 
--- ย้ายราคากlาง legacy → approved_median_price (ขั้นตอนที่ 2)
+-- ย้ายราคากลาง legacy → approved_median_price (ขั้นตอนที่ 2)
 update public.projects
 set approved_median_price = estimated_price
 where approved_median_price is null

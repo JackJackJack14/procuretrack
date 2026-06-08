@@ -17,6 +17,8 @@ type Props = {
   onProceedStep3Hearing?: () => void;
   step3HearingProceed?: boolean;
   step3Skipping?: boolean;
+  /** โหมดดูอย่างเดียว — ปิดปุ่มข้าม/ดำเนินการขั้น 3 */
+  readOnly?: boolean;
 };
 
 export function GuidelineBox({
@@ -29,6 +31,7 @@ export function GuidelineBox({
   onProceedStep3Hearing,
   step3HearingProceed,
   step3Skipping,
+  readOnly = false,
 }: Props) {
   if (stepNumber === 3) {
     return (
@@ -38,6 +41,7 @@ export function GuidelineBox({
         onProceedHearing={onProceedStep3Hearing}
         hearingProceed={step3HearingProceed}
         skipping={step3Skipping}
+        readOnly={readOnly}
       />
     );
   }

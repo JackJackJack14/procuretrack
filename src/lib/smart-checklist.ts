@@ -1,0 +1,453 @@
+import {
+  countFilledCommitteeMembers,
+  EMPTY_STEP1_CHECKLIST,
+  EMPTY_STEP2_CHECKLIST,
+  EMPTY_STEP3_CHECKLIST,
+  EMPTY_STEP4_CHECKLIST,
+  parseBudgetInput,
+  STEP1_CHECKLIST_ITEMS,
+  STEP2_CHECKLIST_ITEMS,
+  STEP3_CHECKLIST_ITEMS,
+  STEP4_CHECKLIST_ITEMS,
+  type Step1Checklist,
+  type Step2Checklist,
+  type Step2CommitteeOrder,
+  type Step2CommitteesState,
+  type Step2MedianPrice,
+  type Step3Announcement,
+  type Step3Checklist,
+  type Step4BidResult,
+  type Step4Checklist,
+} from "@/lib/step-form";
+import type { DocItem } from "@/lib/procurement";
+
+export type ChecklistMode = "auto" | "manual";
+
+export type SmartChecklistItem<K extends string = string> = {
+  key: K;
+  label: string;
+  hint?: string;
+  mode: ChecklistMode;
+};
+
+/** โหมด Auto/Manual ต่อ key — ขั้น 1–4 อ้างอิง key เดิมใน step-form */
+const STEP_CHECKLIST_MODES: Record<number, Record<string, ChecklistMode>> = {
+  1: {
+    budget_allocated_confirmed: "auto",
+    annual_plan_published: "manual",
+    egp_plan_code_verified: "auto",
+    project_name_and_type_verified: "manual",
+    responsible_officer_confirmed: "auto",
+  },
+  2: {
+    committee_composition_verified: "auto",
+    committee_qualifications_verified: "manual",
+    appointment_order_signed: "auto",
+    median_price_calculated: "auto",
+    median_price_director_signed: "auto",
+    bg06_table_prepared: "auto",
+  },
+  3: {
+    draft_announcement_standard_compliant: "manual",
+    spec_no_lock_in_verified: "manual",
+    internal_memo_director_approval: "manual",
+    median_price_step2_verified: "auto",
+    hearing_files_prepared: "auto",
+    egp_published_for_comment: "auto",
+    comment_channel_prepared: "auto",
+  },
+  4: {
+    egp_summary_downloaded: "manual",
+    blacklist_checked: "manual",
+    conflict_of_interest_checked: "manual",
+    technical_price_reviewed: "manual",
+    evaluation_report_submitted: "auto",
+    appeal_period_checked: "auto",
+  },
+};
+
+export const STEP5_CHECKLIST_ITEMS: SmartChecklistItem[] = [
+  { key: "required_docs_uploaded", label: "อัปโหลดเอกสารบังคับครบถ้วน", mode: "auto" },
+  { key: "responsible_officer_assigned", label: "ระบุเจ้าหน้าที่ผู้รับผิดชอบแล้ว", mode: "auto" },
+  {
+    key: "winner_announcement_verified",
+    label: "ตรวจสอบประกาศผู้ชนะการเสนอราคาบน e-GP ตรงกับผลพิจารณา",
+    mode: "manual",
+  },
+  {
+    key: "evaluation_report_signed",
+    label: "ตรวจสอบรายงานผลการพิจารณาลงนามคณะกรรมการครบถ้วน",
+    mode: "manual",
+  },
+  {
+    key: "bidders_notified",
+    label: "ตรวจสอบการแจ้งผลให้ผู้ยื่นข้อเสนอทุกรายทราบแล้ว",
+    mode: "manual",
+  },
+];
+
+export const STEP6_CHECKLIST_ITEMS: SmartChecklistItem[] = [
+  { key: "responsible_officer_assigned", label: "ระบุเจ้าหน้าที่ผู้รับผิดชอบแล้ว", mode: "auto" },
+  { key: "appeal_status_recorded", label: "บันทึกสถานะอุทธรณ์จากขั้นตอนที่ 4 แล้ว", mode: "auto" },
+  {
+    key: "appeal_period_waited",
+    label: "ตรวจสอบครบระยะเวลารออุทธรณ์ 7 วันทำการ (ถ้ามี)",
+    mode: "manual",
+  },
+  {
+    key: "appeal_documents_verified",
+    label: "ตรวจสอบเอกสารอุทธรณ์/มติคณะกรรมการ (ถ้ามี)",
+    mode: "manual",
+  },
+  {
+    key: "appeal_resolution_finalized",
+    label: "ยืนยันผลการพิจารณาอุทธรณ์เรียบร้อยแล้ว",
+    mode: "manual",
+  },
+];
+
+export const STEP7_CHECKLIST_ITEMS: SmartChecklistItem[] = [
+  { key: "required_docs_uploaded", label: "อัปโหลดเอกสารบังคับครบถ้วน", mode: "auto" },
+  { key: "responsible_officer_assigned", label: "ระบุเจ้าหน้าที่ผู้รับผิดชอบแล้ว", mode: "auto" },
+  {
+    key: "draft_contract_reviewed",
+    label: "ตรวจสอบร่างสัญญาจ้างก่อสร้างตรงกับ TOR และผลเสนอราคา",
+    mode: "manual",
+  },
+  {
+    key: "contract_terms_compliant",
+    label: "ตรวจสอบเงื่อนไขสัญญาเป็นไปตามระเบียบพัสดุ",
+    mode: "manual",
+  },
+];
+
+export const STEP8_CHECKLIST_ITEMS: SmartChecklistItem[] = [
+  { key: "required_docs_uploaded", label: "อัปโหลดเอกสารบังคับครบถ้วน", mode: "auto" },
+  { key: "responsible_officer_assigned", label: "ระบุเจ้าหน้าที่ผู้รับผิดชอบแล้ว", mode: "auto" },
+  {
+    key: "contract_guarantee_verified",
+    label: "ตรวจสอบหลักประกันสัญญา (LG/แคชเชียร์เช็ค) ครบถ้วน",
+    mode: "manual",
+  },
+  {
+    key: "contract_signed_stamped",
+    label: "ตรวจสอบสัญญาต้นฉบับติดอากรแสตมป์และลงนามครบ",
+    mode: "manual",
+  },
+];
+
+export const STEP9_CHECKLIST_ITEMS: SmartChecklistItem[] = [
+  { key: "required_docs_uploaded", label: "อัปโหลดเอกสารบังคับครบถ้วน", mode: "auto" },
+  { key: "responsible_officer_assigned", label: "ระบุเจ้าหน้าที่ผู้รับผิดชอบแล้ว", mode: "auto" },
+  {
+    key: "contract_summary_verified",
+    label: "ตรวจสอบสรุปสาระสำคัญสัญญา (วงเงิน/ระยะเวลา/งวดงาน)",
+    mode: "manual",
+  },
+  {
+    key: "construction_plan_reviewed",
+    label: "ตรวจสอบแผนปฏิบัติการก่อสร้าง (Gantt) สอดคล้องสัญญา",
+    mode: "manual",
+  },
+];
+
+export const STEP10_CHECKLIST_ITEMS: SmartChecklistItem[] = [
+  { key: "required_docs_uploaded", label: "อัปโหลดเอกสารบังคับครบถ้วน", mode: "auto" },
+  { key: "responsible_officer_assigned", label: "ระบุเจ้าหน้าที่ผู้รับผิดชอบแล้ว", mode: "auto" },
+  {
+    key: "progress_reports_verified",
+    label: "ตรวจสอบรายงานความคืบหน้าและรูปถ่ายหน้างาน",
+    mode: "manual",
+  },
+  {
+    key: "delivery_inspection_complete",
+    label: "ตรวจสอบการส่งมอบ/ตรวจรับงาน (บก.11) ครบถ้วน",
+    mode: "manual",
+  },
+];
+
+const GENERIC_STEP_ITEMS: Record<number, SmartChecklistItem[]> = {
+  5: STEP5_CHECKLIST_ITEMS,
+  6: STEP6_CHECKLIST_ITEMS,
+  7: STEP7_CHECKLIST_ITEMS,
+  8: STEP8_CHECKLIST_ITEMS,
+  9: STEP9_CHECKLIST_ITEMS,
+  10: STEP10_CHECKLIST_ITEMS,
+};
+
+function withModes<K extends string>(
+  stepNumber: number,
+  items: Array<{ key: K; label: string; hint?: string }>,
+): SmartChecklistItem<K>[] {
+  const modes = STEP_CHECKLIST_MODES[stepNumber] ?? {};
+  return items.map((item) => ({
+    ...item,
+    mode: modes[item.key] ?? "manual",
+  }));
+}
+
+export function getSmartChecklistItems(stepNumber: number): SmartChecklistItem[] {
+  switch (stepNumber) {
+    case 1:
+      return withModes(1, STEP1_CHECKLIST_ITEMS);
+    case 2:
+      return withModes(2, STEP2_CHECKLIST_ITEMS);
+    case 3:
+      return withModes(3, STEP3_CHECKLIST_ITEMS);
+    case 4:
+      return withModes(4, STEP4_CHECKLIST_ITEMS);
+    default:
+      return GENERIC_STEP_ITEMS[stepNumber] ?? [];
+  }
+}
+
+export function createEmptyManualChecklist(stepNumber: number): Record<string, boolean> {
+  const items = getSmartChecklistItems(stepNumber);
+  const empty: Record<string, boolean> = {};
+  items.forEach((item) => {
+    if (item.mode === "manual") empty[item.key] = false;
+  });
+  return empty;
+}
+
+export function normalizeManualChecklist(
+  stepNumber: number,
+  raw: Record<string, boolean> | null | undefined,
+): Record<string, boolean> {
+  const base = createEmptyManualChecklist(stepNumber);
+  if (!raw) return base;
+  Object.keys(base).forEach((key) => {
+    base[key] = !!raw[key];
+  });
+  return base;
+}
+
+function requiredDocsComplete(requiredDocs: DocItem[], uploadedTypes: string[]): boolean {
+  if (requiredDocs.length === 0) return true;
+  return requiredDocs.every((d) => uploadedTypes.includes(d.name));
+}
+
+export type SmartChecklistAutoContext = {
+  stepNumber: number;
+  responsibleName?: string;
+  egpCode?: string;
+  budget?: string;
+  committees?: Step2CommitteesState;
+  committeeOrder?: Step2CommitteeOrder;
+  medianPrice?: Step2MedianPrice;
+  announcement?: Step3Announcement;
+  bidResult?: Step4BidResult;
+  approvedMedianPrice?: number | null;
+  medianPriceApprovalDate?: string | null;
+  hasAppointmentOrderDoc?: boolean;
+  hasBg06Doc?: boolean;
+  hasMemoDoc?: boolean;
+  hasDraftTorDoc?: boolean;
+  hasDraftAnnouncementDoc?: boolean;
+  hasEgpAnnouncementDoc?: boolean;
+  hasEgpScreenshotDoc?: boolean;
+  hasEvaluationReportDoc?: boolean;
+  appealStatus?: string | null;
+  requiredDocs?: DocItem[];
+  uploadedDocTypes?: string[];
+};
+
+export function computeAutoChecklistState(ctx: SmartChecklistAutoContext): Record<string, boolean> {
+  const { stepNumber } = ctx;
+  const auto: Record<string, boolean> = {};
+  const responsible = ctx.responsibleName?.trim() ?? "";
+  const uploaded = ctx.uploadedDocTypes ?? [];
+  const required = ctx.requiredDocs ?? [];
+
+  if (stepNumber === 1) {
+    const budgetVal = parseBudgetInput(ctx.budget ?? "");
+    auto.budget_allocated_confirmed = !!budgetVal && budgetVal > 0;
+    auto.egp_plan_code_verified = !!ctx.egpCode?.trim();
+    auto.responsible_officer_confirmed = !!responsible;
+    return auto;
+  }
+
+  if (stepNumber === 2) {
+    const committees = ctx.committees;
+    const order = ctx.committeeOrder;
+    const median = ctx.medianPrice;
+    if (committees) {
+      if (committees.appointment_mode === "combined") {
+        auto.committee_composition_verified =
+          countFilledCommitteeMembers(committees.combined_members) >= 3;
+      } else {
+        auto.committee_composition_verified =
+          countFilledCommitteeMembers(committees.tor_members) >= 3 &&
+          countFilledCommitteeMembers(committees.median_price_members) >= 3;
+      }
+    }
+    auto.appointment_order_signed =
+      !!order?.appointment_order_no?.trim() &&
+      !!order?.appointment_order_date?.trim() &&
+      !!ctx.hasAppointmentOrderDoc;
+    const price = median?.approved_median_price;
+    auto.median_price_calculated =
+      price != null && Number.isFinite(price) && price > 0;
+    auto.median_price_director_signed = !!median?.median_price_approval_date?.trim();
+    auto.bg06_table_prepared = !!ctx.hasBg06Doc;
+    return auto;
+  }
+
+  if (stepNumber === 3) {
+    const median =
+      ctx.approvedMedianPrice != null &&
+      Number.isFinite(ctx.approvedMedianPrice) &&
+      ctx.approvedMedianPrice > 0;
+    auto.median_price_step2_verified =
+      median && !!ctx.medianPriceApprovalDate?.trim();
+    auto.hearing_files_prepared =
+      !!ctx.hasDraftTorDoc && !!ctx.hasDraftAnnouncementDoc && !!ctx.hasBg06Doc;
+    const ann = ctx.announcement;
+    auto.egp_published_for_comment =
+      !!(ann?.egp_project_code?.trim() || ann?.egp_announcement_no?.trim()) &&
+      (!!ctx.hasEgpAnnouncementDoc || !!ctx.hasEgpScreenshotDoc);
+    auto.comment_channel_prepared = !!ann?.comment_channel_email?.trim();
+    return auto;
+  }
+
+  if (stepNumber === 4) {
+    const bid = ctx.bidResult;
+    auto.evaluation_report_submitted =
+      !!ctx.hasEvaluationReportDoc &&
+      !!bid?.evaluation_report_letter_no?.trim() &&
+      !!bid?.evaluation_report_approval_date?.trim();
+    auto.appeal_period_checked =
+      bid?.appeal_status === "none" || bid?.appeal_status === "pending";
+    return auto;
+  }
+
+  if (stepNumber >= 5 && stepNumber <= 10) {
+    auto.required_docs_uploaded = requiredDocsComplete(required, uploaded);
+    auto.responsible_officer_assigned = !!responsible;
+    if (stepNumber === 6) {
+      const status = ctx.appealStatus ?? ctx.bidResult?.appeal_status;
+      auto.appeal_status_recorded = status === "none" || status === "pending";
+    }
+    return auto;
+  }
+
+  return auto;
+}
+
+export function buildEffectiveChecklist(
+  stepNumber: number,
+  manualChecklist: Record<string, boolean>,
+  autoStates: Record<string, boolean>,
+): Record<string, boolean> {
+  const items = getSmartChecklistItems(stepNumber);
+  const effective: Record<string, boolean> = {};
+  items.forEach((item) => {
+    effective[item.key] =
+      item.mode === "auto" ? !!autoStates[item.key] : !!manualChecklist[item.key];
+  });
+  return effective;
+}
+
+export function countSmartChecklistProgress(
+  stepNumber: number,
+  effective: Record<string, boolean>,
+): { done: number; total: number; allDone: boolean } {
+  return countSmartChecklistProgressFromItems(getSmartChecklistItems(stepNumber), effective);
+}
+
+export function countSmartChecklistProgressFromItems(
+  items: SmartChecklistItem[],
+  effective: Record<string, boolean>,
+): { done: number; total: number; allDone: boolean } {
+  const total = items.length;
+  const done = items.filter((item) => effective[item.key]).length;
+  return { done, total, allDone: done >= total && total > 0 };
+}
+
+export function isSmartChecklistComplete(
+  stepNumber: number,
+  effective: Record<string, boolean>,
+): boolean {
+  const items = getSmartChecklistItems(stepNumber);
+  if (items.length === 0) return true;
+  return items.every((item) => effective[item.key]);
+}
+
+export type GenericStepComplianceIssue = { id: string; message: string };
+
+export function getGenericStepComplianceIssues(
+  stepNumber: number,
+  manualChecklist: Record<string, boolean>,
+  autoStates: Record<string, boolean>,
+  opts: {
+    responsibleName: string;
+    requiredDocs: DocItem[];
+    uploadedDocTypes: string[];
+  },
+): GenericStepComplianceIssue[] {
+  const effective = buildEffectiveChecklist(stepNumber, manualChecklist, autoStates);
+  const issues: GenericStepComplianceIssue[] = [];
+  const items = getSmartChecklistItems(stepNumber);
+
+  items.forEach((item, index) => {
+    if (!effective[item.key]) {
+      const prefix = item.mode === "auto" ? "ระบบตรวจพบยังไม่ครบ (Auto)" : "ยังไม่ได้ติ๊กยืนยัน";
+      issues.push({
+        id: `checklist-${item.key}`,
+        message: `${prefix} ข้อที่ ${index + 1}: ${item.label}`,
+      });
+    }
+  });
+
+  if (!opts.responsibleName.trim()) {
+    issues.push({
+      id: "responsible_officer",
+      message: "กรุณาระบุเจ้าหน้าที่ผู้รับผิดชอบโครงการ",
+    });
+  }
+
+  const missingDocs = opts.requiredDocs
+    .filter((d) => d.required && !opts.uploadedDocTypes.includes(d.name))
+    .map((d) => d.name);
+  if (missingDocs.length > 0) {
+    issues.push({
+      id: "required_docs",
+      message: `กรุณาอัปโหลดเอกสารบังคับ: ${missingDocs.join(", ")}`,
+    });
+  }
+
+  return issues;
+}
+
+export function isGenericStepReadyForNext(
+  stepNumber: number,
+  manualChecklist: Record<string, boolean>,
+  autoStates: Record<string, boolean>,
+  opts: Parameters<typeof getGenericStepComplianceIssues>[3],
+): boolean {
+  return getGenericStepComplianceIssues(stepNumber, manualChecklist, autoStates, opts).length === 0;
+}
+
+/** โหลด manual checklist จาก note JSON (ขั้น 5–10) */
+export function loadManualChecklistFromNote(
+  stepNumber: number,
+  note: string | null,
+): Record<string, boolean> {
+  if (!note) return createEmptyManualChecklist(stepNumber);
+  const marker = "__PROCURE_FORM__";
+  const idx = note.indexOf(marker);
+  if (idx < 0) return createEmptyManualChecklist(stepNumber);
+  try {
+    const raw = JSON.parse(note.slice(idx + marker.length)) as { checklist?: Record<string, boolean> };
+    return normalizeManualChecklist(stepNumber, raw.checklist);
+  } catch {
+    return createEmptyManualChecklist(stepNumber);
+  }
+}
+
+export {
+  EMPTY_STEP1_CHECKLIST,
+  EMPTY_STEP2_CHECKLIST,
+  EMPTY_STEP3_CHECKLIST,
+  EMPTY_STEP4_CHECKLIST,
+};

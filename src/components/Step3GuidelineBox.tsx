@@ -12,6 +12,7 @@ type Props = {
   onProceedHearing?: () => void;
   hearingProceed?: boolean;
   skipping?: boolean;
+  readOnly?: boolean;
 };
 
 export function Step3GuidelineBox({
@@ -20,6 +21,7 @@ export function Step3GuidelineBox({
   onProceedHearing,
   hearingProceed = false,
   skipping = false,
+  readOnly = false,
 }: Props) {
   const tier = getStep3HearingTier(budget);
   const alert = getStep3TierAlert(tier);
@@ -43,7 +45,7 @@ export function Step3GuidelineBox({
         {alert.message}
       </div>
 
-      {tier === "mandatory" && (
+      {tier === "mandatory" && !readOnly && (
         <div
           className="rounded-md px-3 py-2 text-sm"
           style={{ backgroundColor: "#FEF2F2", border: "1px solid #FCA5A5", color: "#991B1B" }}
@@ -52,7 +54,7 @@ export function Step3GuidelineBox({
         </div>
       )}
 
-      {tier === "discretionary" && !hearingProceed && (
+      {tier === "discretionary" && !hearingProceed && !readOnly && (
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
@@ -72,7 +74,7 @@ export function Step3GuidelineBox({
         </div>
       )}
 
-      {tier === "exempt" && (
+      {tier === "exempt" && !readOnly && (
         <button
           type="button"
           disabled={skipping}

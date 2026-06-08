@@ -77,6 +77,8 @@ import {
   STEP4_EVALUATION_APPROVAL_OVERDUE_MSG,
 } from "@/lib/step-form";
 import { formatBaht } from "@/lib/procurement";
+import { SmartChecklist } from "@/components/SmartChecklist";
+import { getSmartChecklistItems } from "@/lib/smart-checklist";
 
 const inputCls =
   "w-full h-10 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring";
@@ -138,6 +140,7 @@ export function ResponsibleOfficerField({
 type Step1FormProps = {
   checklist: Step1Checklist;
   onChecklistChange: (key: Step1ChecklistKey, checked: boolean) => void;
+  autoCheckStates: Record<string, boolean>;
   egpCode: string;
   onEgpCodeChange: (v: string) => void;
   budget: string;
@@ -146,85 +149,14 @@ type Step1FormProps = {
   onMethodChange: (v: string) => void;
   responsibleName: string;
   onResponsibleNameChange: (v: string) => void;
+  readOnly?: boolean;
 };
-
-function SmartChecklist<K extends string>({
-  stepLabel,
-  items,
-  checklist,
-  onChecklistChange,
-}: {
-  stepLabel: string;
-  items: Array<{ key: K; label: string; hint?: string }>;
-  checklist: Record<K, boolean>;
-  onChecklistChange: (key: K, checked: boolean) => void;
-}) {
-  const done = items.filter((item) => checklist[item.key]).length;
-  const total = items.length;
-  const allDone = done >= total;
-  const progressPct = Math.round((done / total) * 100);
-
-  return (
-    <div className="rounded-lg border border-primary/25 bg-primary/5 p-4 space-y-3">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div>
-          <p className="text-sm font-semibold text-foreground">Smart Checklist — {stepLabel}</p>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            ติ๊กครบทุกข้อก่อนไปขั้นถัดไป (Compliance Gatekeeper)
-          </p>
-        </div>
-        <span
-          className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-            allDone
-              ? "bg-success/15 text-success border border-success/30"
-              : "bg-background text-muted-foreground border border-border"
-          }`}
-        >
-          {done}/{total} ข้อ
-        </span>
-      </div>
-      <div className="h-1.5 rounded-full bg-muted overflow-hidden">
-        <div
-          className={`h-full rounded-full transition-all duration-300 ${
-            allDone ? "bg-success" : "bg-primary"
-          }`}
-          style={{ width: `${progressPct}%` }}
-        />
-      </div>
-      <div className="rounded-md border bg-background p-3 space-y-2.5">
-        {items.map((item, index) => (
-          <label
-            key={item.key}
-            className={`flex items-start gap-2.5 text-sm cursor-pointer rounded-md px-2 py-1.5 -mx-2 transition-colors ${
-              checklist[item.key] ? "text-foreground" : "text-muted-foreground hover:bg-muted/50"
-            }`}
-          >
-            <input
-              type="checkbox"
-              className="mt-0.5 h-4 w-4 shrink-0 accent-primary"
-              checked={checklist[item.key]}
-              onChange={(e) => onChecklistChange(item.key, e.target.checked)}
-            />
-            <span>
-              <span className="font-medium text-muted-foreground mr-1">{index + 1}.</span>
-              {item.label}
-              {item.hint && (
-                <span className="block text-xs text-muted-foreground mt-0.5 font-normal leading-relaxed">
-                  ({item.hint})
-                </span>
-              )}
-            </span>
-          </label>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 /** ขั้นตอนที่ 1 — จัดทำแผนการจัดซื้อจัดจ้าง */
 export function Step1DetailForm({
   checklist,
   onChecklistChange,
+  autoCheckStates,
   egpCode,
   onEgpCodeChange,
   budget,
@@ -233,16 +165,22 @@ export function Step1DetailForm({
   onMethodChange,
   responsibleName,
   onResponsibleNameChange,
+  readOnly,
 }: Step1FormProps) {
-  const egpUnlocked = isStep1EgpCodeUnlocked(checklist);
+  const egpUnlocked = isStep1EgpCodeUnlocked(checklist, { egpCode });
 
   return (
     <div className="space-y-4 max-w-2xl">
       <SmartChecklist
+        stepNumber={1}
         stepLabel="ขั้นตอนที่ 1"
-        items={STEP1_CHECKLIST_ITEMS}
-        checklist={checklist}
-        onChecklistChange={onChecklistChange}
+        items={getSmartChecklistItems(1)}
+        manualChecklist={checklist as Record<string, boolean>}
+        autoStates={autoCheckStates}
+        onManualChange={(key, checked) =>
+          onChecklistChange(key as Step1ChecklistKey, checked)
+        }
+        readOnly={readOnly}
       />
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
@@ -257,7 +195,7 @@ export function Step1DetailForm({
           />
           {!egpUnlocked && (
             <p className="text-xs text-warning mt-1">
-              ปลดล็อกเมื่อติ๊ก Checklist ข้อที่ 2 และ 3 แล้ว
+              ปลดล็อกเมื่อติ๊ก Manual-Check «เผยแพร่แผนจัดซื้อจัดจ้าง» และกรอกรหัส e-GP แล้ว
             </p>
           )}
         </FieldRow>
@@ -305,6 +243,8 @@ type Step2DocBinder = {
 type Step2FormProps = {
   checklist: Step2Checklist;
   onChecklistChange: (key: Step2ChecklistKey, checked: boolean) => void;
+  autoCheckStates: Record<string, boolean>;
+  readOnly?: boolean;
   committees: Step2CommitteesState;
   onCommitteeModeChange: (mode: Step2CommitteeAppointmentMode) => void;
   onCommitteeChange: (listKey: Step2CommitteeListKey, index: number, value: string) => void;
@@ -389,6 +329,8 @@ function CommitteeMemberList({
 export function Step2DetailForm({
   checklist,
   onChecklistChange,
+  autoCheckStates,
+  readOnly,
   committees,
   onCommitteeModeChange,
   onCommitteeChange,
@@ -431,10 +373,15 @@ export function Step2DetailForm({
   return (
     <div className="space-y-4 max-w-2xl">
       <SmartChecklist
+        stepNumber={2}
         stepLabel="ขั้นตอนที่ 2"
-        items={STEP2_CHECKLIST_ITEMS}
-        checklist={checklist}
-        onChecklistChange={onChecklistChange}
+        items={getSmartChecklistItems(2)}
+        manualChecklist={checklist as Record<string, boolean>}
+        autoStates={autoCheckStates}
+        onManualChange={(key, checked) =>
+          onChecklistChange(key as Step2ChecklistKey, checked)
+        }
+        readOnly={readOnly}
       />
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
@@ -636,6 +583,8 @@ type Step3DocBinder = {
 type Step3FormProps = {
   checklist: Step3Checklist;
   onChecklistChange: (key: Step3ChecklistKey, checked: boolean) => void;
+  autoCheckStates: Record<string, boolean>;
+  readOnly?: boolean;
   announcement: Step3Announcement;
   onAnnouncementChange: (patch: Partial<Step3Announcement>) => void;
   approvedMedianPrice: number | null;
@@ -655,6 +604,8 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 export function Step3DetailForm({
   checklist,
   onChecklistChange,
+  autoCheckStates,
+  readOnly,
   announcement,
   onAnnouncementChange,
   approvedMedianPrice,
@@ -837,10 +788,15 @@ export function Step3DetailForm({
   return (
     <div className="space-y-4 max-w-2xl">
       <SmartChecklist
+        stepNumber={3}
         stepLabel="ขั้นตอนที่ 3"
-        items={STEP3_CHECKLIST_ITEMS}
-        checklist={checklist}
-        onChecklistChange={onChecklistChange}
+        items={getSmartChecklistItems(3)}
+        manualChecklist={checklist as Record<string, boolean>}
+        autoStates={autoCheckStates}
+        onManualChange={(key, checked) =>
+          onChecklistChange(key as Step3ChecklistKey, checked)
+        }
+        readOnly={readOnly}
       />
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
@@ -865,7 +821,7 @@ export function Step3DetailForm({
             onChange={docBinder.onDocsChange}
           />
         </FieldRow>
-        <FieldRow label="ตารางราคากlาง (บก.06)">
+        <FieldRow label="ตารางราคากลาง (บก.06)">
           {step2Bg06Uploaded ? (
             <p className="text-xs text-muted-foreground mb-2">
               ✓ พบไฟล์ บก.06 จากขั้นตอนที่ 2 แล้ว — ไม่จำเป็นต้องอัปโหลดซ้ำ
@@ -883,10 +839,10 @@ export function Step3DetailForm({
       </div>
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-3">
-        <SectionTitle>สถานะราคากlาง (อ้างอิงขั้นตอนที่ 2)</SectionTitle>
+        <SectionTitle>สถานะราคากลาง (อ้างอิงขั้นตอนที่ 2)</SectionTitle>
         <div className="rounded-md border border-border bg-background px-3 py-2 text-sm space-y-1">
           <p>
-            ราคากlางที่อนุมัติ:{" "}
+            ราคากลางที่อนุมัติ:{" "}
             <span className="font-medium">
               {medianDisplay != null && medianDisplay > 0
                 ? `${formatBaht(medianDisplay)} บาท`
@@ -894,7 +850,7 @@ export function Step3DetailForm({
             </span>
           </p>
           <p className="text-muted-foreground text-xs">
-            วันที่อนุมัติราคากlาง:{" "}
+            วันที่อนุมัติราคากลาง:{" "}
             {medianPriceApprovalDate
               ? formatThaiDate(medianPriceApprovalDate)
               : "— ยังไม่มีข้อมูล"}
@@ -1228,6 +1184,8 @@ type Step4DocBinder = {
 type Step4FormProps = {
   checklist: Step4Checklist;
   onChecklistChange: (key: Step4ChecklistKey, checked: boolean) => void;
+  autoCheckStates: Record<string, boolean>;
+  readOnly?: boolean;
   bidResult: Step4BidResult;
   onBidResultChange: (patch: Partial<Step4BidResult>) => void;
   responsibleName: string;
@@ -1243,16 +1201,25 @@ type Step4FormProps = {
 function Step4SmartChecklist({
   checklist,
   onChecklistChange,
+  autoCheckStates,
+  readOnly,
 }: {
   checklist: Step4Checklist;
   onChecklistChange: (key: Step4ChecklistKey, checked: boolean) => void;
+  autoCheckStates: Record<string, boolean>;
+  readOnly?: boolean;
 }) {
   return (
     <SmartChecklist
+      stepNumber={4}
       stepLabel="ขั้นตอนที่ 4"
-      items={STEP4_CHECKLIST_ITEMS}
-      checklist={checklist}
-      onChecklistChange={onChecklistChange}
+      items={getSmartChecklistItems(4)}
+      manualChecklist={checklist as Record<string, boolean>}
+      autoStates={autoCheckStates}
+      onManualChange={(key, checked) =>
+        onChecklistChange(key as Step4ChecklistKey, checked)
+      }
+      readOnly={readOnly}
     />
   );
 }
@@ -1268,6 +1235,8 @@ function parseOptionalCount(raw: string): number | null {
 export function Step4DetailForm({
   checklist,
   onChecklistChange,
+  autoCheckStates,
+  readOnly,
   bidResult,
   onBidResultChange,
   responsibleName,
@@ -1362,7 +1331,12 @@ export function Step4DetailForm({
 
   return (
     <div className="space-y-4 max-w-2xl">
-      <Step4SmartChecklist checklist={checklist} onChecklistChange={onChecklistChange} />
+      <Step4SmartChecklist
+        checklist={checklist}
+        onChecklistChange={onChecklistChange}
+        autoCheckStates={autoCheckStates}
+        readOnly={readOnly}
+      />
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
         <SectionTitle>กลุ่มที่ 1: ข้อมูลการแข่งขัน (ดึงค่ามาจากระบบ e-GP)</SectionTitle>
@@ -1597,5 +1571,34 @@ export function Step4DetailForm({
         )}
       </div>
     </div>
+  );
+}
+
+/** Smart Checklist มาตรฐาน — ขั้นตอนที่ 5–10 */
+export function GenericStepChecklistPanel({
+  stepNumber,
+  manualChecklist,
+  onManualChange,
+  autoCheckStates,
+  readOnly,
+}: {
+  stepNumber: number;
+  manualChecklist: Record<string, boolean>;
+  onManualChange: (key: string, checked: boolean) => void;
+  autoCheckStates: Record<string, boolean>;
+  readOnly?: boolean;
+}) {
+  const items = getSmartChecklistItems(stepNumber);
+  if (items.length === 0) return null;
+  return (
+    <SmartChecklist
+      stepNumber={stepNumber}
+      stepLabel={`ขั้นตอนที่ ${stepNumber}`}
+      items={items}
+      manualChecklist={manualChecklist}
+      autoStates={autoCheckStates}
+      onManualChange={onManualChange}
+      readOnly={readOnly}
+    />
   );
 }
