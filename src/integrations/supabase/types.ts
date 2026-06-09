@@ -645,6 +645,7 @@ export type Database = {
           estimated_price: number | null
           evaluation_report_approval_date: string | null
           evaluation_report_letter_no: string | null
+          final_agreed_amount: number | null
           fiscal_year: number
           id: string
           method: string
@@ -683,6 +684,7 @@ export type Database = {
           estimated_price?: number | null
           evaluation_report_approval_date?: string | null
           evaluation_report_letter_no?: string | null
+          final_agreed_amount?: number | null
           fiscal_year: number
           id?: string
           method?: string
@@ -721,6 +723,7 @@ export type Database = {
           estimated_price?: number | null
           evaluation_report_approval_date?: string | null
           evaluation_report_letter_no?: string | null
+          final_agreed_amount?: number | null
           fiscal_year?: number
           id?: string
           method?: string

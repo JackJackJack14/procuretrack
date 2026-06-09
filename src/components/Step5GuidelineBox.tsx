@@ -1,0 +1,57 @@
+import {
+  STEP5_GUIDELINE_DURATION,
+  STEP5_GUIDELINE_TODO,
+  STEP5_GUIDELINE_WARNINGS,
+} from "@/lib/step5-guideline";
+
+function GuidelineBulletList({ items }: { items: readonly string[] }) {
+  return (
+    <ul className="mt-2 space-y-1.5 text-sm text-foreground/90 leading-relaxed">
+      {items.map((item) => (
+        <li key={item} className="flex gap-2">
+          <span className="text-muted-foreground shrink-0">•</span>
+          <span>{item}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+export function Step5GuidelineBox() {
+  return (
+    <div
+      className="rounded-lg p-4 mb-4 space-y-4"
+      style={{
+        backgroundColor: "#EFF6FF",
+        borderLeft: "4px solid #2563EB",
+      }}
+    >
+      <section>
+        <h3 className="font-semibold text-foreground text-sm">📋 คุณต้องทำในขั้นตอนนี้</h3>
+        <GuidelineBulletList items={STEP5_GUIDELINE_TODO} />
+      </section>
+
+      <section className="rounded-md border border-blue-200/80 bg-white/60 px-3 py-3">
+        <h3 className="font-semibold text-foreground text-sm">⏱ ระยะเวลาดำเนินการ</h3>
+        <GuidelineBulletList items={STEP5_GUIDELINE_DURATION} />
+      </section>
+
+      <section
+        className="rounded-md px-3 py-3"
+        style={{ backgroundColor: "#FFF7ED", border: "1px solid #FDBA74" }}
+      >
+        <h3 className="font-semibold text-sm" style={{ color: "#C2410C" }}>
+          ⚠️ ข้อควรระวัง
+        </h3>
+        <ul className="mt-2 space-y-1.5 text-sm leading-relaxed" style={{ color: "#9A3412" }}>
+          {STEP5_GUIDELINE_WARNINGS.map((item) => (
+            <li key={item} className="flex gap-2">
+              <span className="shrink-0">•</span>
+              <span>{item}</span>
+            </li>
+          ))}
+        </ul>
+      </section>
+    </div>
+  );
+}

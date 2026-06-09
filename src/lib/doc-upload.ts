@@ -108,6 +108,54 @@ export async function openStepDocument(storagePath: string): Promise<void> {
   if (url) window.open(url, "_blank");
 }
 
+/** รวมเล่มเอกสาร Audit ของขั้นตอนเป็น ZIP */
+export async function downloadStepAuditZip(
+  stepNumber: number,
+  stepLabel: string,
+  docs: StepDocRecord[],
+): Promise<void> {
+  const stepDocs = docs.filter((d) => d.step_number === stepNumber);
+  if (stepDocs.length === 0) {
+    toast.error("ยังไม่มีไฟล์หลักฐานในขั้นตอนนี้");
+    return;
+  }
+
+  const JSZip = (await import("jszip")).default;
+  const zip = new JSZip();
+  let added = 0;
+
+  for (const doc of stepDocs) {
+    const url = await getSignedDocUrl(doc.storage_path, 600);
+    if (!url) continue;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) continue;
+      const blob = await res.blob();
+      const safeType = doc.document_type.replace(/[/\\?%*:|"<>]/g, "_").slice(0, 80);
+      const safeName = doc.file_name.replace(/[/\\?%*:|"<>]/g, "_");
+      zip.file(`${String(added + 1).padStart(2, "0")}_${safeType}__${safeName}`, blob);
+      added++;
+    } catch {
+      /* skip failed file */
+    }
+  }
+
+  if (added === 0) {
+    toast.error("ดาวน์โหลดไฟล์ไม่สำเร็จ — ลองใหม่อีกครั้ง");
+    return;
+  }
+
+  const blob = await zip.generateAsync({ type: "blob" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `Audit_Step${stepNumber}_${stepLabel.replace(/\s+/g, "_")}.zip`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(a.href);
+  toast.success(`รวมเล่ม Audit ${added} ไฟล์เรียบร้อย`);
+}
+
 export async function downloadStepDocument(doc: StepDocRecord): Promise<void> {
   const url = await getSignedDocUrl(doc.storage_path, 600);
   if (!url) return;

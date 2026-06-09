@@ -172,10 +172,34 @@ export function defaultPublicationEndISO(
   return toISODate(addWorkdays(start, workdaysAfter));
 }
 
+/** วันสิ้นสุดการรับซองราคา — วันเริ่ม + N วันทำการถัดจากวันเริ่ม (ไม่นับวันเริ่ม) */
+export function bidSubmissionEndAfterPeriodISO(
+  bidPeriodStartISO: string,
+  workdays: number,
+): string {
+  if (!bidPeriodStartISO || workdays <= 0) return "";
+  return defaultPublicationEndISO(bidPeriodStartISO, workdays);
+}
+
 /** วันเดดไลน์พิจารณาผล — วันปิดรับซอง + N วันทำการ (ใช้ addWorkdays ข้ามวันหยุด) */
 export function reviewDeadlineISO(bidSubmissionEndISO: string, workdays: number): string {
   if (!bidSubmissionEndISO || workdays <= 0) return "";
   return defaultPublicationEndISO(bidSubmissionEndISO, workdays);
+}
+
+/** ระยะพิจารณาผลคณะกรรมการหลังปิดรับซอง — ระเบียบพัสดุ ข้อ 55 */
+export const STEP4_COMMITTEE_REVIEW_WORKDAYS_AFTER_BID_END = 1;
+
+export const STEP4_COMMITTEE_REVIEW_REGULATION_NOTE =
+  "ภายในวันทำการถัดไปตามระเบียบพัสดุ ข้อ 55";
+
+/** วันเดดไลน์พิจารณาผลคณะกรรมการ — วันสิ้นสุดการยื่นข้อเสนอ + 1 วันทำการ */
+export function committeeReviewDeadlineAfterBidEndISO(bidSubmissionEndISO: string): string {
+  if (!bidSubmissionEndISO.trim()) return "";
+  return defaultPublicationEndISO(
+    bidSubmissionEndISO,
+    STEP4_COMMITTEE_REVIEW_WORKDAYS_AFTER_BID_END,
+  );
 }
 
 /** @deprecated ใช้ defaultPublicationEndISO แทน */

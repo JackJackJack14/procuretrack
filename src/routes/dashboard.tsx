@@ -67,7 +67,7 @@ function DashboardPage() {
     const budget = projects.reduce((s, p) => s + Number(p.budget ?? 0), 0);
     const active = projects.filter((p) => p.status === "active").length;
     const appealPending = projects.filter((p) => p.appeal_status === "pending").length;
-    const readyForContract = projects.filter((p) => p.appeal_status === "none" && p.current_step >= 4).length;
+    const readyForContract = projects.filter((p) => p.appeal_status === "none" && p.current_step >= 6).length;
     return { total, budget, active, urgent: redAlerts.length, appealPending, readyForContract };
   }, [projects, redAlerts]);
 
@@ -264,7 +264,7 @@ function AppealStatusBadge({
   appealStatus?: string | null;
   currentStep: number;
 }) {
-  if (currentStep < 4 || !appealStatus) return null;
+  if (currentStep < 6 || !appealStatus) return null;
   if (appealStatus === "pending") {
     return (
       <span className="text-[10px] px-2 py-0.5 rounded-full bg-destructive/10 text-destructive font-medium whitespace-nowrap">

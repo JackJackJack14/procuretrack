@@ -3,7 +3,11 @@ import {
   EMPTY_STEP2_CHECKLIST,
   EMPTY_STEP3_CHECKLIST,
   buildProjectStep4Fields,
+  buildProjectStep5Fields,
+  buildProjectAppealFields,
   EMPTY_STEP4_BID_RESULT,
+  EMPTY_STEP5_ANNOUNCEMENT,
+  EMPTY_STEP6_APPEAL,
 } from "@/lib/step-form";
 
 /** ข้อความยืนยันก่อน Hard Rollback */
@@ -36,7 +40,11 @@ export function getStepRollbackProjectWipe(
         committee_review_workdays: null,
       };
     case 4:
-      return buildProjectStep4Fields({ ...EMPTY_STEP4_BID_RESULT, appeal_status: "none" });
+      return buildProjectStep4Fields({ ...EMPTY_STEP4_BID_RESULT });
+    case 5:
+      return buildProjectStep5Fields({ ...EMPTY_STEP5_ANNOUNCEMENT });
+    case 6:
+      return buildProjectAppealFields({ ...EMPTY_STEP6_APPEAL });
     default:
       return {};
   }

@@ -1,11 +1,22 @@
 /** ตัวเลือกวิธีจัดซื้อในฟอร์มขั้นตอนที่ 1 (3 วิธีหลัก) */
-import { buildEffectiveChecklist, computeAutoChecklistState } from "@/lib/smart-checklist";
+import {
+  buildStep4EvidenceFieldValues,
+  getChecklistEvidenceIssues,
+} from "@/lib/form-audit-trail";
+import { STEP4_DOC, STEP5_DOC } from "@/lib/step-doc-types";
+import {
+  buildEffectiveChecklist,
+  computeAutoChecklistState,
+  STEP5_CHECKLIST_ITEMS,
+} from "@/lib/smart-checklist";
 import {
   countWorkdaysAfterStartISO,
   countWorkdaysBetweenISO,
-  reviewDeadlineISO,
+  bidSubmissionEndAfterPeriodISO,
+  committeeReviewDeadlineAfterBidEndISO,
   validateStep3PublicationDates,
 } from "@/lib/workdays";
+import { formatThaiDateSlash } from "@/lib/utils";
 
 export const STEP1_METHOD_OPTIONS = [
   { value: "e_bidding", label: "วิธีประกวดราคาอิเล็กทรอนิกส์ (e-bidding)" },
@@ -450,12 +461,28 @@ export type Step3Announcement = {
   committee_review_workdays?: number | null;
 };
 
-/** สถานะการอุทธรณ์ — ขั้นตอนที่ 4 */
-export type Step4AppealStatus = "none" | "pending" | "";
+/** สถานะการอุทธรณ์ — บันทึกในขั้นตอนที่ 6 (อุทธรณ์) */
+export type StepAppealStatus = "none" | "pending" | "";
 
-export const APPEAL_STATUS_LABELS: Record<Exclude<Step4AppealStatus, "">, string> = {
+/** @deprecated ใช้ StepAppealStatus */
+export type Step4AppealStatus = StepAppealStatus;
+
+export const APPEAL_STATUS_LABELS: Record<Exclude<StepAppealStatus, "">, string> = {
   none: "พร้อมทำสัญญา",
   pending: "ติดอุทธรณ์",
+};
+
+/** ข้อมูลอุทธรณ์ — ขั้นตอนที่ 6 */
+export type Step6AppealState = {
+  appeal_status?: StepAppealStatus;
+  appeal_report_letter_no?: string;
+  appeal_consideration_status?: string;
+};
+
+export const EMPTY_STEP6_APPEAL: Required<Omit<Step6AppealState, never>> = {
+  appeal_status: "",
+  appeal_report_letter_no: "",
+  appeal_consideration_status: "",
 };
 
 /** Smart Checklist — ขั้นตอนที่ 4 */
@@ -464,8 +491,7 @@ export type Step4ChecklistKey =
   | "blacklist_checked"
   | "conflict_of_interest_checked"
   | "technical_price_reviewed"
-  | "evaluation_report_submitted"
-  | "appeal_period_checked";
+  | "evaluation_report_submitted";
 
 export type Step4Checklist = Record<Step4ChecklistKey, boolean>;
 
@@ -475,7 +501,6 @@ export const STEP4_CHECKLIST_ITEMS: Array<{ key: Step4ChecklistKey; label: strin
   { key: "conflict_of_interest_checked", label: "ตรวจสอบผลประโยชน์ร่วมกันของผู้ยื่นซอง" },
   { key: "technical_price_reviewed", label: "พิจารณาข้อเสนอเทคนิคและราคาเรียบร้อย" },
   { key: "evaluation_report_submitted", label: "จัดทำบันทึกรายงานผลพิจารณาเสนอหัวหน้าหน่วยงาน" },
-  { key: "appeal_period_checked", label: "ตรวจสอบสถานะ/ระยะเวลาอุทธรณ์ 7 วันทำการ" },
 ];
 
 export const EMPTY_STEP4_CHECKLIST: Step4Checklist = {
@@ -484,24 +509,43 @@ export const EMPTY_STEP4_CHECKLIST: Step4Checklist = {
   conflict_of_interest_checked: false,
   technical_price_reviewed: false,
   evaluation_report_submitted: false,
-  appeal_period_checked: false,
 };
 
-/** ผลการเสนอราคา — ขั้นตอนที่ 4 (winning_bid_amount ส่งต่อมูลค่าสัญญา) */
+/** ประกาศผู้ชนะ — ขั้นตอนที่ 5 */
+export type Step5Announcement = {
+  winner_announcement_no?: string;
+  winner_announcement_date?: string;
+};
+
+export const EMPTY_STEP5_ANNOUNCEMENT: Required<Step5Announcement> = {
+  winner_announcement_no: "",
+  winner_announcement_date: "",
+};
+
+/** Smart Checklist — ขั้นตอนที่ 5 (manual keys เท่านั้น — auto คำนวณจากฟอร์ม) */
+export type Step5ChecklistKey = "egp_winner_announced" | "physical_board_posted";
+
+export type Step5Checklist = Record<Step5ChecklistKey, boolean>;
+
+export const EMPTY_STEP5_CHECKLIST: Step5Checklist = {
+  egp_winner_announced: false,
+  physical_board_posted: false,
+};
+
+/** ผลการเสนอราคา — ขั้นตอนที่ 4 */
 export type Step4BidResult = {
   egp_doc_request_count?: number | null;
   egp_bid_submission_count?: number | null;
   winning_bidder_name?: string;
-  /** ราคาที่เสนอชนะ (บาท) — เชื่อมโยง contract_amount ในขั้นตอนทำสัญญา */
+  /** ราคาที่เสนอชนะ (บาท) */
   winning_bid_amount?: number | null;
+  /** ราคาที่ตกลงซื้อหรือจ้างจริง (บาท) — กรณีต่อรองราคา; ส่งต่อมูลค่าสัญญา */
+  final_agreed_amount?: number | null;
   evaluation_report_letter_no?: string;
   evaluation_report_approval_date?: string;
   /** ขยายเวลาพิจารณาผล — เมื่ออนุมัติเกินเดดไลน์ */
   review_extension_memo_no?: string;
   review_extension_approval_date?: string;
-  appeal_status?: Step4AppealStatus;
-  appeal_report_letter_no?: string;
-  appeal_consideration_status?: string;
 };
 
 export type Step2ComplianceLog = {
@@ -523,8 +567,14 @@ export type Step3FormData = {
   announcement?: Step3Announcement;
 };
 export type Step4FormData = { checklist?: Step4Checklist; bidResult?: Step4BidResult };
+export type Step5FormData = { checklist?: Step5Checklist; announcement?: Step5Announcement };
 
-export type StepFormData = Step1FormData | Step2FormData | Step3FormData | Step4FormData;
+export type StepFormData =
+  | Step1FormData
+  | Step2FormData
+  | Step3FormData
+  | Step4FormData
+  | Step5FormData;
 
 export const EMPTY_STEP4_BID_RESULT: Required<
   Omit<Step4BidResult, never>
@@ -533,13 +583,11 @@ export const EMPTY_STEP4_BID_RESULT: Required<
   egp_bid_submission_count: null,
   winning_bidder_name: "",
   winning_bid_amount: null,
+  final_agreed_amount: null,
   evaluation_report_letter_no: "",
   evaluation_report_approval_date: "",
   review_extension_memo_no: "",
   review_extension_approval_date: "",
-  appeal_status: "",
-  appeal_report_letter_no: "",
-  appeal_consideration_status: "",
 };
 
 export const EMPTY_STEP3_ANNOUNCEMENT: Required<
@@ -735,15 +783,148 @@ export const STEP4_EVALUATION_APPROVAL_BEFORE_BID_END_MSG =
 export const STEP4_EVALUATION_APPROVAL_OVERDUE_MSG =
   "⚠️ เกินกำหนดเวลาพิจารณาผล โปรดระบุข้อมูลการขอขยายเวลา";
 
-/** วันเดดไลน์พิจารณาผล — วันปิดรับซอง + จำนวนวันทำการ (ขั้นตอนที่ 3) */
-export function computeStep4ReviewDeadlineISO(
-  bidSubmissionEndISO: string,
-  committeeReviewWorkdays: number | null,
+/** ไทม์ไลน์ขั้นตอนที่ 4 — คำนวณจากข้อมูลขั้นตอนที่ 3 แบบลำดับขั้น */
+export type Step4Timeline = {
+  /** วันที่หัวหน้าหน่วยงานอนุมัติขอซื้อขอจ้าง (ขั้นตอนที่ 3) */
+  bidPeriodStartISO: string;
+  /** ระยะเวลารับซองราคา/พิจารณาผล (วันทำการ) จากขั้นตอนที่ 3 */
+  bidPeriodWorkdays: number | null;
+  /** วันสิ้นสุดการยื่นข้อเสนอ (ปิดรับซอง) */
+  bidSubmissionEndISO: string;
+  /** เดดไลน์คณะกรรมการพิจารณาผล — ปิดรับซอง + 1 วันทำการ (ข้อ 55) */
+  committeeReviewDeadlineISO: string;
+};
+
+export function isStep4TimelineComplete(timeline: Step4Timeline): boolean {
+  return !!(
+    timeline.bidPeriodStartISO &&
+    timeline.bidPeriodWorkdays != null &&
+    timeline.bidPeriodWorkdays > 0 &&
+    timeline.bidSubmissionEndISO &&
+    timeline.committeeReviewDeadlineISO
+  );
+}
+
+/** วันเริ่มนับรับซองราคา — อนุมัติรายงานขอซื้อขอจ้างจากขั้นตอนที่ 3 */
+export function resolveBidPeriodStartDate(
+  project: {
+    procurement_request_approval_date?: string | null;
+  } | null,
+  step3Note: string | null,
 ): string {
-  if (!bidSubmissionEndISO || !committeeReviewWorkdays || committeeReviewWorkdays <= 0) {
+  const fromProject = project?.procurement_request_approval_date?.trim();
+  if (fromProject) return fromProject;
+  const form = loadStep3FormFromNote(step3Note);
+  return form.announcement?.procurement_request_approval_date?.trim() ?? "";
+}
+
+/** วันสิ้นสุดการยื่นข้อเสนอ = วันเริ่มรับซอง + ระยะเวลาจากขั้นตอนที่ 3 */
+export function computeBidSubmissionEndISO(
+  bidPeriodStartISO: string,
+  bidPeriodWorkdays: number | null,
+): string {
+  if (!bidPeriodStartISO || bidPeriodWorkdays == null || bidPeriodWorkdays <= 0) {
     return "";
   }
-  return reviewDeadlineISO(bidSubmissionEndISO, committeeReviewWorkdays);
+  return bidSubmissionEndAfterPeriodISO(bidPeriodStartISO, bidPeriodWorkdays);
+}
+
+/** คำนวณไทม์ไลน์ขั้นตอนที่ 4 ครบชุดจากข้อมูลขั้นตอนที่ 3 */
+export function computeStep4Timeline(
+  project: {
+    committee_review_workdays?: number | null;
+    procurement_request_approval_date?: string | null;
+  } | null,
+  step3Note: string | null,
+): Step4Timeline {
+  const bidPeriodStartISO = resolveBidPeriodStartDate(project, step3Note);
+  const bidPeriodWorkdays = resolveCommitteeReviewWorkdays(project, step3Note);
+  const bidSubmissionEndISO = computeBidSubmissionEndISO(
+    bidPeriodStartISO,
+    bidPeriodWorkdays,
+  );
+  const committeeReviewDeadlineISO =
+    committeeReviewDeadlineAfterBidEndISO(bidSubmissionEndISO);
+  return {
+    bidPeriodStartISO,
+    bidPeriodWorkdays,
+    bidSubmissionEndISO,
+    committeeReviewDeadlineISO,
+  };
+}
+
+/** ข้อความกำหนดการอ่านอย่างเดียว — ขั้นตอนที่ 4 (2 บรรทัด) */
+export function getStep4TimelineDisplayLines(timeline: Step4Timeline): {
+  bidSubmissionEndLine: string;
+  committeeDeadlineLine: string;
+} | null {
+  if (!isStep4TimelineComplete(timeline)) return null;
+  return {
+    bidSubmissionEndLine: `📅 วันสิ้นสุดการรับซองราคา: ${formatThaiDateSlash(timeline.bidSubmissionEndISO)}`,
+    committeeDeadlineLine:
+      `⏱ กำหนดเดดไลน์คณะกรรมการ: ต้องพิจารณาผลให้แล้วเสร็จภายในวันที่ ` +
+      `${formatThaiDateSlash(timeline.committeeReviewDeadlineISO)} ` +
+      `(ตามระเบียบกระทรวงการคลังฯ ข้อ 55)`,
+  };
+}
+
+/** @deprecated ใช้ getStep4TimelineDisplayLines แทน */
+export function buildStep4CommitteeScheduleMessage(timeline: Step4Timeline): string {
+  const lines = getStep4TimelineDisplayLines(timeline);
+  if (!lines) return "";
+  return `${lines.committeeDeadlineLine}`;
+}
+
+/** มูลค่าสัญญาที่ส่งต่อขั้นตอนที่ 8 — ใช้ราคาตกลงจริงก่อน หากไม่มีใช้ราคาเสนอชนะ */
+export function resolveStep4ContractAmount(bidResult: Pick<Step4BidResult, "final_agreed_amount" | "winning_bid_amount">): number | null {
+  const final = bidResult.final_agreed_amount;
+  if (final != null && Number.isFinite(final) && final > 0) return final;
+  const winning = bidResult.winning_bid_amount;
+  if (winning != null && Number.isFinite(winning) && winning > 0) return winning;
+  return null;
+}
+
+/** วันเดดไลน์พิจารณาผลคณะกรรมการ — วันสิ้นสุดการยื่นข้อเสนอ + 1 วันทำการ (ข้อ 55) */
+export function computeStep4ReviewDeadlineISO(bidSubmissionEndISO: string): string {
+  return committeeReviewDeadlineAfterBidEndISO(bidSubmissionEndISO);
+}
+
+/** @deprecated ใช้ computeStep4Timeline().bidSubmissionEndISO แทน */
+export function resolveBidSubmissionEndDate(
+  project: {
+    committee_review_workdays?: number | null;
+    procurement_request_approval_date?: string | null;
+  } | null,
+  step3Note: string | null,
+): string {
+  return computeStep4Timeline(project, step3Note).bidSubmissionEndISO;
+}
+
+/** ค่าเริ่มต้นวันอนุมัติผลพิจารณา — วันนี้ (ไม่ต่ำกว่าเดดไลน์คณะกรรมการ) */
+export function defaultStep4EvaluationApprovalDateISO(
+  committeeReviewDeadlineISO: string,
+): string {
+  const today = todayISO();
+  if (!committeeReviewDeadlineISO) return today;
+  return today >= committeeReviewDeadlineISO ? today : committeeReviewDeadlineISO;
+}
+
+export function isStep4EvaluationApprovalBeforeBidEnd(
+  approvalISO: string,
+  bidSubmissionEndISO: string,
+): boolean {
+  const approval = approvalISO.trim();
+  return !!bidSubmissionEndISO && !!approval && approval < bidSubmissionEndISO;
+}
+
+/** พิจารณาผลเกินเดดไลน์ — หลังเดดไลน์คณะกรรมการ (ปิดรับซอง + 1 วันทำการ ข้อ 55) */
+export function isStep4EvaluationApprovalOverdue(
+  approvalISO: string,
+  committeeReviewDeadlineISO: string,
+): boolean {
+  const approval = approvalISO.trim();
+  if (!approval || !committeeReviewDeadlineISO) return false;
+  return approval > committeeReviewDeadlineISO;
 }
 
 /** วันนี้ (yyyy-mm-dd) ตามเวลาท้องถิ่น */
@@ -756,42 +937,6 @@ export function todayISO(): string {
   return `${y}-${m}-${day}`;
 }
 
-/** วันสิ้นสุดการยื่นข้อเสนอ (วันปิดรับซอง) จากขั้นตอนที่ 3 */
-export function resolveBidSubmissionEndDate(step3Note: string | null): string {
-  const form = loadStep3FormFromNote(step3Note);
-  return form.announcement?.publication_end?.trim() ?? "";
-}
-
-/** ค่าเริ่มต้นวันอนุมัติผลพิจารณา — วันนี้ (ไม่ต่ำกว่าวันปิดรับซอง) */
-export function defaultStep4EvaluationApprovalDateISO(bidSubmissionEndISO: string): string {
-  const today = todayISO();
-  if (!bidSubmissionEndISO) return today;
-  return today >= bidSubmissionEndISO ? today : bidSubmissionEndISO;
-}
-
-export function isStep4EvaluationApprovalBeforeBidEnd(
-  approvalISO: string,
-  bidSubmissionEndISO: string,
-): boolean {
-  const approval = approvalISO.trim();
-  return !!bidSubmissionEndISO && !!approval && approval < bidSubmissionEndISO;
-}
-
-/** พิจารณาผลเกินเดดไลน์ที่คำนวณจากขั้นตอนที่ 3 */
-export function isStep4EvaluationApprovalOverdue(
-  approvalISO: string,
-  bidSubmissionEndISO: string,
-  committeeReviewWorkdays: number | null,
-): boolean {
-  const approval = approvalISO.trim();
-  const deadline = computeStep4ReviewDeadlineISO(
-    bidSubmissionEndISO,
-    committeeReviewWorkdays,
-  );
-  if (!approval || !deadline) return false;
-  return approval > deadline;
-}
-
 function step4BidResultHasData(b: Step4BidResult | undefined): boolean {
   if (!b) return false;
   return !!(
@@ -799,18 +944,21 @@ function step4BidResultHasData(b: Step4BidResult | undefined): boolean {
     b.egp_bid_submission_count != null ||
     b.winning_bidder_name?.trim() ||
     (b.winning_bid_amount != null && b.winning_bid_amount > 0) ||
+    (b.final_agreed_amount != null && b.final_agreed_amount > 0) ||
     b.evaluation_report_letter_no?.trim() ||
     b.evaluation_report_approval_date?.trim() ||
     b.review_extension_memo_no?.trim() ||
-    b.review_extension_approval_date?.trim() ||
-    b.appeal_status ||
-    b.appeal_report_letter_no?.trim() ||
-    b.appeal_consideration_status?.trim()
+    b.review_extension_approval_date?.trim()
   );
 }
 
-export function isStep4AppealBlocking(bidResult: Step4BidResult): boolean {
-  return bidResult.appeal_status === "pending";
+export function isAppealBlocking(appeal: Pick<Step6AppealState, "appeal_status">): boolean {
+  return appeal.appeal_status === "pending";
+}
+
+/** @deprecated ใช้ isAppealBlocking */
+export function isStep4AppealBlocking(bidResult: { appeal_status?: StepAppealStatus }): boolean {
+  return isAppealBlocking(bidResult);
 }
 
 export function isStep1ChecklistComplete(checklist: Step1Checklist): boolean {
@@ -1303,19 +1451,30 @@ export function getStep4ComplianceIssues(
   bidResult: Step4BidResult,
   opts: {
     responsibleName: string;
-    hasEvaluationReportDoc: boolean;
-    bidSubmissionEndDate?: string;
-    committeeReviewWorkdays?: number | null;
+    hasEgpBidSummaryDoc: boolean;
+    hasBlacklistEvidenceDoc: boolean;
+    hasConflictEvidenceDoc: boolean;
+    hasCommitteeEvaluationDoc: boolean;
+    timeline?: Step4Timeline;
   },
   autoStates?: Record<string, boolean>,
 ): Step4ComplianceIssue[] {
   const issues: Step4ComplianceIssue[] = [];
+  const timeline = opts.timeline ?? {
+    bidPeriodStartISO: "",
+    bidPeriodWorkdays: null,
+    bidSubmissionEndISO: "",
+    committeeReviewDeadlineISO: "",
+  };
   const auto =
     autoStates ??
     computeAutoChecklistState({
       stepNumber: 4,
       bidResult,
-      hasEvaluationReportDoc: opts.hasEvaluationReportDoc,
+      hasEgpBidSummaryDoc: opts.hasEgpBidSummaryDoc,
+      hasBlacklistEvidenceDoc: opts.hasBlacklistEvidenceDoc,
+      hasConflictEvidenceDoc: opts.hasConflictEvidenceDoc,
+      hasCommitteeEvaluationDoc: opts.hasCommitteeEvaluationDoc,
     });
   const effective = buildEffectiveChecklist(4, checklist as Record<string, boolean>, auto);
 
@@ -1328,6 +1487,14 @@ export function getStep4ComplianceIssues(
       });
     }
   });
+
+  if (!isStep4TimelineComplete(timeline)) {
+    issues.push({
+      id: "step4_timeline",
+      message:
+        "กรุณาระบุวันที่อนุมัติขอซื้อขอจ้างและระยะเวลารับซองราคา (วันทำการ) ในรายงานขอซื้อขอจ้าง ขั้นตอนที่ 3",
+    });
+  }
 
   if (
     bidResult.egp_doc_request_count == null ||
@@ -1365,6 +1532,15 @@ export function getStep4ComplianceIssues(
       message: "กรุณาระบุราคาที่เสนอชนะ (กลุ่มที่ 2)",
     });
   }
+  if (
+    bidResult.final_agreed_amount != null &&
+    (!Number.isFinite(bidResult.final_agreed_amount) || bidResult.final_agreed_amount <= 0)
+  ) {
+    issues.push({
+      id: "final_agreed_amount",
+      message: "ราคาที่ตกลงซื้อหรือจ้างจริงต้องมากกว่า 0 (กลุ่มที่ 2)",
+    });
+  }
   if (!bidResult.evaluation_report_letter_no?.trim()) {
     issues.push({
       id: "evaluation_report_letter_no",
@@ -1374,12 +1550,12 @@ export function getStep4ComplianceIssues(
   if (!bidResult.evaluation_report_approval_date?.trim()) {
     issues.push({
       id: "evaluation_report_approval_date",
-      message: "กรุณาระบุวันที่หัวหน้าหน่วยงานลงนามอนุมัติ (กลุ่มที่ 3)",
+      message: "กรุณาระบุวันที่หัวหน้าหน่วยงานลงนามอนุมัติผล (กลุ่มที่ 3)",
     });
   } else if (
     isStep4EvaluationApprovalBeforeBidEnd(
       bidResult.evaluation_report_approval_date,
-      opts.bidSubmissionEndDate ?? "",
+      timeline.bidSubmissionEndISO,
     )
   ) {
     issues.push({
@@ -1389,8 +1565,7 @@ export function getStep4ComplianceIssues(
   } else if (
     isStep4EvaluationApprovalOverdue(
       bidResult.evaluation_report_approval_date,
-      opts.bidSubmissionEndDate ?? "",
-      opts.committeeReviewWorkdays ?? null,
+      timeline.committeeReviewDeadlineISO,
     )
   ) {
     if (!bidResult.review_extension_memo_no?.trim()) {
@@ -1406,32 +1581,50 @@ export function getStep4ComplianceIssues(
       });
     }
   }
-  if (!opts.hasEvaluationReportDoc) {
-    issues.push({
-      id: "evaluation_report_doc",
-      message: "กรุณาแนบเอกสารรายงานผลการพิจารณา (PDF) ในกลุ่มที่ 3",
-    });
-  }
+  getChecklistEvidenceIssues(4, checklist as Record<string, boolean>, {
+    uploadedDocTypes: [
+      ...(opts.hasEgpBidSummaryDoc ? [STEP4_DOC.EGP_BID_SUMMARY] : []),
+      ...(opts.hasBlacklistEvidenceDoc ? [STEP4_DOC.BLACKLIST_EVIDENCE] : []),
+      ...(opts.hasConflictEvidenceDoc ? [STEP4_DOC.CONFLICT_EVIDENCE] : []),
+      ...(opts.hasCommitteeEvaluationDoc ? [STEP4_DOC.COMMITTEE_EVALUATION_REPORT] : []),
+    ],
+    bidResult,
+    fieldValues: buildStep4EvidenceFieldValues(bidResult),
+  }).forEach((issue) => issues.push(issue));
+
   if (!opts.responsibleName.trim()) {
     issues.push({
       id: "responsible_officer",
       message: "กรุณาระบุเจ้าหน้าที่ผู้รับผิดชอบ",
     });
   }
-  if (!bidResult.appeal_status) {
+  return issues;
+}
+
+export type Step6AppealComplianceIssue = { id: string; message: string };
+
+/** ตรวจความพร้อมขั้นตอนที่ 6 — สถานะการอุทธรณ์ */
+export function getStep6AppealComplianceIssues(
+  appeal: Step6AppealState,
+): Step6AppealComplianceIssue[] {
+  const issues: Step6AppealComplianceIssue[] = [];
+  if (!appeal.appeal_status) {
     issues.push({
       id: "appeal_status",
       message: "กรุณาเลือกสถานะการอุทธรณ์",
     });
   }
-  if (isStep4AppealBlocking(bidResult)) {
+  if (isAppealBlocking(appeal)) {
     issues.push({
       id: "appeal_pending",
       message: "โครงการติดสถานะอุทธรณ์ — ไม่สามารถไปขั้นตอนทำสัญญาได้",
     });
   }
-
   return issues;
+}
+
+export function isStep6AppealReadyForNext(appeal: Step6AppealState): boolean {
+  return getStep6AppealComplianceIssues(appeal).length === 0;
 }
 
 export function isStep4ReadyForNext(
@@ -1439,12 +1632,75 @@ export function isStep4ReadyForNext(
   bidResult: Step4BidResult,
   opts: {
     responsibleName: string;
-    hasEvaluationReportDoc: boolean;
-    bidSubmissionEndDate?: string;
-    committeeReviewWorkdays?: number | null;
+    hasEgpBidSummaryDoc: boolean;
+    hasBlacklistEvidenceDoc: boolean;
+    hasConflictEvidenceDoc: boolean;
+    hasCommitteeEvaluationDoc: boolean;
+    timeline?: Step4Timeline;
   },
 ): boolean {
   return getStep4ComplianceIssues(checklist, bidResult, opts).length === 0;
+}
+
+export type Step5ComplianceIssue = { id: string; message: string };
+
+function buildStep5EvidenceFieldValues(announcement: Step5Announcement) {
+  return {
+    winner_announcement_no: announcement.winner_announcement_no,
+    winner_announcement_date: announcement.winner_announcement_date,
+  };
+}
+
+/** ตรวจความพร้อมก่อนไปขั้นถัดไป — ขั้นตอนที่ 5 (3/3 Checklist + หลักฐาน) */
+export function getStep5ComplianceIssues(
+  checklist: Step5Checklist,
+  announcement: Step5Announcement,
+  opts: {
+    hasEgpWinnerDoc: boolean;
+    hasPhysicalBoardDoc: boolean;
+  },
+  autoStates?: Record<string, boolean>,
+): Step5ComplianceIssue[] {
+  const issues: Step5ComplianceIssue[] = [];
+  const auto =
+    autoStates ??
+    computeAutoChecklistState({
+      stepNumber: 5,
+      step5Announcement: announcement,
+    });
+  const effective = buildEffectiveChecklist(5, checklist as Record<string, boolean>, auto);
+
+  STEP5_CHECKLIST_ITEMS.forEach((item, index) => {
+    if (!effective[item.key]) {
+      const prefix =
+        item.mode === "auto" ? "ระบบตรวจพบยังไม่ครบ (Auto)" : "ยังไม่ได้แนบหลักฐาน";
+      issues.push({
+        id: `checklist-${item.key}`,
+        message: `${prefix} ข้อที่ ${index + 1}: ${item.label}`,
+      });
+    }
+  });
+
+  getChecklistEvidenceIssues(5, checklist as Record<string, boolean>, {
+    uploadedDocTypes: [
+      ...(opts.hasEgpWinnerDoc ? [STEP5_DOC.EGP_WINNER_ANNOUNCEMENT] : []),
+      ...(opts.hasPhysicalBoardDoc ? [STEP5_DOC.PHYSICAL_BOARD_ANNOUNCEMENT] : []),
+    ],
+    fieldValues: buildStep5EvidenceFieldValues(announcement),
+  }).forEach((issue) => issues.push(issue));
+
+  return issues;
+}
+
+export function isStep5ReadyForNext(
+  checklist: Step5Checklist,
+  announcement: Step5Announcement,
+  opts: {
+    hasEgpWinnerDoc: boolean;
+    hasPhysicalBoardDoc: boolean;
+  },
+): boolean {
+  return getStep5ComplianceIssues(checklist, announcement, opts).length === 0;
 }
 
 function step2FormHasPersistedData(form: Step2FormData): boolean {
@@ -1481,7 +1737,15 @@ function formHasPersistedData(form: StepFormData): boolean {
     if (step2FormHasPersistedData(form as Step2FormData)) return true;
   }
   if (announcementHasData((form as Step3FormData).announcement)) return true;
-  return step4BidResultHasData((form as Step4FormData).bidResult);
+  if (step4BidResultHasData((form as Step4FormData).bidResult)) return true;
+  return step5AnnouncementHasData((form as Step5FormData).announcement);
+}
+
+function step5AnnouncementHasData(announcement?: Step5Announcement): boolean {
+  if (!announcement) return false;
+  return !!(
+    announcement.winner_announcement_no?.trim() || announcement.winner_announcement_date?.trim()
+  );
 }
 
 function normalizeStep3Checklist(
@@ -1689,6 +1953,44 @@ export function loadStep3FormFromNote(note: string | null): Step3FormData {
   };
 }
 
+/** รวมค่าจาก project columns เข้ากับ announcement จาก note */
+export function mergeStep5FromProject(
+  announcement: Step5Announcement,
+  project: {
+    winner_announcement_no?: string | null;
+    winner_announcement_date?: string | null;
+  } | null,
+): Step5Announcement {
+  if (!project) return announcement;
+  return {
+    winner_announcement_no:
+      announcement.winner_announcement_no?.trim() ||
+      project.winner_announcement_no ||
+      "",
+    winner_announcement_date:
+      announcement.winner_announcement_date?.trim() ||
+      project.winner_announcement_date ||
+      "",
+  };
+}
+
+/** โหลดข้อมูลฟอร์มขั้นตอนที่ 5 จาก note */
+export function loadStep5FormFromNote(note: string | null): Step5FormData {
+  const { form } = parseStepNote(note);
+  const f = form as Step5FormData;
+  const c = f.checklist ?? {};
+  return {
+    checklist: {
+      egp_winner_announced: !!c.egp_winner_announced,
+      physical_board_posted: !!c.physical_board_posted,
+    },
+    announcement: {
+      ...EMPTY_STEP5_ANNOUNCEMENT,
+      ...f.announcement,
+    },
+  };
+}
+
 /** โหลดข้อมูลฟอร์มขั้นตอนที่ 4 จาก note */
 export function loadStep4FormFromNote(note: string | null): Step4FormData {
   const { form } = parseStepNote(note);
@@ -1701,18 +2003,31 @@ export function loadStep4FormFromNote(note: string | null): Step4FormData {
       conflict_of_interest_checked: !!c.conflict_of_interest_checked,
       technical_price_reviewed: !!c.technical_price_reviewed,
       evaluation_report_submitted: !!c.evaluation_report_submitted,
-      appeal_period_checked: !!c.appeal_period_checked,
     },
-    bidResult: {
-      ...EMPTY_STEP4_BID_RESULT,
-      ...f.bidResult,
-    },
+    bidResult: stripAppealFieldsFromBidResult(f.bidResult),
   };
 }
 
-/** ฟิลด์ผลการเสนอราคา — บันทึกลงตาราง projects */
+function stripAppealFieldsFromBidResult(bidResult?: Step4BidResult): Step4BidResult {
+  const raw = bidResult ?? {};
+  return {
+    ...EMPTY_STEP4_BID_RESULT,
+    egp_doc_request_count: raw.egp_doc_request_count ?? null,
+    egp_bid_submission_count: raw.egp_bid_submission_count ?? null,
+    winning_bidder_name: raw.winning_bidder_name ?? "",
+    winning_bid_amount: raw.winning_bid_amount ?? null,
+    final_agreed_amount: raw.final_agreed_amount ?? null,
+    evaluation_report_letter_no: raw.evaluation_report_letter_no ?? "",
+    evaluation_report_approval_date: raw.evaluation_report_approval_date ?? "",
+    review_extension_memo_no: raw.review_extension_memo_no ?? "",
+    review_extension_approval_date: raw.review_extension_approval_date ?? "",
+  };
+}
+
+/** ฟิลด์ผลการเสนอราคา — บันทึกลงตาราง projects (ไม่รวมอุทธรณ์ — บันทึกในขั้นตอนที่ 6) */
 export function buildProjectStep4Fields(bidResult: Step4BidResult) {
-  const amount = bidResult.winning_bid_amount;
+  const winningAmount = bidResult.winning_bid_amount;
+  const finalAmount = bidResult.final_agreed_amount;
   return {
     egp_doc_request_count:
       bidResult.egp_doc_request_count != null &&
@@ -1728,15 +2043,56 @@ export function buildProjectStep4Fields(bidResult: Step4BidResult) {
         : null,
     winning_bidder_name: bidResult.winning_bidder_name?.trim() || null,
     winning_bid_amount:
-      amount != null && Number.isFinite(amount) && amount > 0 ? amount : null,
+      winningAmount != null && Number.isFinite(winningAmount) && winningAmount > 0
+        ? winningAmount
+        : null,
+    final_agreed_amount:
+      finalAmount != null && Number.isFinite(finalAmount) && finalAmount > 0
+        ? finalAmount
+        : null,
     evaluation_report_letter_no: bidResult.evaluation_report_letter_no?.trim() || null,
     evaluation_report_approval_date:
       bidResult.evaluation_report_approval_date?.trim() || null,
-    appeal_status: bidResult.appeal_status === "none" || bidResult.appeal_status === "pending"
-      ? bidResult.appeal_status
-      : null,
-    appeal_report_letter_no: bidResult.appeal_report_letter_no?.trim() || null,
-    appeal_consideration_status: bidResult.appeal_consideration_status?.trim() || null,
+  };
+}
+
+/** ฟิลด์ประกาศผู้ชนะ — บันทึกลงตาราง projects (ขั้นตอนที่ 5) */
+export function buildProjectStep5Fields(announcement: Step5Announcement) {
+  return {
+    winner_announcement_no: announcement.winner_announcement_no?.trim() || null,
+    winner_announcement_date: announcement.winner_announcement_date?.trim() || null,
+  };
+}
+
+/** ฟิลด์อุทธรณ์ — บันทึกลงตาราง projects (ขั้นตอนที่ 6) */
+export function buildProjectAppealFields(appeal: Step6AppealState) {
+  return {
+    appeal_status:
+      appeal.appeal_status === "none" || appeal.appeal_status === "pending"
+        ? appeal.appeal_status
+        : null,
+    appeal_report_letter_no: appeal.appeal_report_letter_no?.trim() || null,
+    appeal_consideration_status: appeal.appeal_consideration_status?.trim() || null,
+  };
+}
+
+/** โหลดสถานะอุทธรณ์จาก project columns */
+export function mergeAppealFromProject(
+  project: {
+    appeal_status?: string | null;
+    appeal_report_letter_no?: string | null;
+    appeal_consideration_status?: string | null;
+  } | null,
+): Step6AppealState {
+  if (!project) return { ...EMPTY_STEP6_APPEAL };
+  const appealFromProject =
+    project.appeal_status === "none" || project.appeal_status === "pending"
+      ? project.appeal_status
+      : "";
+  return {
+    appeal_status: appealFromProject as StepAppealStatus,
+    appeal_report_letter_no: project.appeal_report_letter_no ?? "",
+    appeal_consideration_status: project.appeal_consideration_status ?? "",
   };
 }
 
@@ -1748,18 +2104,12 @@ export function mergeStep4BidResultFromProject(
     egp_bid_submission_count?: number | null;
     winning_bidder_name?: string | null;
     winning_bid_amount?: number | null;
+    final_agreed_amount?: number | null;
     evaluation_report_letter_no?: string | null;
     evaluation_report_approval_date?: string | null;
-    appeal_status?: string | null;
-    appeal_report_letter_no?: string | null;
-    appeal_consideration_status?: string | null;
   } | null,
 ): Step4BidResult {
   if (!project) return bidResult;
-  const appealFromProject =
-    project.appeal_status === "none" || project.appeal_status === "pending"
-      ? project.appeal_status
-      : "";
   return {
     ...bidResult,
     egp_doc_request_count:
@@ -1778,6 +2128,10 @@ export function mergeStep4BidResultFromProject(
       bidResult.winning_bid_amount != null && bidResult.winning_bid_amount > 0
         ? bidResult.winning_bid_amount
         : project.winning_bid_amount ?? null,
+    final_agreed_amount:
+      bidResult.final_agreed_amount != null && bidResult.final_agreed_amount > 0
+        ? bidResult.final_agreed_amount
+        : project.final_agreed_amount ?? null,
     evaluation_report_letter_no:
       bidResult.evaluation_report_letter_no?.trim() ||
       project.evaluation_report_letter_no ||
@@ -1785,17 +2139,6 @@ export function mergeStep4BidResultFromProject(
     evaluation_report_approval_date:
       bidResult.evaluation_report_approval_date?.trim() ||
       project.evaluation_report_approval_date ||
-      "",
-    appeal_status:
-      bidResult.appeal_status ||
-      (appealFromProject as Step4AppealStatus),
-    appeal_report_letter_no:
-      bidResult.appeal_report_letter_no?.trim() ||
-      project.appeal_report_letter_no ||
-      "",
-    appeal_consideration_status:
-      bidResult.appeal_consideration_status?.trim() ||
-      project.appeal_consideration_status ||
       "",
   };
 }

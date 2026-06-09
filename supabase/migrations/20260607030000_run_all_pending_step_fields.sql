@@ -15,7 +15,8 @@ alter table public.projects
   add column if not exists winning_bidder_name text null,
   add column if not exists winning_bid_amount numeric null,
   add column if not exists evaluation_report_letter_no text null,
-  add column if not exists evaluation_report_approval_date date null;
+  add column if not exists evaluation_report_approval_date date null,
+  add column if not exists final_agreed_amount numeric null;
 
 alter table public.projects
   add column if not exists appeal_status text null,

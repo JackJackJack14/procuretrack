@@ -27,9 +27,8 @@ import {
   STEP2_DOC,
   STEP2_APPOINTMENT_ORDER_UPLOAD_LABEL,
   STEP2_BG06_UPLOAD_LABEL,
-  STEP4_DOC,
-  STEP4_EVALUATION_UPLOAD_LABEL,
 } from "@/lib/step-doc-types";
+import { FORM_AUDIT_TRAIL_STANDARD } from "@/lib/form-audit-trail";
 import {
   STEP1_METHOD_OPTIONS,
   formatBudgetInput,
@@ -72,12 +71,17 @@ import {
   defaultStep4EvaluationApprovalDateISO,
   isStep4EvaluationApprovalBeforeBidEnd,
   isStep4EvaluationApprovalOverdue,
-  computeStep4ReviewDeadlineISO,
+  getStep4TimelineDisplayLines,
+  type Step4Timeline,
+  type Step6AppealState,
+  type Step5Announcement,
+  type Step5Checklist,
+  type Step5ChecklistKey,
   STEP4_EVALUATION_APPROVAL_BEFORE_BID_END_MSG,
   STEP4_EVALUATION_APPROVAL_OVERDUE_MSG,
 } from "@/lib/step-form";
 import { formatBaht } from "@/lib/procurement";
-import { SmartChecklist } from "@/components/SmartChecklist";
+import { SmartChecklist, type SmartChecklistDocBinder } from "@/components/SmartChecklist";
 import { getSmartChecklistItems } from "@/lib/smart-checklist";
 
 const inputCls =
@@ -166,7 +170,8 @@ export function Step1DetailForm({
   responsibleName,
   onResponsibleNameChange,
   readOnly,
-}: Step1FormProps) {
+  docBinder,
+}: Step1FormProps & { docBinder?: SmartChecklistDocBinder }) {
   const egpUnlocked = isStep1EgpCodeUnlocked(checklist, { egpCode });
 
   return (
@@ -181,6 +186,7 @@ export function Step1DetailForm({
           onChecklistChange(key as Step1ChecklistKey, checked)
         }
         readOnly={readOnly}
+        docBinder={docBinder}
       />
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
@@ -382,6 +388,7 @@ export function Step2DetailForm({
           onChecklistChange(key as Step2ChecklistKey, checked)
         }
         readOnly={readOnly}
+        docBinder={docBinder}
       />
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
@@ -797,6 +804,7 @@ export function Step3DetailForm({
           onChecklistChange(key as Step3ChecklistKey, checked)
         }
         readOnly={readOnly}
+        docBinder={docBinder}
       />
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
@@ -1123,7 +1131,7 @@ export function Step3DetailForm({
                 </p>
               )}
             </FieldRow>
-            <FieldRow label="ระยะเวลาพิจารณาผลของคณะกรรมการ (วันทำการ)">
+            <FieldRow label="ระยะเวลารับซองราคา / พิจารณาผล (วันทำการ)">
               <input
                 type="number"
                 min={1}
@@ -1144,9 +1152,12 @@ export function Step3DetailForm({
                     committee_review_workdays: Number.isFinite(n) && n > 0 ? n : null,
                   });
                 }}
-                placeholder="ระบุกรอบเวลาที่คณะกรรมการฯ ต้องตรวจซองให้เสร็จตามที่ขออนุมัติไว้"
+                placeholder="เช่น 15 วันทำการ — นับจากวันอนุมัติขอซื้อขอจ้างไปจนถึงวันปิดรับซอง"
                 className={inputCls}
               />
+              <p className="text-xs text-muted-foreground mt-1">
+                ใช้คำนวณวันปิดรับซองและเดดไลน์คณะกรรมการพิจารณาผลในขั้นตอนที่ 4 (ข้อ 55)
+              </p>
             </FieldRow>
           </div>
         )}
@@ -1191,10 +1202,7 @@ type Step4FormProps = {
   responsibleName: string;
   onResponsibleNameChange: (v: string) => void;
   step1ResponsibleDefault?: string;
-  /** วันสิ้นสุดการยื่นข้อเสนอ (วันปิดรับซอง) จากขั้นตอนที่ 3 */
-  bidSubmissionEndDate?: string;
-  /** จำนวนวันทำการพิจารณาผลจากขั้นตอนที่ 3 */
-  committeeReviewWorkdays?: number | null;
+  step4Timeline?: Step4Timeline;
   docBinder: Step4DocBinder;
 };
 
@@ -1203,11 +1211,13 @@ function Step4SmartChecklist({
   onChecklistChange,
   autoCheckStates,
   readOnly,
+  docBinder,
 }: {
   checklist: Step4Checklist;
   onChecklistChange: (key: Step4ChecklistKey, checked: boolean) => void;
   autoCheckStates: Record<string, boolean>;
   readOnly?: boolean;
+  docBinder: Step4DocBinder;
 }) {
   return (
     <SmartChecklist
@@ -1220,6 +1230,7 @@ function Step4SmartChecklist({
         onChecklistChange(key as Step4ChecklistKey, checked)
       }
       readOnly={readOnly}
+      docBinder={docBinder}
     />
   );
 }
@@ -1242,13 +1253,26 @@ export function Step4DetailForm({
   responsibleName,
   onResponsibleNameChange,
   step1ResponsibleDefault = "",
-  bidSubmissionEndDate = "",
-  committeeReviewWorkdays = null,
+  step4Timeline,
   docBinder,
 }: Step4FormProps) {
+  const timeline = step4Timeline ?? {
+    bidPeriodStartISO: "",
+    bidPeriodWorkdays: null,
+    bidSubmissionEndISO: "",
+    committeeReviewDeadlineISO: "",
+  };
+  const bidSubmissionEndDate = timeline.bidSubmissionEndISO;
+  const committeeReviewDeadlineISO = timeline.committeeReviewDeadlineISO;
+  const timelineLines = getStep4TimelineDisplayLines(timeline);
+
   const winningAmountDisplay =
     bidResult.winning_bid_amount != null && bidResult.winning_bid_amount > 0
       ? formatBudgetInput(String(bidResult.winning_bid_amount))
+      : "";
+  const finalAgreedAmountDisplay =
+    bidResult.final_agreed_amount != null && bidResult.final_agreed_amount > 0
+      ? formatBudgetInput(String(bidResult.final_agreed_amount))
       : "";
 
   const [approvalDateRejected, setApprovalDateRejected] = useState(false);
@@ -1263,22 +1287,22 @@ export function Step4DetailForm({
     }
     onBidResultChange({
       evaluation_report_approval_date: defaultStep4EvaluationApprovalDateISO(
-        bidSubmissionEndDate,
+        committeeReviewDeadlineISO,
       ),
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- default เมื่อยังไม่มีค่า
-  }, [bidSubmissionEndDate]);
+  }, [committeeReviewDeadlineISO]);
 
-  /** ปรับค่า auto ให้ไม่ต่ำกว่าวันปิดรับซอง เมื่อดึงข้อมูลขั้น 3 มาทีหลัง */
+  /** ปรับค่า auto ให้ไม่ต่ำกว่าเดดไลน์คณะกรรมการ เมื่อดึงข้อมูลขั้น 3 มาทีหลัง */
   useEffect(() => {
-    if (!bidSubmissionEndDate || approvalManuallySetRef.current) return;
+    if (!committeeReviewDeadlineISO || approvalManuallySetRef.current) return;
     const current = bidResult.evaluation_report_approval_date ?? "";
-    if (current && current < bidSubmissionEndDate) {
-      onBidResultChange({ evaluation_report_approval_date: bidSubmissionEndDate });
+    if (current && current < committeeReviewDeadlineISO) {
+      onBidResultChange({ evaluation_report_approval_date: committeeReviewDeadlineISO });
       setApprovalDateRejected(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- sync กับวันปิดรับซอง
-  }, [bidSubmissionEndDate, bidResult.evaluation_report_approval_date]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sync กับเดดไลน์คณะกรรมการ
+  }, [committeeReviewDeadlineISO, bidResult.evaluation_report_approval_date]);
 
   const handleEvaluationApprovalDateChange = (v: string) => {
     if (!v) {
@@ -1297,11 +1321,7 @@ export function Step4DetailForm({
     }
     approvalManuallySetRef.current = true;
     setApprovalDateRejected(false);
-    const overdue = isStep4EvaluationApprovalOverdue(
-      v,
-      bidSubmissionEndDate,
-      committeeReviewWorkdays,
-    );
+    const overdue = isStep4EvaluationApprovalOverdue(v, committeeReviewDeadlineISO);
     onBidResultChange({
       evaluation_report_approval_date: v,
       ...(overdue
@@ -1314,10 +1334,6 @@ export function Step4DetailForm({
   };
 
   const approvalDate = bidResult.evaluation_report_approval_date ?? "";
-  const reviewDeadlineISO = computeStep4ReviewDeadlineISO(
-    bidSubmissionEndDate,
-    committeeReviewWorkdays,
-  );
   const approvalBeforeBidEnd = isStep4EvaluationApprovalBeforeBidEnd(
     approvalDate,
     bidSubmissionEndDate,
@@ -1325,8 +1341,7 @@ export function Step4DetailForm({
   const showApprovalDateError = approvalDateRejected || approvalBeforeBidEnd;
   const approvalOverdue = isStep4EvaluationApprovalOverdue(
     approvalDate,
-    bidSubmissionEndDate,
-    committeeReviewWorkdays,
+    committeeReviewDeadlineISO,
   );
 
   return (
@@ -1336,6 +1351,7 @@ export function Step4DetailForm({
         onChecklistChange={onChecklistChange}
         autoCheckStates={autoCheckStates}
         readOnly={readOnly}
+        docBinder={docBinder}
       />
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
@@ -1381,7 +1397,7 @@ export function Step4DetailForm({
       </div>
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
-        <SectionTitle>กลุ่มที่ 2: ข้อมูลผู้ชนะ</SectionTitle>
+        <SectionTitle>กลุ่มที่ 2: ข้อมูลผู้ชนะและการต่อรองราคา</SectionTitle>
         <FieldRow label="ชื่อผู้ชนะการเสนอราคา">
           <input
             value={bidResult.winning_bidder_name ?? ""}
@@ -1405,14 +1421,54 @@ export function Step4DetailForm({
           />
           {bidResult.winning_bid_amount != null && bidResult.winning_bid_amount > 0 && (
             <p className="text-xs text-muted-foreground mt-1">
-              {formatBaht(bidResult.winning_bid_amount)} บาท — ใช้เป็นฐานมูลค่าสัญญาในขั้นตอนที่ 8
+              {formatBaht(bidResult.winning_bid_amount)} บาท
+            </p>
+          )}
+        </FieldRow>
+        <FieldRow label="ราคาที่ตกลงซื้อหรือจ้างจริง (บาท)">
+          <input
+            value={finalAgreedAmountDisplay}
+            onChange={(e) => {
+              const raw = e.target.value.trim();
+              onBidResultChange({
+                final_agreed_amount: raw ? parseBudgetInput(raw) : null,
+              });
+            }}
+            placeholder="กรอกเมื่อมีการต่อรองราคา"
+            inputMode="numeric"
+            className={inputCls}
+          />
+          {bidResult.final_agreed_amount != null && bidResult.final_agreed_amount > 0 ? (
+            <p className="text-xs text-muted-foreground mt-1">
+              {formatBaht(bidResult.final_agreed_amount)} บาท — ใช้เป็นฐานมูลค่าสัญญาในขั้นตอนที่ 8
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground mt-1">
+              หากเว้นว่าง ระบบจะใช้ราคาที่เสนอชนะเป็นฐานมูลค่าสัญญาในขั้นตอนที่ 8
             </p>
           )}
         </FieldRow>
       </div>
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
-        <SectionTitle>กลุ่มที่ 3: เอกสารหนังสือราชการภายใน (Audit Trail)</SectionTitle>
+        <SectionTitle>{FORM_AUDIT_TRAIL_STANDARD.auditTrailGroupTitle}</SectionTitle>
+        <p className="text-xs text-muted-foreground leading-relaxed -mt-2">
+          แนบหลักฐานไฟล์ที่ Smart Checklist ด้านบน · กลุ่มนี้บันทึกเลขที่หนังสือและวันที่อนุมัติผล
+        </p>
+        {timelineLines ? (
+          <div
+            className="rounded-md border border-blue-200/80 bg-blue-50/50 px-3 py-3 space-y-1.5 text-sm text-foreground/90 leading-relaxed"
+            aria-live="polite"
+          >
+            <p>{timelineLines.bidSubmissionEndLine}</p>
+            <p>{timelineLines.committeeDeadlineLine}</p>
+          </div>
+        ) : (
+          <div className="rounded-md border border-dashed border-border bg-muted/30 px-3 py-3 text-sm text-muted-foreground leading-relaxed">
+            กรุณาระบุวันที่อนุมัติขอซื้อขอจ้างและระยะเวลารับซองราคา (วันทำการ) ในรายงานขอซื้อขอจ้าง
+            ขั้นตอนที่ 3 เพื่อคำนวณกำหนดการอัตโนมัติ
+          </div>
+        )}
         <FieldRow label="เลขที่หนังสือรายงานผลการพิจารณา">
           <input
             value={bidResult.evaluation_report_letter_no ?? ""}
@@ -1423,27 +1479,16 @@ export function Step4DetailForm({
             className={inputCls}
           />
         </FieldRow>
-        <FieldRow label="วันที่หัวหน้าหน่วยงานลงนามอนุมัติ">
+        <FieldRow label="วันที่หัวหน้าหน่วยงานลงนามอนุมัติผล">
           <ThaiDatePicker
             value={approvalDate}
             onChange={handleEvaluationApprovalDateChange}
-            minDate={bidSubmissionEndDate || undefined}
+            minDate={committeeReviewDeadlineISO || bidSubmissionEndDate || undefined}
             onInvalidDate={() => setApprovalDateRejected(true)}
           />
           {approvalDate && !showApprovalDateError && (
             <p className="text-xs text-muted-foreground mt-1">
               {formatThaiDate(approvalDate)}
-            </p>
-          )}
-          {reviewDeadlineISO && committeeReviewWorkdays != null && committeeReviewWorkdays > 0 ? (
-            <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">
-              ⏱ กำหนดการ: ควรพิจารณาผลให้แล้วเสร็จภายในวันที่{" "}
-              {formatThaiDateSlash(reviewDeadlineISO)} ({committeeReviewWorkdays} วันทำการ)
-            </p>
-          ) : (
-            <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">
-              ⏱ กำหนดการ: กรุณาบันทึกวันปิดรับซองและจำนวนวันพิจารณาผลในขั้นตอนที่ 3
-              เพื่อคำนวณเดดไลน์
             </p>
           )}
           {showApprovalDateError && bidSubmissionEndDate && (
@@ -1489,16 +1534,6 @@ export function Step4DetailForm({
             </div>
           )}
         </FieldRow>
-        <FieldRow label="เอกสารแนบรายงานผลพิจารณา">
-          <InlineDocUpload
-            project={docBinder.project}
-            stepNumber={docBinder.stepNumber}
-            documentType={STEP4_DOC.EVALUATION_REPORT}
-            label={STEP4_EVALUATION_UPLOAD_LABEL}
-            existing={docBinder.docs}
-            onChange={docBinder.onDocsChange}
-          />
-        </FieldRow>
       </div>
 
       <div className="rounded-lg border border-border bg-muted/20 p-4">
@@ -1509,84 +1544,175 @@ export function Step4DetailForm({
           step1Default={step1ResponsibleDefault}
         />
       </div>
+    </div>
+  );
+}
+
+type Step6AppealFormProps = {
+  appeal: Step6AppealState;
+  onAppealChange: (patch: Partial<Step6AppealState>) => void;
+  readOnly?: boolean;
+};
+
+/** ขั้นตอนที่ 6 — สถานะการอุทธรณ์ (หลังประกาศผู้ชนะ) */
+export function Step6AppealForm({ appeal, onAppealChange, readOnly = false }: Step6AppealFormProps) {
+  return (
+    <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4 max-w-2xl">
+      <SectionTitle>สถานะการอุทธรณ์</SectionTitle>
+      <p className="text-xs text-muted-foreground leading-relaxed">
+        บันทึกหลังครบระยะเวลารออุทธรณ์ 7 วันทำการ — ขั้นตอนนี้จึงสามารถระบุสถานะอุทธรณ์ได้ตามระเบียบพัสดุ
+      </p>
+      <fieldset disabled={readOnly} className="space-y-2 disabled:opacity-60">
+        <label className="flex items-start gap-2 text-sm cursor-pointer">
+          <input
+            type="radio"
+            name="step6_appeal"
+            checked={appeal.appeal_status === "none"}
+            onChange={() =>
+              onAppealChange({
+                appeal_status: "none",
+                appeal_report_letter_no: "",
+                appeal_consideration_status: "",
+              })
+            }
+            className="mt-0.5 h-4 w-4"
+          />
+          ไม่มีผู้ยื่นอุทธรณ์ภายในกำหนด (พร้อมทำสัญญา)
+        </label>
+        <label className="flex items-start gap-2 text-sm cursor-pointer">
+          <input
+            type="radio"
+            name="step6_appeal"
+            checked={appeal.appeal_status === "pending"}
+            onChange={() => onAppealChange({ appeal_status: "pending" })}
+            className="mt-0.5 h-4 w-4"
+          />
+          มีผู้ยื่นอุทธรณ์โครงการ (ชะลอการทำสัญญา)
+        </label>
+      </fieldset>
+
+      {appeal.appeal_status === "pending" && (
+        <div className="space-y-4 rounded-md border border-destructive/30 bg-destructive/5 p-4">
+          <p className="text-sm font-medium text-destructive">
+            ⚠️ แจ้งเตือน: โครงการนี้ติดสถานะอุทธรณ์ ไม่สามารถไปขั้นตอนทำสัญญาได้
+          </p>
+          <FieldRow label="เลขที่หนังสือรายงานผลอุทธรณ์">
+            <input
+              value={appeal.appeal_report_letter_no ?? ""}
+              onChange={(e) => onAppealChange({ appeal_report_letter_no: e.target.value })}
+              placeholder="เช่น กษ ๐๖๐๒ / ๔๕๖"
+              className={inputCls}
+              disabled={readOnly}
+            />
+          </FieldRow>
+          <FieldRow label="สถานะผลการพิจารณาอุทธรณ์">
+            <textarea
+              value={appeal.appeal_consideration_status ?? ""}
+              onChange={(e) =>
+                onAppealChange({ appeal_consideration_status: e.target.value })
+              }
+              rows={3}
+              placeholder="บันทึกสถานะ/ผลการพิจารณาอุทธรณ์ เช่น อยู่ระหว่างพิจารณา / ยกเลิกอุทธรณ์ / รอมติคณะกรรมการ"
+              className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
+              disabled={readOnly}
+            />
+          </FieldRow>
+        </div>
+      )}
+    </div>
+  );
+}
+
+type Step5DocBinder = {
+  project: ProjectDocRef;
+  stepNumber: number;
+  docs: StepDocRecord[];
+  onDocsChange: () => void;
+};
+
+type Step5FormProps = {
+  checklist: Step5Checklist;
+  onChecklistChange: (key: Step5ChecklistKey, checked: boolean) => void;
+  autoCheckStates: Record<string, boolean>;
+  readOnly?: boolean;
+  announcement: Step5Announcement;
+  onAnnouncementChange: (patch: Partial<Step5Announcement>) => void;
+  docBinder: Step5DocBinder;
+};
+
+/** ขั้นตอนที่ 5 — จัดทำและประกาศผู้ชนะการเสนอราคา (มาตรา 66) */
+export function Step5DetailForm({
+  checklist,
+  onChecklistChange,
+  autoCheckStates,
+  readOnly,
+  announcement,
+  onAnnouncementChange,
+  docBinder,
+}: Step5FormProps) {
+  return (
+    <div className="space-y-4 max-w-2xl">
+      <SmartChecklist
+        stepNumber={5}
+        stepLabel="ขั้นตอนที่ 5"
+        items={getSmartChecklistItems(5)}
+        manualChecklist={checklist as Record<string, boolean>}
+        autoStates={autoCheckStates}
+        onManualChange={(key, checked) =>
+          onChecklistChange(key as Step5ChecklistKey, checked)
+        }
+        readOnly={readOnly}
+        docBinder={docBinder}
+      />
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
-        <SectionTitle>สถานะการอุทธรณ์</SectionTitle>
-        <div className="space-y-2">
-          <label className="flex items-start gap-2 text-sm cursor-pointer">
-            <input
-              type="radio"
-              name="step4_appeal"
-              checked={bidResult.appeal_status === "none"}
-              onChange={() =>
-                onBidResultChange({
-                  appeal_status: "none",
-                  appeal_report_letter_no: "",
-                  appeal_consideration_status: "",
-                })
-              }
-              className="mt-0.5 h-4 w-4"
+        <p className="text-sm font-medium text-foreground">
+          กลุ่มที่ 1: ข้อมูลประกาศผู้ชนะในระบบ e-GP
+        </p>
+        <FieldRow label="เลขที่ประกาศผลผู้ชนะในระบบ e-GP">
+          <input
+            type="text"
+            value={announcement.winner_announcement_no ?? ""}
+            onChange={(e) => onAnnouncementChange({ winner_announcement_no: e.target.value })}
+            placeholder="เช่น เลขที่ประกาศจากระบบ e-GP"
+            className={inputCls}
+            disabled={readOnly}
+          />
+        </FieldRow>
+        <FieldRow label="วันที่ลงนามในประกาศผู้ชนะ">
+          <div className="space-y-1">
+            <ThaiDatePicker
+              value={announcement.winner_announcement_date ?? ""}
+              onChange={(v) => onAnnouncementChange({ winner_announcement_date: v })}
+              disabled={readOnly}
             />
-            ไม่มีผู้ยื่นอุทธรณ์ภายในกำหนด (พร้อมทำสัญญา)
-          </label>
-          <label className="flex items-start gap-2 text-sm cursor-pointer">
-            <input
-              type="radio"
-              name="step4_appeal"
-              checked={bidResult.appeal_status === "pending"}
-              onChange={() => onBidResultChange({ appeal_status: "pending" })}
-              className="mt-0.5 h-4 w-4"
-            />
-            มีผู้ยื่นอุทธรณ์โครงการ (ชะลอการทำสัญญา)
-          </label>
-        </div>
-
-        {bidResult.appeal_status === "pending" && (
-          <div className="space-y-4 rounded-md border border-destructive/30 bg-destructive/5 p-4">
-            <p className="text-sm font-medium text-destructive">
-              ⚠️ แจ้งเตือน: โครงการนี้ติดสถานะอุทธรณ์ ไม่สามารถไปขั้นตอนทำสัญญาได้
-            </p>
-            <FieldRow label="เลขที่หนังสือรายงานผลอุทธรณ์">
-              <input
-                value={bidResult.appeal_report_letter_no ?? ""}
-                onChange={(e) =>
-                  onBidResultChange({ appeal_report_letter_no: e.target.value })
-                }
-                placeholder="เช่น กษ ๐๖๐๒ / ๔๕๖"
-                className={inputCls}
-              />
-            </FieldRow>
-            <FieldRow label="สถานะผลการพิจารณาอุทธรณ์">
-              <textarea
-                value={bidResult.appeal_consideration_status ?? ""}
-                onChange={(e) =>
-                  onBidResultChange({ appeal_consideration_status: e.target.value })
-                }
-                rows={3}
-                placeholder="บันทึกสถานะ/ผลการพิจารณาอุทธรณ์ เช่น อยู่ระหว่างพิจารณา / ยกเลิกอุทธรณ์ / รอมติคณะกรรมการ"
-                className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-              />
-            </FieldRow>
+            {announcement.winner_announcement_date && (
+              <p className="text-xs text-muted-foreground">
+                📅 {formatThaiDate(announcement.winner_announcement_date)}
+              </p>
+            )}
           </div>
-        )}
+        </FieldRow>
       </div>
     </div>
   );
 }
 
-/** Smart Checklist มาตรฐาน — ขั้นตอนที่ 5–10 */
+/** Smart Checklist มาตรฐาน — ขั้นตอนที่ 6–10 */
 export function GenericStepChecklistPanel({
   stepNumber,
   manualChecklist,
   onManualChange,
   autoCheckStates,
   readOnly,
+  docBinder,
 }: {
   stepNumber: number;
   manualChecklist: Record<string, boolean>;
   onManualChange: (key: string, checked: boolean) => void;
   autoCheckStates: Record<string, boolean>;
   readOnly?: boolean;
+  docBinder?: SmartChecklistDocBinder;
 }) {
   const items = getSmartChecklistItems(stepNumber);
   if (items.length === 0) return null;
@@ -1599,6 +1725,7 @@ export function GenericStepChecklistPanel({
       autoStates={autoCheckStates}
       onManualChange={onManualChange}
       readOnly={readOnly}
+      docBinder={docBinder}
     />
   );
 }

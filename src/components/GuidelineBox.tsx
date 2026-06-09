@@ -1,6 +1,9 @@
 import { Step3GuidelineBox } from "@/components/Step3GuidelineBox";
+import { Step4GuidelineBox } from "@/components/Step4GuidelineBox";
+import { Step5GuidelineBox } from "@/components/Step5GuidelineBox";
 import { STEP_GUIDELINES } from "@/lib/guidelines";
 import type { Step3SkipReason } from "@/lib/step3-hearing";
+import type { Step4Timeline } from "@/lib/step-form";
 import { addWorkdays, getStepMinDays } from "@/lib/workdays";
 import { formatThaiDate } from "@/lib/utils";
 
@@ -10,8 +13,8 @@ type Props = {
   budget: number;
   /** วันเริ่มขั้นตอน (ISO yyyy-mm-dd หรือ ISO timestamp). ถ้าไม่ส่งใช้วันนี้ */
   stepStartDate?: string | null;
-  /** ขั้นตอนที่ 4 — ระยะเวลาพิจารณาผลจากรายงานขอซื้อขอจ้าง (ขั้นตอนที่ 3) */
-  committeeReviewWorkdays?: number | null;
+  /** ขั้นตอนที่ 4 — ไทม์ไลน์คำนวณจากข้อมูลขั้นตอนที่ 3 */
+  step4Timeline?: Step4Timeline | null;
   /** ขั้นตอนที่ 3 — ข้ามการฟังคำวิจารณ์ */
   onSkipStep3?: (reason: Step3SkipReason) => void;
   onProceedStep3Hearing?: () => void;
@@ -26,7 +29,7 @@ export function GuidelineBox({
   method,
   budget,
   stepStartDate,
-  committeeReviewWorkdays,
+  step4Timeline,
   onSkipStep3,
   onProceedStep3Hearing,
   step3HearingProceed,
@@ -44,6 +47,14 @@ export function GuidelineBox({
         readOnly={readOnly}
       />
     );
+  }
+
+  if (stepNumber === 4) {
+    return <Step4GuidelineBox step4Timeline={step4Timeline} />;
+  }
+
+  if (stepNumber === 5) {
+    return <Step5GuidelineBox />;
   }
 
   const g = STEP_GUIDELINES[stepNumber - 1];
@@ -69,19 +80,7 @@ export function GuidelineBox({
           <li key={i}>{t}</li>
         ))}
       </ol>
-      {duration && stepNumber !== 4 && (
-        <div className="text-sm text-foreground/90 mb-1">
-          <span className="font-medium">⏱ ระยะเวลา:</span> {duration}
-        </div>
-      )}
-      {stepNumber === 4 && committeeReviewWorkdays != null && committeeReviewWorkdays > 0 && (
-        <div className="text-sm text-foreground/90 mb-1">
-          <span className="font-medium">⏱ ระยะเวลาดำเนินการ:</span>{" "}
-          ต้องดำเนินการให้แล้วเสร็จ ภายใน {committeeReviewWorkdays} วันทำการ
-          (ตามกรอบเวลาที่ได้รับอนุมัติไว้ในรายงานขอซื้อขอจ้าง)
-        </div>
-      )}
-      {stepNumber === 4 && (!committeeReviewWorkdays || committeeReviewWorkdays <= 0) && duration && (
+      {duration && (
         <div className="text-sm text-foreground/90 mb-1">
           <span className="font-medium">⏱ ระยะเวลา:</span> {duration}
         </div>

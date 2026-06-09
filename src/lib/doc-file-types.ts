@@ -1,6 +1,12 @@
-import { STEP2_DOC, STEP3_DOC, STEP4_DOC } from "@/lib/step-doc-types";
+import { STEP2_DOC, STEP3_DOC, STEP4_DOC, STEP5_DOC } from "@/lib/step-doc-types";
 
-export type DocFilePolicyId = "pdf_only" | "tor_spec" | "bg06" | "egp_screenshot";
+export type DocFilePolicyId =
+  | "pdf_only"
+  | "tor_spec"
+  | "bg06"
+  | "egp_screenshot"
+  | "screenshot_evidence"
+  | "image_only";
 
 export type DocFilePolicy = {
   id: DocFilePolicyId;
@@ -43,6 +49,22 @@ const POLICIES: Record<DocFilePolicyId, DocFilePolicy> = {
     rejectMessage:
       "❌ ประเภทไฟล์ไม่ถูกต้อง อนุญาตเฉพาะไฟล์ .pdf, .jpg, .jpeg และ .png เท่านั้น",
   },
+  screenshot_evidence: {
+    id: "screenshot_evidence",
+    extensions: ["pdf", "jpg", "jpeg", "png"],
+    accept: ".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png",
+    helperText: "รองรับ .pdf, .png, .jpg, .jpeg — แคปหน้าจอระบบภายนอกได้ทันที",
+    rejectMessage:
+      "❌ ประเภทไฟล์ไม่ถูกต้อง อนุญาตเฉพาะ .pdf, .png, .jpg, .jpeg เท่านั้น",
+  },
+  image_only: {
+    id: "image_only",
+    extensions: ["jpg", "jpeg", "png"],
+    accept: ".jpg,.jpeg,.png,image/jpeg,image/png",
+    helperText: "รองรับเฉพาะไฟล์ .png, .jpg, .jpeg",
+    rejectMessage:
+      "❌ ประเภทไฟล์ไม่ถูกต้อง อนุญาตเฉพาะ .png, .jpg, .jpeg เท่านั้น",
+  },
 };
 
 /** Explicit mapping for known procurement document labels. */
@@ -58,8 +80,23 @@ const DOC_TYPE_POLICY: Record<string, DocFilePolicyId> = {
   [STEP3_DOC.EGP_SCREENSHOT]: "egp_screenshot",
   [STEP3_DOC.FEEDBACK_REPORT]: "pdf_only",
 
+  [STEP4_DOC.EGP_BID_SUMMARY]: "pdf_only",
+  [STEP4_DOC.BLACKLIST_EVIDENCE]: "screenshot_evidence",
+  [STEP4_DOC.CONFLICT_EVIDENCE]: "screenshot_evidence",
+  "ภาพหน้าจอ/เอกสารตรวจ Blacklist (e-GP)": "screenshot_evidence",
+  "ภาพหน้าจอ/เอกสารตรวจผลประโยชน์ร่วมกัน": "screenshot_evidence",
+  [STEP4_DOC.COMMITTEE_EVALUATION_REPORT]: "pdf_only",
   [STEP4_DOC.EVALUATION_REPORT]: "pdf_only",
+
+  [STEP5_DOC.EGP_WINNER_ANNOUNCEMENT]: "screenshot_evidence",
+  [STEP5_DOC.PHYSICAL_BOARD_ANNOUNCEMENT]: "image_only",
+  "ประกาศผู้ชนะการเสนอราคา (e-GP)": "screenshot_evidence",
 };
+
+/** นโยบายไฟล์ตาม inline evidence config */
+export function resolveDocFilePolicyById(policyId: DocFilePolicyId): DocFilePolicy {
+  return POLICIES[policyId];
+}
 
 function inferPolicyId(documentType: string): DocFilePolicyId {
   const normalized = documentType.trim();

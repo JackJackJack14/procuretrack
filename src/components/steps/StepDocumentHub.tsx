@@ -94,50 +94,74 @@ export function StepDocumentHub({ stepNumber, docList, docs, projectName }: Prop
         )}
       </div>
 
-      <ul className="space-y-2">
-        {allRows.map(({ label, doc }) => (
-          <li
-            key={label}
-            className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-background px-3 py-2 text-sm"
-          >
-            <span className="text-foreground min-w-0 flex-1">{label}</span>
-            {doc ? (
-              <div className="flex items-center gap-1.5 shrink-0">
-                <span className="text-xs text-muted-foreground truncate max-w-[140px]" title={doc.file_name}>
-                  {doc.file_name}
-                </span>
-                <button
-                  type="button"
-                  disabled={openingId === doc.id}
-                  onClick={async () => {
-                    setOpeningId(doc.id);
-                    await openStepDocument(doc.storage_path);
-                    setOpeningId(null);
-                  }}
-                  className="h-7 px-2 rounded border border-input text-xs hover:bg-accent inline-flex items-center gap-1 disabled:opacity-50"
-                >
-                  {openingId === doc.id ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
+      <div className="overflow-x-auto rounded-md border bg-background">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b bg-muted/40 text-left text-xs text-muted-foreground">
+              <th className="px-3 py-2 font-medium">รายการที่ต้องมี</th>
+              <th className="px-3 py-2 font-medium">ชื่อไฟล์</th>
+              <th className="px-3 py-2 font-medium w-24 text-center">เปิดดู</th>
+              <th className="px-3 py-2 font-medium w-28 text-center">ดาวน์โหลด</th>
+            </tr>
+          </thead>
+          <tbody>
+            {allRows.map(({ label, doc }) => (
+              <tr key={label} className="border-b last:border-b-0">
+                <td className="px-3 py-2.5 text-foreground align-middle">{label}</td>
+                <td className="px-3 py-2.5 align-middle">
+                  {doc ? (
+                    <span
+                      className="text-xs text-muted-foreground truncate block max-w-[200px]"
+                      title={doc.file_name}
+                    >
+                      {doc.file_name}
+                    </span>
                   ) : (
-                    <Eye className="h-3 w-3" />
+                    <span className="text-xs text-muted-foreground italic">ยังไม่มีการแนบหลักฐาน</span>
                   )}
-                  เปิดดู
-                </button>
-                <button
-                  type="button"
-                  onClick={() => downloadStepDocument(doc)}
-                  className="h-7 px-2 rounded border border-input text-xs hover:bg-accent inline-flex items-center gap-1"
-                >
-                  <Download className="h-3 w-3" />
-                  ดาวน์โหลด
-                </button>
-              </div>
-            ) : (
-              <span className="text-xs text-muted-foreground italic">ยังไม่มีการแนบหลักฐาน</span>
-            )}
-          </li>
-        ))}
-      </ul>
+                </td>
+                <td className="px-3 py-2.5 text-center align-middle">
+                  {doc ? (
+                    <button
+                      type="button"
+                      disabled={openingId === doc.id}
+                      onClick={async () => {
+                        setOpeningId(doc.id);
+                        await openStepDocument(doc.storage_path);
+                        setOpeningId(null);
+                      }}
+                      className="h-7 px-2 rounded border border-input text-xs hover:bg-accent inline-flex items-center gap-1 disabled:opacity-50"
+                    >
+                      {openingId === doc.id ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Eye className="h-3 w-3" />
+                      )}
+                      เปิดดู
+                    </button>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">—</span>
+                  )}
+                </td>
+                <td className="px-3 py-2.5 text-center align-middle">
+                  {doc ? (
+                    <button
+                      type="button"
+                      onClick={() => downloadStepDocument(doc)}
+                      className="h-7 px-2 rounded border border-input text-xs hover:bg-accent inline-flex items-center gap-1"
+                    >
+                      <Download className="h-3 w-3" />
+                      ดาวน์โหลด
+                    </button>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">—</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

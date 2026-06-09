@@ -192,12 +192,12 @@ function ProjectCard({ project }: { project: Project }) {
             ขั้น {project.current_step}: {getMilestoneLabel(project.current_step, true)}
           </span>
           <div className="flex items-center gap-1.5 shrink-0">
-            {project.current_step >= 4 && project.appeal_status === "pending" && (
+            {project.current_step >= 6 && project.appeal_status === "pending" && (
               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-destructive/10 text-destructive font-medium">
                 {APPEAL_STATUS_LABELS.pending}
               </span>
             )}
-            {project.current_step >= 4 && project.appeal_status === "none" && (
+            {project.current_step >= 6 && project.appeal_status === "none" && (
               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-success/15 text-success font-medium">
                 {APPEAL_STATUS_LABELS.none}
               </span>

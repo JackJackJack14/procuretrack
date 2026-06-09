@@ -20,6 +20,10 @@ import {
   type Step4Checklist,
 } from "@/lib/step-form";
 import type { DocItem } from "@/lib/procurement";
+import {
+  getChecklistEvidenceIssues,
+  type EvidenceValidationContext,
+} from "@/lib/form-audit-trail";
 
 export type ChecklistMode = "auto" | "manual";
 
@@ -57,38 +61,35 @@ const STEP_CHECKLIST_MODES: Record<number, Record<string, ChecklistMode>> = {
     comment_channel_prepared: "auto",
   },
   4: {
-    egp_summary_downloaded: "manual",
-    blacklist_checked: "manual",
-    conflict_of_interest_checked: "manual",
-    technical_price_reviewed: "manual",
+    egp_summary_downloaded: "auto",
+    blacklist_checked: "auto",
+    conflict_of_interest_checked: "auto",
+    technical_price_reviewed: "auto",
     evaluation_report_submitted: "auto",
-    appeal_period_checked: "auto",
   },
 };
 
 export const STEP5_CHECKLIST_ITEMS: SmartChecklistItem[] = [
-  { key: "required_docs_uploaded", label: "อัปโหลดเอกสารบังคับครบถ้วน", mode: "auto" },
-  { key: "responsible_officer_assigned", label: "ระบุเจ้าหน้าที่ผู้รับผิดชอบแล้ว", mode: "auto" },
   {
-    key: "winner_announcement_verified",
-    label: "ตรวจสอบประกาศผู้ชนะการเสนอราคาบน e-GP ตรงกับผลพิจารณา",
+    key: "winner_announcement_recorded",
+    label: "บันทึกข้อมูลเลขที่และวันที่ประกาศผู้ชนะ",
+    mode: "auto",
+  },
+  {
+    key: "egp_winner_announced",
+    label: "ประกาศผลผู้ชนะในระบบ e-GP เรียบร้อยแล้ว",
     mode: "manual",
   },
   {
-    key: "evaluation_report_signed",
-    label: "ตรวจสอบรายงานผลการพิจารณาลงนามคณะกรรมการครบถ้วน",
-    mode: "manual",
-  },
-  {
-    key: "bidders_notified",
-    label: "ตรวจสอบการแจ้งผลให้ผู้ยื่นข้อเสนอทุกรายทราบแล้ว",
+    key: "physical_board_posted",
+    label: "ปิดประกาศผลผู้ชนะ ณ ที่ทำการหน่วยงานรัฐเรียบร้อยแล้ว",
     mode: "manual",
   },
 ];
 
 export const STEP6_CHECKLIST_ITEMS: SmartChecklistItem[] = [
   { key: "responsible_officer_assigned", label: "ระบุเจ้าหน้าที่ผู้รับผิดชอบแล้ว", mode: "auto" },
-  { key: "appeal_status_recorded", label: "บันทึกสถานะอุทธรณ์จากขั้นตอนที่ 4 แล้ว", mode: "auto" },
+  { key: "appeal_status_recorded", label: "บันทึกสถานะการอุทธรณ์แล้ว", mode: "auto" },
   {
     key: "appeal_period_waited",
     label: "ตรวจสอบครบระยะเวลารออุทธรณ์ 7 วันทำการ (ถ้ามี)",
@@ -167,7 +168,6 @@ export const STEP10_CHECKLIST_ITEMS: SmartChecklistItem[] = [
 ];
 
 const GENERIC_STEP_ITEMS: Record<number, SmartChecklistItem[]> = {
-  5: STEP5_CHECKLIST_ITEMS,
   6: STEP6_CHECKLIST_ITEMS,
   7: STEP7_CHECKLIST_ITEMS,
   8: STEP8_CHECKLIST_ITEMS,
@@ -196,6 +196,8 @@ export function getSmartChecklistItems(stepNumber: number): SmartChecklistItem[]
       return withModes(3, STEP3_CHECKLIST_ITEMS);
     case 4:
       return withModes(4, STEP4_CHECKLIST_ITEMS);
+    case 5:
+      return STEP5_CHECKLIST_ITEMS;
     default:
       return GENERIC_STEP_ITEMS[stepNumber] ?? [];
   }
@@ -246,8 +248,14 @@ export type SmartChecklistAutoContext = {
   hasDraftAnnouncementDoc?: boolean;
   hasEgpAnnouncementDoc?: boolean;
   hasEgpScreenshotDoc?: boolean;
+  hasEgpBidSummaryDoc?: boolean;
+  hasBlacklistEvidenceDoc?: boolean;
+  hasConflictEvidenceDoc?: boolean;
+  hasCommitteeEvaluationDoc?: boolean;
+  /** @deprecated ใช้ hasCommitteeEvaluationDoc */
   hasEvaluationReportDoc?: boolean;
   appealStatus?: string | null;
+  step5Announcement?: { winner_announcement_no?: string; winner_announcement_date?: string };
   requiredDocs?: DocItem[];
   uploadedDocTypes?: string[];
 };
@@ -312,20 +320,36 @@ export function computeAutoChecklistState(ctx: SmartChecklistAutoContext): Recor
 
   if (stepNumber === 4) {
     const bid = ctx.bidResult;
+    const hasCommittee =
+      !!ctx.hasCommitteeEvaluationDoc || !!ctx.hasEvaluationReportDoc;
+    const winningAmount =
+      bid?.winning_bid_amount != null &&
+      Number.isFinite(bid.winning_bid_amount) &&
+      bid.winning_bid_amount > 0;
+    auto.egp_summary_downloaded = !!ctx.hasEgpBidSummaryDoc;
+    auto.blacklist_checked = !!ctx.hasBlacklistEvidenceDoc;
+    auto.conflict_of_interest_checked =
+      !!ctx.hasConflictEvidenceDoc && !!bid?.winning_bidder_name?.trim();
+    auto.technical_price_reviewed = hasCommittee && winningAmount;
     auto.evaluation_report_submitted =
-      !!ctx.hasEvaluationReportDoc &&
+      hasCommittee &&
       !!bid?.evaluation_report_letter_no?.trim() &&
       !!bid?.evaluation_report_approval_date?.trim();
-    auto.appeal_period_checked =
-      bid?.appeal_status === "none" || bid?.appeal_status === "pending";
     return auto;
   }
 
-  if (stepNumber >= 5 && stepNumber <= 10) {
+  if (stepNumber === 5) {
+    const ann = ctx.step5Announcement;
+    auto.winner_announcement_recorded =
+      !!ann?.winner_announcement_no?.trim() && !!ann?.winner_announcement_date?.trim();
+    return auto;
+  }
+
+  if (stepNumber >= 6 && stepNumber <= 10) {
     auto.required_docs_uploaded = requiredDocsComplete(required, uploaded);
     auto.responsible_officer_assigned = !!responsible;
     if (stepNumber === 6) {
-      const status = ctx.appealStatus ?? ctx.bidResult?.appeal_status;
+      const status = ctx.appealStatus;
       auto.appeal_status_recorded = status === "none" || status === "pending";
     }
     return auto;
@@ -415,6 +439,13 @@ export function getGenericStepComplianceIssues(
       message: `กรุณาอัปโหลดเอกสารบังคับ: ${missingDocs.join(", ")}`,
     });
   }
+
+  const evidenceCtx: EvidenceValidationContext = {
+    uploadedDocTypes: opts.uploadedDocTypes,
+  };
+  getChecklistEvidenceIssues(stepNumber, manualChecklist, evidenceCtx).forEach((issue) => {
+    issues.push(issue);
+  });
 
   return issues;
 }

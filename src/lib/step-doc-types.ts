@@ -43,13 +43,66 @@ export const STEP3_FEEDBACK_HELPER_NONE =
 export const STEP3_FEEDBACK_HELPER_HAS_COMMENTS =
   "หมายเหตุ: ให้แนบรายงานข้อสรุปประเด็นที่มีผู้เสนอแนะหรือวิจารณ์ พร้อมบันทึกข้อความชี้แจง/ปรับปรุงร่าง TOR ที่เสนอหัวหน้าหน่วยงานเห็นชอบ";
 
-/** ประเภทเอกสารขั้นตอนที่ 4 — ผูกกับฟิลด์ฟอร์ม */
-export const STEP4_DOC = {
+/** ประเภทเอกสารขั้นตอนที่ 4 — ผูกกับ Smart Checklist + Audit Trail */
+export const STEP4_DOC_LEGACY = {
+  /** ค่าเก่าใน DB ก่อนอัปเกรดมาตรฐาน Audit Trail */
   EVALUATION_REPORT: "PDF รายงานผลการพิจารณา",
 } as const;
 
-export const STEP4_EVALUATION_UPLOAD_LABEL =
-  "📎 แนบเอกสารรายงานผลการพิจารณา (PDF)";
+export const STEP4_DOC = {
+  /** หลักฐานข้อที่ 1 — ดาวน์โหลดรายงานสรุปผลจาก e-GP */
+  EGP_BID_SUMMARY: "PDF รายงานสรุปผลการเสนอราคาจากระบบ e-GP",
+  /** หลักฐานข้อที่ 2 — ตรวจ Blacklist จากระบบภายนอก */
+  BLACKLIST_EVIDENCE: "ภาพหน้าจอ/เอกสารตรวจ Blacklist (e-GP)",
+  /** หลักฐานข้อที่ 3 — ตรวจผลประโยชน์ร่วมกัน */
+  CONFLICT_EVIDENCE: "ภาพหน้าจอ/เอกสารตรวจผลประโยชน์ร่วมกัน",
+  /** หลักฐานข้อที่ 4–5 — รายงานผลการพิจารณาของคณะกรรมการ */
+  COMMITTEE_EVALUATION_REPORT: "PDF รายงานผลการพิจารณาของคณะกรรมการ",
+  /** @deprecated ใช้ COMMITTEE_EVALUATION_REPORT — รองรับไฟล์เก่าใน DB */
+  EVALUATION_REPORT: STEP4_DOC_LEGACY.EVALUATION_REPORT,
+} as const;
+
+/** ประเภทเอกสารขั้นตอนที่ 5 — ผูกกับ Smart Checklist + Audit Trail */
+export const STEP5_DOC = {
+  /** หลักฐานข้อที่ 2 — ประกาศผลผู้ชนะในระบบ e-GP */
+  EGP_WINNER_ANNOUNCEMENT: "หลักฐานประกาศผลผู้ชนะในระบบ e-GP",
+  /** หลักฐานข้อที่ 3 — ปิดประกาศ ณ ที่ทำการหน่วยงาน */
+  PHYSICAL_BOARD_ANNOUNCEMENT: "ภาพถ่ายบอร์ดประชาสัมพันธ์ปิดประกาศผลผู้ชนะ",
+} as const;
+
+/** @deprecated ชื่อเอกสารเก่าใน DB — รองรับ Audit Hub */
+export const STEP5_DOC_LEGACY = {
+  EGP_WINNER: "ประกาศผู้ชนะการเสนอราคา (e-GP)",
+  EVALUATION_SIGNED: "รายงานผลการพิจารณา (ลงนามคณะกรรมการครบ)",
+  APPROVAL_MEMO: "บันทึกอนุมัติผลจากหัวหน้าหน่วยงาน",
+} as const;
+
+export function isStep5EgpWinnerDocType(documentType: string): boolean {
+  return (
+    documentType === STEP5_DOC.EGP_WINNER_ANNOUNCEMENT ||
+    documentType === STEP5_DOC_LEGACY.EGP_WINNER
+  );
+}
+
+export function isStep5PhysicalBoardDocType(documentType: string): boolean {
+  return documentType === STEP5_DOC.PHYSICAL_BOARD_ANNOUNCEMENT;
+}
+
+export function isStep4CommitteeReportDocType(documentType: string): boolean {
+  return (
+    documentType === STEP4_DOC.COMMITTEE_EVALUATION_REPORT ||
+    documentType === STEP4_DOC_LEGACY.EVALUATION_REPORT
+  );
+}
+
+export const STEP4_EGP_SUMMARY_UPLOAD_LABEL =
+  "📎 หลักฐานข้อที่ 1 — แนบรายงานสรุปผลการเสนอราคาจากระบบ e-GP (PDF)";
+
+export const STEP4_COMMITTEE_REPORT_UPLOAD_LABEL =
+  "📎 หลักฐานข้อที่ 4 — แนบรายงานผลการพิจารณาของคณะกรรมการ (PDF)";
+
+/** @deprecated */
+export const STEP4_EVALUATION_UPLOAD_LABEL = STEP4_COMMITTEE_REPORT_UPLOAD_LABEL;
 
 /** ชื่อเอกสารเก่า (backward compatible ใน Hub) */
 export const STEP3_DOC_LEGACY = [

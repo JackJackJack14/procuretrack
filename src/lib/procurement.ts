@@ -7,7 +7,7 @@ export {
   getMilestoneLabel,
   milestoneProgressPercent,
 } from "@/lib/egp-milestones";
-import { STEP3_DOC } from "@/lib/step-doc-types";
+import { STEP3_DOC, STEP4_DOC, STEP5_DOC } from "@/lib/step-doc-types";
 
 export type DocItem = { name: string; required: boolean };
 
@@ -36,13 +36,14 @@ export const STEP_DOCS_DETAILED: DocItem[][] = [
     { name: STEP3_DOC.FEEDBACK_REPORT, required: true },
   ],
   [
-    { name: "PDF รายงานผลการพิจารณา", required: true },
+    { name: STEP4_DOC.EGP_BID_SUMMARY, required: true },
+    { name: STEP4_DOC.BLACKLIST_EVIDENCE, required: true },
+    { name: STEP4_DOC.CONFLICT_EVIDENCE, required: true },
+    { name: STEP4_DOC.COMMITTEE_EVALUATION_REPORT, required: true },
   ],
   [
-    { name: "รายงานผลการพิจารณา (ลงนามคณะกรรมการครบ)", required: true },
-    { name: "ประกาศผู้ชนะการเสนอราคา (e-GP)", required: true },
-    { name: "บันทึกอนุมัติผลจากหัวหน้าหน่วยงาน", required: true },
-    { name: "หนังสือแจ้งผลให้ผู้ยื่นทุกรายทราบ", required: false },
+    { name: STEP5_DOC.EGP_WINNER_ANNOUNCEMENT, required: true },
+    { name: STEP5_DOC.PHYSICAL_BOARD_ANNOUNCEMENT, required: true },
   ],
   [
     { name: "บันทึกรับเรื่องอุทธรณ์ (ถ้ามี)", required: false },
