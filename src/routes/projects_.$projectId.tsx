@@ -28,22 +28,23 @@ import {
   Step4DetailForm,
   Step5DetailForm,
   Step6AppealForm,
-  GenericStepChecklistPanel,
-  ResponsibleOfficerField,
+  GenericStepDetailForm,
 } from "@/components/steps/ProjectStepForms";
 import {
   computeAutoChecklistState,
   createEmptyManualChecklist,
   getGenericStepComplianceIssues,
   getSmartChecklistItems,
+  getStep6ChecklistItems,
   isGenericStepReadyForNext,
   loadManualChecklistFromNote,
+  normalizeManualChecklist,
 } from "@/lib/smart-checklist";
 import { CompletedStepView } from "@/components/steps/CompletedStepView";
-import { StepDocumentHub } from "@/components/steps/StepDocumentHub";
-import { StepInlineDocList } from "@/components/steps/StepInlineDocList";
 import {
   addWorkdays,
+  computeAppealDeadlineISO,
+  parseISODateLocal,
   getStepMinDays,
   getMinDays,
   validateStep3PublicationDates,
@@ -74,6 +75,8 @@ import {
   EMPTY_STEP5_CHECKLIST,
   getStep5ComplianceIssues,
   isStep5ReadyForNext,
+  isStep5WinnerAnnouncementBeforeEvaluation,
+  getStep5WinnerAnnouncementBeforeEvaluationMsg,
   EMPTY_STEP1_CHECKLIST,
   loadStep1FormFromStep,
   isStep1ReadyForNext,
@@ -108,8 +111,9 @@ import {
   isAppealBlocking,
   isStep4ReadyForNext,
   getStep4ComplianceIssues,
-  getStep6AppealComplianceIssues,
-  isStep6AppealReadyForNext,
+  getStep6ComplianceIssues,
+  isStep6ReadyForNext,
+  resolveWinnerAnnouncementDate,
   computeStep4Timeline,
   resolveStep4ContractAmount,
   buildProjectAppealFields,
@@ -125,6 +129,7 @@ import {
   type Step5Checklist,
   type Step5ChecklistKey,
   type Step6AppealState,
+  type Step6Checklist,
 } from "@/lib/step-form";
 import {
   hasStep4BlacklistEvidenceDoc,
@@ -133,6 +138,9 @@ import {
   hasStep4EgpBidSummaryDoc,
   hasStep5EgpWinnerDoc,
   hasStep5PhysicalBoardDoc,
+  hasStep6AgencyReportDoc,
+  hasStep6CgdReportDoc,
+  hasStep6NoAppealEgpDoc,
   isStep4RequiredDocSatisfied,
   isStep5RequiredDocSatisfied,
 } from "@/lib/form-audit-trail";
@@ -201,6 +209,7 @@ type Project = {
   appeal_status?: string | null;
   appeal_report_letter_no?: string | null;
   appeal_consideration_status?: string | null;
+  appeal_report_approval_date?: string | null;
   committee_appointment_order_no?: string | null;
   committee_appointment_order_date?: string | null;
   committee_appointment_mode?: string | null;
@@ -445,6 +454,8 @@ function ProjectDetailPage() {
 
   const current = useMemo(() => steps.find((s) => s.step_number === activeStep), [steps, activeStep]);
   const step3Record = useMemo(() => steps.find((s) => s.step_number === 3), [steps]);
+  const step4Record = useMemo(() => steps.find((s) => s.step_number === 4), [steps]);
+  const step5Record = useMemo(() => steps.find((s) => s.step_number === 5), [steps]);
   const step1Record = useMemo(() => steps.find((s) => s.step_number === 1), [steps]);
   const step1ResponsibleDefault = useMemo(
     () => getStep1ResponsibleOfficer(steps),
@@ -558,7 +569,12 @@ function ProjectDetailPage() {
     }
     if (current.step_number === 6) {
       const draft = loadStepDraftFields(current);
-      setGenericManualChecklist(loadManualChecklistFromNote(current.step_number, current.note));
+      setGenericManualChecklist(
+        normalizeManualChecklist(
+          6,
+          loadManualChecklistFromNote(current.step_number, current.note),
+        ),
+      );
       setStep6Appeal(mergeAppealFromProject(project));
       setNote(draft.userNote);
       setDueDate(draft.dueDate);
@@ -572,6 +588,29 @@ function ProjectDetailPage() {
 
   const effectiveResponsibleName =
     responsibleName.trim() || step1ResponsibleDefault.trim();
+
+  /** วันที่อนุมัติผลขั้น 4 — ใช้เป็น minDate ของประกาศผู้ชนะขั้น 5 */
+  const step4ApprovalFromNote = useMemo(() => {
+    if (!step4Record) return "";
+    const step4Form = loadStep4FormFromNote(step4Record.note);
+    return (
+      mergeStep4BidResultFromProject(
+        step4Form.bidResult ?? { ...EMPTY_STEP4_BID_RESULT },
+        project,
+      ).evaluation_report_approval_date?.trim() || ""
+    );
+  }, [step4Record, project]);
+  const step5EvaluationApprovalDate =
+    project?.evaluation_report_approval_date?.trim() ||
+    step4BidResult.evaluation_report_approval_date?.trim() ||
+    step4ApprovalFromNote ||
+    "";
+
+  /** วันประกาศผู้ชนะ — ใช้คำนวณระยะอุทธรณ์ขั้น 6 */
+  const winnerAnnouncementDate = resolveWinnerAnnouncementDate(
+    project,
+    step5Record?.note ?? null,
+  );
 
   /** ซิงก์ชื่อเจ้าหน้าที่กลับขั้นตอนที่ 1 (ค่ามาตรฐาน) เมื่อบันทึกจากขั้นอื่น */
   const propagateResponsibleToStep1 = async (name: string) => {
@@ -967,6 +1006,19 @@ function ProjectDetailPage() {
     }
 
     if (current.step_number === 5) {
+      if (
+        step5Announcement.winner_announcement_date?.trim() &&
+        step5EvaluationApprovalDate &&
+        isStep5WinnerAnnouncementBeforeEvaluation(
+          step5Announcement.winner_announcement_date,
+          step5EvaluationApprovalDate,
+        )
+      ) {
+        const msg = getStep5WinnerAnnouncementBeforeEvaluationMsg(step5EvaluationApprovalDate);
+        toast.error(msg);
+        setError(msg);
+        return;
+      }
       const formNote = serializeStepNote("", {
         checklist: step5Checklist,
         announcement: step5Announcement,
@@ -993,8 +1045,32 @@ function ProjectDetailPage() {
       return;
     }
 
+    if (current.step_number === 6) {
+      const formNote = serializeStepNote(note, { checklist: genericManualChecklist });
+      const { error: e } = await patchStepDraft(
+        current.id,
+        buildStepDraftFields(effectiveResponsibleName, note, ""),
+        { note: formNote || null },
+      );
+      if (e?.error) {
+        setError(e.error.message);
+        return;
+      }
+      const { error: projErr } = await supabase
+        .from("projects")
+        .update(buildProjectAppealFields(step6Appeal))
+        .eq("id", project.id);
+      if (projErr) {
+        console.warn("[Step6] appeal fields sync failed", projErr);
+      }
+      draftSavedToast("ขั้นตอนที่ 6 ");
+      await propagateResponsibleToStep1(effectiveResponsibleName);
+      await invalidateAll();
+      return;
+    }
+
     const formNote =
-      current.step_number >= 6
+      current.step_number >= 7
         ? serializeStepNote(note, { checklist: genericManualChecklist })
         : null;
     const { error: e } = await patchStepDraft(
@@ -1005,15 +1081,6 @@ function ProjectDetailPage() {
     if (e?.error) {
       setError(e.error.message);
       return;
-    }
-    if (current.step_number === 6) {
-      const { error: projErr } = await supabase
-        .from("projects")
-        .update(buildProjectAppealFields(step6Appeal))
-        .eq("id", project.id);
-      if (projErr) {
-        console.warn("[Step6] appeal fields sync failed", projErr);
-      }
     }
     await propagateResponsibleToStep1(effectiveResponsibleName);
     await invalidateAll();
@@ -1144,15 +1211,16 @@ function ProjectDetailPage() {
       }
     }
     if (current.step_number === 5) {
-      const step5Uploaded = docs
-        .filter((d) => d.step_number === 5)
-        .map((d) => d.document_type);
+      const step5Docs = docs.filter((d) => d.step_number === 5);
+      const step5Uploaded = step5Docs.map((d) => d.document_type);
       const complianceIssues = getStep5ComplianceIssues(
         step5Checklist,
         step5Announcement,
         {
           hasEgpWinnerDoc: hasStep5EgpWinnerDoc(step5Uploaded),
           hasPhysicalBoardDoc: hasStep5PhysicalBoardDoc(step5Uploaded),
+          evaluationApprovalDate: step5EvaluationApprovalDate,
+          stepDocs: step5Docs,
         },
       );
       if (complianceIssues.length > 0) {
@@ -1161,7 +1229,31 @@ function ProjectDetailPage() {
         return;
       }
     }
-    if (current.step_number >= 6 && current.step_number <= 10) {
+    if (current.step_number === 6) {
+      const step6Docs = docs.filter((d) => d.step_number === 6);
+      const step6Uploaded = step6Docs.map((d) => d.document_type);
+      const step6Checklist = normalizeManualChecklist(
+        6,
+        genericManualChecklist,
+      ) as Step6Checklist;
+      const complianceIssues = getStep6ComplianceIssues(
+        step6Appeal,
+        step6Checklist,
+        {
+          hasNoAppealEgpDoc: hasStep6NoAppealEgpDoc(step6Uploaded),
+          hasAgencyReportDoc: hasStep6AgencyReportDoc(step6Uploaded),
+          hasCgdReportDoc: hasStep6CgdReportDoc(step6Uploaded),
+          responsibleName: effectiveResponsibleName,
+          stepDocs: step6Docs,
+        },
+      );
+      if (complianceIssues.length > 0) {
+        toast.error(complianceIssues[0].message);
+        setError(complianceIssues[0].message);
+        return;
+      }
+    }
+    if (current.step_number >= 7 && current.step_number <= 10) {
       const stepDocs = docs.filter((d) => d.step_number === current.step_number);
       const requiredDocs = (STEP_DOCS_DETAILED[current.step_number - 1] ?? []).filter(
         (d) => d.required,
@@ -1172,11 +1264,6 @@ function ProjectDetailPage() {
         computeAutoChecklistState({
           stepNumber: current.step_number,
           responsibleName: effectiveResponsibleName,
-          appealStatus:
-            current.step_number === 6
-              ? step6Appeal.appeal_status
-              : project.appeal_status ?? undefined,
-          bidResult: step4BidResult,
           requiredDocs,
           uploadedDocTypes: stepDocs.map((d) => d.document_type),
         }),
@@ -1190,14 +1277,6 @@ function ProjectDetailPage() {
         toast.error(complianceIssues[0].message);
         setError(complianceIssues[0].message);
         return;
-      }
-      if (current.step_number === 6) {
-        const appealIssues = getStep6AppealComplianceIssues(step6Appeal);
-        if (appealIssues.length > 0) {
-          toast.error(appealIssues[0].message);
-          setError(appealIssues[0].message);
-          return;
-        }
       }
     }
     if (current.step_number === 4) {
@@ -1433,7 +1512,13 @@ function ProjectDetailPage() {
             current.step_number === 3
               ? 0
               : getStepMinDays(current.step_number, calcMethod, calcBudget);
-          const minDeadline = minDays > 0 ? addWorkdays(new Date(stepStartDate), minDays) : null;
+          const appealDeadlineDate =
+            current.step_number === 6 && winnerAnnouncementDate
+              ? parseISODateLocal(computeAppealDeadlineISO(winnerAnnouncementDate))
+              : null;
+          const minDeadline =
+            appealDeadlineDate ??
+            (minDays > 0 ? addWorkdays(new Date(stepStartDate), minDays) : null);
           const dueDateObj = dueDate ? new Date(dueDate) : null;
           const dueValid = !!dueDateObj && !isNaN(dueDateObj.getTime());
           const isContractStep = current.step_number === 8;
@@ -1501,7 +1586,15 @@ function ProjectDetailPage() {
               current.step_number === 6
                 ? step6Appeal.appeal_status
                 : project.appeal_status ?? undefined,
+            step6Appeal:
+              current.step_number === 6
+                ? {
+                    appeal_report_letter_no: step6Appeal.appeal_report_letter_no,
+                    appeal_report_approval_date: step6Appeal.appeal_report_approval_date,
+                  }
+                : undefined,
             step5Announcement,
+            evaluationApprovalDate: step5EvaluationApprovalDate,
             requiredDocs: requiredDocsForStep,
             uploadedDocTypes: uploadedDocTypesForAuto,
           });
@@ -1523,6 +1616,9 @@ function ProjectDetailPage() {
               stepStartDate={stepStartDate}
               step4Timeline={
                 current.step_number === 4 ? step4Timeline : undefined
+              }
+              winnerAnnouncementDate={
+                current.step_number === 6 ? winnerAnnouncementDate : undefined
               }
               readOnly={workflowReadOnly}
               onSkipStep3={
@@ -1696,6 +1792,7 @@ function ProjectDetailPage() {
                       readOnly={workflowReadOnly}
                       announcement={step5Announcement}
                       onAnnouncementChange={patchStep5Announcement}
+                      evaluationApprovalDate={step5EvaluationApprovalDate}
                       docBinder={{
                         project,
                         stepNumber: 5,
@@ -1706,13 +1803,33 @@ function ProjectDetailPage() {
                   )}
                   {current.step_number === 6 && (
                     <Step6AppealForm
+                      checklist={
+                        normalizeManualChecklist(
+                          6,
+                          genericManualChecklist,
+                        ) as Step6Checklist
+                      }
+                      onChecklistChange={setGenericManualCheck}
+                      autoCheckStates={autoCheckStates}
                       appeal={step6Appeal}
                       onAppealChange={patchStep6Appeal}
+                      responsibleName={responsibleName}
+                      onResponsibleNameChange={setResponsibleName}
+                      step1ResponsibleDefault={step1ResponsibleDefault}
+                      note={note}
+                      onNoteChange={setNote}
+                      winnerAnnouncementDate={winnerAnnouncementDate}
                       readOnly={workflowReadOnly}
+                      docBinder={{
+                        project,
+                        stepNumber: 6,
+                        docs: docsForStep,
+                        onDocsChange: invalidateAll,
+                      }}
                     />
                   )}
-                  {current.step_number >= 6 && current.step_number <= 10 && (
-                    <GenericStepChecklistPanel
+                  {current.step_number >= 7 && current.step_number <= 10 && (
+                    <GenericStepDetailForm
                       stepNumber={current.step_number}
                       manualChecklist={genericManualChecklist}
                       onManualChange={setGenericManualCheck}
@@ -1724,70 +1841,20 @@ function ProjectDetailPage() {
                         docs: docsForStep,
                         onDocsChange: invalidateAll,
                       }}
-                    />
-                  )}
-                  {current.step_number !== 1 &&
-                    current.step_number !== 2 &&
-                    current.step_number !== 3 &&
-                    current.step_number !== 4 &&
-                    current.step_number !== 5 && (
-                    <FieldRow label="กำหนดเสร็จ">
-                      <div className="space-y-1">
-                        <ThaiDatePicker value={dueDate} onChange={setDueDate} />
-                        {dueDate && (
-                          <p className="text-xs text-muted-foreground">📅 {formatThaiDate(dueDate)}</p>
-                        )}
-                        {dueTooEarly && minDeadline && (
-                          <p className="text-xs" style={{ color: "#EA580C" }}>
-                            ⚠️ วันที่เลือกสั้นกว่ากำหนดตาม พ.ร.บ. กรุณาเลือกวันที่ {formatThaiDate(minDeadline)} หรือหลังจากนั้น มิฉะนั้น สตง. อาจทักท้วงได้
-                          </p>
-                        )}
-                        {dueTooLateContract && (
-                          <p className="text-xs" style={{ color: "#EA580C" }}>
-                            ⚠️ ควรลงนามสัญญาภายใน 7 วันทำการ หลังพ้นอุทธรณ์
-                          </p>
-                        )}
-                      </div>
-                    </FieldRow>
-                  )}
-                  {current.step_number !== 1 &&
-                    current.step_number !== 2 &&
-                    current.step_number !== 3 &&
-                    current.step_number !== 4 &&
-                    current.step_number !== 5 && (
-                    <ResponsibleOfficerField
-                      stepNumber={current.step_number}
-                      value={responsibleName}
-                      onChange={setResponsibleName}
-                      step1Default={step1ResponsibleDefault}
-                    />
-                  )}
-                  {current.step_number !== 3 &&
-                    current.step_number !== 4 &&
-                    current.step_number !== 5 && (
-                    <FieldRow label="หมายเหตุ">
-                      <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={4}
-                        className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
-                    </FieldRow>
-                  )}
-                  {current.step_number !== 3 &&
-                    current.step_number !== 4 &&
-                    current.step_number !== 5 && (
-                    <StepInlineDocList
+                      dueDate={dueDate}
+                      onDueDateChange={setDueDate}
+                      dueTooEarly={dueTooEarly}
+                      dueTooLateContract={dueTooLateContract}
+                      minDeadline={minDeadline}
+                      responsibleName={responsibleName}
+                      onResponsibleNameChange={setResponsibleName}
+                      step1ResponsibleDefault={step1ResponsibleDefault}
+                      note={note}
+                      onNoteChange={setNote}
                       project={project}
-                      stepNumber={current.step_number}
                       docList={STEP_DOCS_DETAILED[current.step_number - 1] ?? []}
-                      existing={docsForStep}
-                      onChange={invalidateAll}
-                    />
-                  )}
-                  {!(current.step_number === 3 && !showStep3HearingForm) &&
-                    current.step_number !== 4 &&
-                    current.step_number !== 5 && (
-                    <StepDocumentHub
-                      stepNumber={current.step_number}
-                      docList={STEP_DOCS_DETAILED[current.step_number - 1] ?? []}
-                      docs={docsForStep}
+                      docsForStep={docsForStep}
+                      onDocsChange={invalidateAll}
                       projectName={project.name}
                     />
                   )}
@@ -1952,6 +2019,14 @@ function ProjectDetailPage() {
                         autoCheckStates,
                       )
                     : [];
+                const step5DateInvalid =
+                  current.step_number === 5 &&
+                  !!step5Announcement.winner_announcement_date?.trim() &&
+                  !!step5EvaluationApprovalDate &&
+                  isStep5WinnerAnnouncementBeforeEvaluation(
+                    step5Announcement.winner_announcement_date,
+                    step5EvaluationApprovalDate,
+                  );
                 const step5ComplianceIssues =
                   current.step_number === 5
                     ? getStep5ComplianceIssues(
@@ -1960,18 +2035,62 @@ function ProjectDetailPage() {
                         {
                           hasEgpWinnerDoc: step5HasEgpWinner,
                           hasPhysicalBoardDoc: step5HasPhysicalBoard,
+                          evaluationApprovalDate: step5EvaluationApprovalDate,
+                          stepDocs: docsForStep,
                         },
                         autoCheckStates,
                       )
                     : [];
                 const step5Ready =
                   current.step_number !== 5 ||
-                  isStep5ReadyForNext(step5Checklist, step5Announcement, {
-                    hasEgpWinnerDoc: step5HasEgpWinner,
-                    hasPhysicalBoardDoc: step5HasPhysicalBoard,
-                  });
+                  (!step5DateInvalid &&
+                    isStep5ReadyForNext(step5Checklist, step5Announcement, {
+                      hasEgpWinnerDoc: step5HasEgpWinner,
+                      hasPhysicalBoardDoc: step5HasPhysicalBoard,
+                      evaluationApprovalDate: step5EvaluationApprovalDate,
+                      stepDocs: docsForStep,
+                    }));
+                const step6ChecklistNormalized = normalizeManualChecklist(
+                  6,
+                  genericManualChecklist,
+                ) as Step6Checklist;
+                const step6HasNoAppealEgp =
+                  current.step_number === 6 && hasStep6NoAppealEgpDoc(uploadedTypes);
+                const step6HasAgencyReport =
+                  current.step_number === 6 && hasStep6AgencyReportDoc(uploadedTypes);
+                const step6HasCgdReport =
+                  current.step_number === 6 && hasStep6CgdReportDoc(uploadedTypes);
+                const step6ComplianceIssues =
+                  current.step_number === 6
+                    ? getStep6ComplianceIssues(
+                        step6Appeal,
+                        step6ChecklistNormalized,
+                        {
+                          hasNoAppealEgpDoc: step6HasNoAppealEgp,
+                          hasAgencyReportDoc: step6HasAgencyReport,
+                          hasCgdReportDoc: step6HasCgdReport,
+                          responsibleName: effectiveResponsibleName,
+                          stepDocs: docsForStep,
+                        },
+                        autoCheckStates,
+                      )
+                    : [];
+                const step6Ready =
+                  current.step_number !== 6 ||
+                  isStep6ReadyForNext(
+                    step6Appeal,
+                    step6ChecklistNormalized,
+                    {
+                      hasNoAppealEgpDoc: step6HasNoAppealEgp,
+                      hasAgencyReportDoc: step6HasAgencyReport,
+                      hasCgdReportDoc: step6HasCgdReport,
+                      responsibleName: effectiveResponsibleName,
+                      stepDocs: docsForStep,
+                    },
+                    autoCheckStates,
+                  );
                 const genericComplianceIssues =
-                  current.step_number >= 6 && current.step_number <= 10
+                  current.step_number >= 7 && current.step_number <= 10
                     ? getGenericStepComplianceIssues(
                         current.step_number,
                         genericManualChecklist,
@@ -1984,7 +2103,7 @@ function ProjectDetailPage() {
                       )
                     : [];
                 const genericReady =
-                  current.step_number < 6 ||
+                  current.step_number < 7 ||
                   current.step_number > 10 ||
                   isGenericStepReadyForNext(
                     current.step_number,
@@ -1996,12 +2115,6 @@ function ProjectDetailPage() {
                       uploadedDocTypes: uploadedTypes,
                     },
                   );
-                const step6AppealComplianceIssues =
-                  current.step_number === 6
-                    ? getStep6AppealComplianceIssues(step6Appeal)
-                    : [];
-                const step6AppealReady =
-                  current.step_number !== 6 || isStep6AppealReadyForNext(step6Appeal);
                 const step4Ready =
                   current.step_number !== 4 ||
                   isStep4ReadyForNext(step4Checklist, step4BidResult, {
@@ -2012,7 +2125,10 @@ function ProjectDetailPage() {
                     hasCommitteeEvaluationDoc: step4HasCommitteeReport,
                     timeline: step4Timeline,
                   });
-                const checklistItemsForStep = getSmartChecklistItems(current.step_number);
+                const checklistItemsForStep =
+                  current.step_number === 6
+                    ? getStep6ChecklistItems(step6Appeal.appeal_status ?? "")
+                    : getSmartChecklistItems(current.step_number);
                 const manualForReactive =
                   current.step_number === 1
                     ? (step1Checklist as Record<string, boolean>)
@@ -2048,12 +2164,11 @@ function ProjectDetailPage() {
                           ? step4ComplianceIssues.map((i) => i.message)
                           : current.step_number === 5
                             ? step5ComplianceIssues.map((i) => i.message)
-                            : current.step_number >= 6 && current.step_number <= 10
-                              ? [
-                                  ...genericComplianceIssues.map((i) => i.message),
-                                  ...step6AppealComplianceIssues.map((i) => i.message),
-                                ]
-                              : [];
+                            : current.step_number === 6
+                              ? step6ComplianceIssues.map((i) => i.message)
+                              : current.step_number >= 7 && current.step_number <= 10
+                                ? genericComplianceIssues.map((i) => i.message)
+                                : [];
                 const appealBlocking =
                   current.step_number === 6 && isAppealBlocking(step6Appeal);
                 const disabled =
@@ -2069,8 +2184,8 @@ function ProjectDetailPage() {
                           : current.step_number === 5
                             ? !step5Ready
                             : current.step_number === 6
-                              ? !genericReady || !step6AppealReady
-                              : current.step_number >= 6
+                              ? !step6Ready
+                              : current.step_number >= 7
                                 ? !genericReady
                                 : !allUploaded);
                 const showCompleteBtn =
@@ -2122,7 +2237,8 @@ function ProjectDetailPage() {
                         {showSaveDraft && (
                           <button
                             onClick={saveDraft}
-                            className="h-10 px-4 rounded-md border border-input bg-background text-sm font-medium hover:bg-accent"
+                            disabled={current.step_number === 5 && step5DateInvalid}
+                            className="h-10 px-4 rounded-md border border-input bg-background text-sm font-medium hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             {saveDraftLabel}
                           </button>
@@ -2139,8 +2255,9 @@ function ProjectDetailPage() {
                       )}
                     </div>
                     {appealBlocking && !isCompleted && (
-                      <p className="text-sm text-destructive mt-3 font-medium">
-                        ⚠️ แจ้งเตือน: โครงการนี้ติดสถานะอุทธรณ์ ไม่สามารถไปขั้นตอนทำสัญญาได้
+                      <p className="text-sm text-amber-800 mt-3 font-medium rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
+                        ⚠️ มีผู้ยื่นอุทธรณ์ — ชะลอการลงนามสัญญาจนกว่าจะพิจารณาผลอุทธรณ์เสร็จสิ้น
+                        (สามารถบันทึกขั้นตอนนี้และไปจัดทำร่างสัญญาได้เมื่อ Checklist ครบ)
                       </p>
                     )}
                     {current.step_number === 3 &&
@@ -2229,24 +2346,24 @@ function ProjectDetailPage() {
                     )}
                     {current.step_number === 6 &&
                       !isCompleted &&
-                      !step6AppealReady &&
-                      step6AppealComplianceIssues.length > 0 && (
+                      !step6Ready &&
+                      step6ComplianceIssues.length > 0 && (
                       <div className="text-sm text-muted-foreground mt-3 space-y-1 rounded-md border border-dashed border-border bg-muted/30 p-3">
                         <p className="font-medium text-foreground flex items-center gap-1.5">
                           <AlertTriangle className="h-4 w-4 text-warning shrink-0" />
                           กรุณาดำเนินการให้ครบก่อนไปขั้นถัดไป:
                         </p>
                         <ul className="list-disc list-inside space-y-0.5 text-xs">
-                          {step6AppealComplianceIssues.slice(0, 4).map((issue) => (
+                          {step6ComplianceIssues.slice(0, 4).map((issue) => (
                             <li key={issue.id}>{issue.message}</li>
                           ))}
-                          {step6AppealComplianceIssues.length > 4 && (
-                            <li>และอีก {step6AppealComplianceIssues.length - 4} รายการ...</li>
+                          {step6ComplianceIssues.length > 4 && (
+                            <li>และอีก {step6ComplianceIssues.length - 4} รายการ...</li>
                           )}
                         </ul>
                       </div>
                     )}
-                    {current.step_number >= 6 &&
+                    {current.step_number >= 7 &&
                       current.step_number <= 10 &&
                       !isCompleted &&
                       !genericReady &&

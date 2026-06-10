@@ -21,9 +21,15 @@ import {
 } from "@/lib/step-form";
 import type { DocItem } from "@/lib/procurement";
 import {
+  getInlineEvidenceByKey,
+  hasInlineEvidenceDoc,
+} from "@/lib/checklist-inline-evidence";
+import {
   getChecklistEvidenceIssues,
   type EvidenceValidationContext,
 } from "@/lib/form-audit-trail";
+
+export type StepDocRef = { document_type: string };
 
 export type ChecklistMode = "auto" | "manual";
 
@@ -67,6 +73,12 @@ const STEP_CHECKLIST_MODES: Record<number, Record<string, ChecklistMode>> = {
     technical_price_reviewed: "auto",
     evaluation_report_submitted: "auto",
   },
+  6: {
+    appeal_status_recorded: "auto",
+    appeal_period_passed_no_objection: "manual",
+    appeal_agency_report_done: "manual",
+    appeal_sent_to_cgd: "manual",
+  },
 };
 
 export const STEP5_CHECKLIST_ITEMS: SmartChecklistItem[] = [
@@ -87,25 +99,46 @@ export const STEP5_CHECKLIST_ITEMS: SmartChecklistItem[] = [
   },
 ];
 
-export const STEP6_CHECKLIST_ITEMS: SmartChecklistItem[] = [
-  { key: "responsible_officer_assigned", label: "ระบุเจ้าหน้าที่ผู้รับผิดชอบแล้ว", mode: "auto" },
-  { key: "appeal_status_recorded", label: "บันทึกสถานะการอุทธรณ์แล้ว", mode: "auto" },
+const STEP6_AUTO_ITEM: SmartChecklistItem = {
+  key: "appeal_status_recorded",
+  label: "บันทึกเลือกสถานะการอุทธรณ์ในฟอร์มเรียบร้อยแล้ว",
+  mode: "auto",
+};
+
+const STEP6_NO_APPEAL_MANUAL: SmartChecklistItem = {
+  key: "appeal_period_passed_no_objection",
+  label: "ล่วงพ้นระยะเวลาอุทธรณ์ 7 วันทำการโดยไม่มีผู้คัดค้าน",
+  mode: "manual",
+};
+
+const STEP6_PENDING_MANUAL: SmartChecklistItem[] = [
   {
-    key: "appeal_period_waited",
-    label: "ตรวจสอบครบระยะเวลารออุทธรณ์ 7 วันทำการ (ถ้ามี)",
+    key: "appeal_agency_report_done",
+    label: "จัดทำหนังสือรายงานผลการพิจารณาอุทธรณ์ของหน่วยงานเสร็จสิ้น",
     mode: "manual",
   },
   {
-    key: "appeal_documents_verified",
-    label: "ตรวจสอบเอกสารอุทธรณ์/มติคณะกรรมการ (ถ้ามี)",
-    mode: "manual",
-  },
-  {
-    key: "appeal_resolution_finalized",
-    label: "ยืนยันผลการพิจารณาอุทธรณ์เรียบร้อยแล้ว",
+    key: "appeal_sent_to_cgd",
+    label: "ส่งรายงานผลอุทธรณ์ให้กรมบัญชีกลางเรียบร้อย",
     mode: "manual",
   },
 ];
+
+/** รายการ Checklist ขั้น 6 ตามสถานะอุทธรณ์ที่เลือก */
+export function getStep6ChecklistItems(
+  appealStatus: "" | "none" | "pending",
+): SmartChecklistItem[] {
+  if (appealStatus === "none") {
+    return [STEP6_AUTO_ITEM, STEP6_NO_APPEAL_MANUAL];
+  }
+  if (appealStatus === "pending") {
+    return [STEP6_AUTO_ITEM, ...STEP6_PENDING_MANUAL];
+  }
+  return [STEP6_AUTO_ITEM];
+}
+
+/** @deprecated ใช้ getStep6ChecklistItems */
+export const STEP6_CHECKLIST_ITEMS: SmartChecklistItem[] = getStep6ChecklistItems("none");
 
 export const STEP7_CHECKLIST_ITEMS: SmartChecklistItem[] = [
   { key: "required_docs_uploaded", label: "อัปโหลดเอกสารบังคับครบถ้วน", mode: "auto" },
@@ -168,7 +201,6 @@ export const STEP10_CHECKLIST_ITEMS: SmartChecklistItem[] = [
 ];
 
 const GENERIC_STEP_ITEMS: Record<number, SmartChecklistItem[]> = {
-  6: STEP6_CHECKLIST_ITEMS,
   7: STEP7_CHECKLIST_ITEMS,
   8: STEP8_CHECKLIST_ITEMS,
   9: STEP9_CHECKLIST_ITEMS,
@@ -198,13 +230,21 @@ export function getSmartChecklistItems(stepNumber: number): SmartChecklistItem[]
       return withModes(4, STEP4_CHECKLIST_ITEMS);
     case 5:
       return STEP5_CHECKLIST_ITEMS;
+    case 6:
+      return getStep6ChecklistItems("none");
     default:
       return GENERIC_STEP_ITEMS[stepNumber] ?? [];
   }
 }
 
 export function createEmptyManualChecklist(stepNumber: number): Record<string, boolean> {
-  const items = getSmartChecklistItems(stepNumber);
+  const items =
+    stepNumber === 6
+      ? [
+          ...getStep6ChecklistItems("none"),
+          ...getStep6ChecklistItems("pending"),
+        ].filter((item, index, arr) => arr.findIndex((i) => i.key === item.key) === index)
+      : getSmartChecklistItems(stepNumber);
   const empty: Record<string, boolean> = {};
   items.forEach((item) => {
     if (item.mode === "manual") empty[item.key] = false;
@@ -255,7 +295,12 @@ export type SmartChecklistAutoContext = {
   /** @deprecated ใช้ hasCommitteeEvaluationDoc */
   hasEvaluationReportDoc?: boolean;
   appealStatus?: string | null;
+  step6Appeal?: {
+    appeal_report_letter_no?: string;
+    appeal_report_approval_date?: string;
+  };
   step5Announcement?: { winner_announcement_no?: string; winner_announcement_date?: string };
+  evaluationApprovalDate?: string | null;
   requiredDocs?: DocItem[];
   uploadedDocTypes?: string[];
 };
@@ -340,18 +385,35 @@ export function computeAutoChecklistState(ctx: SmartChecklistAutoContext): Recor
 
   if (stepNumber === 5) {
     const ann = ctx.step5Announcement;
+    const annDate = ann?.winner_announcement_date?.trim() ?? "";
+    const evalApproval = ctx.evaluationApprovalDate?.trim() ?? "";
+    const dateNotBeforeEvaluation =
+      !annDate ||
+      !evalApproval ||
+      annDate >= evalApproval;
     auto.winner_announcement_recorded =
-      !!ann?.winner_announcement_no?.trim() && !!ann?.winner_announcement_date?.trim();
+      !!ann?.winner_announcement_no?.trim() && !!annDate && dateNotBeforeEvaluation;
     return auto;
   }
 
-  if (stepNumber >= 6 && stepNumber <= 10) {
+  if (stepNumber === 6) {
+    const status = ctx.appealStatus;
+    const appeal = ctx.step6Appeal;
+    if (status === "none") {
+      auto.appeal_status_recorded = true;
+    } else if (status === "pending") {
+      auto.appeal_status_recorded =
+        !!appeal?.appeal_report_letter_no?.trim() &&
+        !!appeal?.appeal_report_approval_date?.trim();
+    } else {
+      auto.appeal_status_recorded = false;
+    }
+    return auto;
+  }
+
+  if (stepNumber >= 7 && stepNumber <= 10) {
     auto.required_docs_uploaded = requiredDocsComplete(required, uploaded);
     auto.responsible_officer_assigned = !!responsible;
-    if (stepNumber === 6) {
-      const status = ctx.appealStatus;
-      auto.appeal_status_recorded = status === "none" || status === "pending";
-    }
     return auto;
   }
 
@@ -362,14 +424,46 @@ export function buildEffectiveChecklist(
   stepNumber: number,
   manualChecklist: Record<string, boolean>,
   autoStates: Record<string, boolean>,
+  docs?: StepDocRef[],
+  itemsOverride?: SmartChecklistItem[],
 ): Record<string, boolean> {
-  const items = getSmartChecklistItems(stepNumber);
+  const items = itemsOverride ?? getSmartChecklistItems(stepNumber);
+  const evidenceByKey = docs ? getInlineEvidenceByKey(stepNumber) : null;
   const effective: Record<string, boolean> = {};
   items.forEach((item) => {
-    effective[item.key] =
-      item.mode === "auto" ? !!autoStates[item.key] : !!manualChecklist[item.key];
+    const evidence = evidenceByKey?.get(item.key);
+    if (evidence?.uploadDriven && docs) {
+      const hasDoc = hasInlineEvidenceDoc(docs, evidence.documentType);
+      effective[item.key] =
+        item.mode === "auto" ? hasDoc && !!autoStates[item.key] : hasDoc;
+    } else if (item.mode === "auto") {
+      effective[item.key] = !!autoStates[item.key];
+    } else if (evidence && docs && !evidence.uploadDriven) {
+      effective[item.key] =
+        hasInlineEvidenceDoc(docs, evidence.documentType) && !!manualChecklist[item.key];
+    } else {
+      effective[item.key] = !!manualChecklist[item.key];
+    }
   });
   return effective;
+}
+
+/** คำนวณความครบของ Checklist แบบ reactive (รวม inline upload) */
+export function computeReactiveChecklistEffective(
+  stepNumber: number,
+  items: SmartChecklistItem[],
+  manualChecklist: Record<string, boolean>,
+  autoStates: Record<string, boolean>,
+  docs: StepDocRef[],
+): { effective: Record<string, boolean>; done: number; total: number; allDone: boolean } {
+  const effective = buildEffectiveChecklist(
+    stepNumber,
+    manualChecklist,
+    autoStates,
+    docs,
+    items,
+  );
+  return { effective, ...countSmartChecklistProgressFromItems(items, effective) };
 }
 
 export function countSmartChecklistProgress(
@@ -409,7 +503,13 @@ export function getGenericStepComplianceIssues(
     uploadedDocTypes: string[];
   },
 ): GenericStepComplianceIssue[] {
-  const effective = buildEffectiveChecklist(stepNumber, manualChecklist, autoStates);
+  const stepDocs = opts.uploadedDocTypes.map((document_type) => ({ document_type }));
+  const effective = buildEffectiveChecklist(
+    stepNumber,
+    manualChecklist,
+    autoStates,
+    stepDocs,
+  );
   const issues: GenericStepComplianceIssue[] = [];
   const items = getSmartChecklistItems(stepNumber);
 

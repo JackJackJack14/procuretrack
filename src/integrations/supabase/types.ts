@@ -625,6 +625,7 @@ export type Database = {
       projects: {
         Row: {
           appeal_consideration_status: string | null
+          appeal_report_approval_date: string | null
           appeal_report_letter_no: string | null
           appeal_status: string | null
           approved_median_price: number | null
@@ -659,11 +660,14 @@ export type Database = {
           result_unit: string | null
           status: string
           updated_at: string
+          winner_announcement_date: string | null
+          winner_announcement_no: string | null
           winning_bid_amount: number | null
           winning_bidder_name: string | null
         }
         Insert: {
           appeal_consideration_status?: string | null
+          appeal_report_approval_date?: string | null
           appeal_report_letter_no?: string | null
           appeal_status?: string | null
           approved_median_price?: number | null
@@ -698,11 +702,14 @@ export type Database = {
           result_unit?: string | null
           status?: string
           updated_at?: string
+          winner_announcement_date?: string | null
+          winner_announcement_no?: string | null
           winning_bid_amount?: number | null
           winning_bidder_name?: string | null
         }
         Update: {
           appeal_consideration_status?: string | null
+          appeal_report_approval_date?: string | null
           appeal_report_letter_no?: string | null
           appeal_status?: string | null
           approved_median_price?: number | null
@@ -737,6 +744,8 @@ export type Database = {
           result_unit?: string | null
           status?: string
           updated_at?: string
+          winner_announcement_date?: string | null
+          winner_announcement_no?: string | null
           winning_bid_amount?: number | null
           winning_bidder_name?: string | null
         }

@@ -3,7 +3,7 @@
  * ตรวจข้อไหน แนบหลักฐานข้อนั้นในแถวเดียวกัน (Upload-Driven Reactive Check)
  */
 import type { DocFilePolicyId } from "@/lib/doc-file-types";
-import { STEP2_DOC, STEP3_DOC, STEP4_DOC, STEP5_DOC } from "@/lib/step-doc-types";
+import { STEP2_DOC, STEP3_DOC, STEP4_DOC, STEP5_DOC, STEP6_DOC } from "@/lib/step-doc-types";
 
 export type ChecklistInlineEvidence = {
   checklistKey: string;
@@ -130,11 +130,25 @@ const STEP5_INLINE: ChecklistInlineEvidence[] = [
 
 const STEP6_INLINE: ChecklistInlineEvidence[] = [
   {
-    checklistKey: "appeal_documents_verified",
-    documentType: "บันทึกรับเรื่องอุทธรณ์ (ถ้ามี)",
-    uploadLabel: "แนบเอกสารอุทธรณ์ (ถ้ามี)",
+    checklistKey: "appeal_period_passed_no_objection",
+    documentType: STEP6_DOC.NO_APPEAL_EGP_SCREENSHOT,
+    uploadLabel: "แนบหลักฐาน (.pdf, .png, .jpg)",
+    filePolicyId: "screenshot_evidence",
+    uploadDriven: true,
+  },
+  {
+    checklistKey: "appeal_agency_report_done",
+    documentType: STEP6_DOC.AGENCY_APPEAL_REPORT,
+    uploadLabel: "แนบหลักฐาน (.pdf)",
     filePolicyId: "pdf_only",
-    uploadDriven: false,
+    uploadDriven: true,
+  },
+  {
+    checklistKey: "appeal_sent_to_cgd",
+    documentType: STEP6_DOC.CGD_APPEAL_REPORT,
+    uploadLabel: "แนบหลักฐาน (.pdf)",
+    filePolicyId: "pdf_only",
+    uploadDriven: true,
   },
 ];
 

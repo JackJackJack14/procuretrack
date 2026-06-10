@@ -1,4 +1,4 @@
-import { STEP2_DOC, STEP3_DOC, STEP4_DOC, STEP5_DOC } from "@/lib/step-doc-types";
+import { STEP2_DOC, STEP3_DOC, STEP4_DOC, STEP5_DOC, STEP6_DOC } from "@/lib/step-doc-types";
 
 export type DocFilePolicyId =
   | "pdf_only"
@@ -91,6 +91,11 @@ const DOC_TYPE_POLICY: Record<string, DocFilePolicyId> = {
   [STEP5_DOC.EGP_WINNER_ANNOUNCEMENT]: "screenshot_evidence",
   [STEP5_DOC.PHYSICAL_BOARD_ANNOUNCEMENT]: "image_only",
   "ประกาศผู้ชนะการเสนอราคา (e-GP)": "screenshot_evidence",
+
+  [STEP6_DOC.NO_APPEAL_EGP_SCREENSHOT]: "screenshot_evidence",
+  [STEP6_DOC.AGENCY_APPEAL_REPORT]: "pdf_only",
+  [STEP6_DOC.CGD_APPEAL_REPORT]: "pdf_only",
+  [STEP6_DOC.APPEAL_RESULT_EVIDENCE]: "screenshot_evidence",
 };
 
 /** นโยบายไฟล์ตาม inline evidence config */

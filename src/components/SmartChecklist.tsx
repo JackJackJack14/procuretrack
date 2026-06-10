@@ -2,7 +2,6 @@ import { Check, Lock } from "lucide-react";
 import { InlineDocUpload } from "@/components/steps/InlineDocUpload";
 import {
   getInlineEvidenceByKey,
-  hasInlineEvidenceDoc,
 } from "@/lib/checklist-inline-evidence";
 import type { ProjectDocRef, StepDocRecord } from "@/lib/doc-upload";
 import {
@@ -10,6 +9,9 @@ import {
   countSmartChecklistProgressFromItems,
   type SmartChecklistItem,
 } from "@/lib/smart-checklist";
+
+export type { StepDocRef } from "@/lib/smart-checklist";
+export { computeReactiveChecklistEffective } from "@/lib/smart-checklist";
 
 export type SmartChecklistDocBinder = {
   project: ProjectDocRef;
@@ -42,25 +44,12 @@ export function SmartChecklist({
   const evidenceByKey = getInlineEvidenceByKey(stepNumber);
   const stepDocs = docBinder?.docs ?? [];
 
-  const isRowComplete = (item: SmartChecklistItem): boolean => {
-    const evidence = evidenceByKey.get(item.key);
-    if (evidence?.uploadDriven && docBinder) {
-      const hasDoc = hasInlineEvidenceDoc(stepDocs, evidence.documentType);
-      if (item.mode === "auto") return hasDoc && !!autoStates[item.key];
-      return hasDoc;
-    }
-    if (item.mode === "auto") return !!autoStates[item.key];
-    if (evidence && docBinder && !evidence.uploadDriven) {
-      const hasDoc = hasInlineEvidenceDoc(stepDocs, evidence.documentType);
-      return hasDoc && !!manualChecklist[item.key];
-    }
-    return !!manualChecklist[item.key];
-  };
-
-  const effective: Record<string, boolean> = {};
-  items.forEach((item) => {
-    effective[item.key] = isRowComplete(item);
-  });
+  const effective = buildEffectiveChecklist(
+    stepNumber,
+    manualChecklist,
+    autoStates,
+    docBinder ? stepDocs : undefined,
+  );
 
   const { done, total, allDone } = countSmartChecklistProgressFromItems(items, effective);
   const progressPct = total > 0 ? Math.round((done / total) * 100) : 0;
@@ -226,33 +215,4 @@ function ChecklistGroup({
       </div>
     </div>
   );
-}
-
-/** คำนวณความครบของ Checklist แบบ reactive (รวม inline upload) */
-export function computeReactiveChecklistEffective(
-  stepNumber: number,
-  items: SmartChecklistItem[],
-  manualChecklist: Record<string, boolean>,
-  autoStates: Record<string, boolean>,
-  docs: StepDocRecord[],
-): { effective: Record<string, boolean>; done: number; total: number; allDone: boolean } {
-  const evidenceByKey = getInlineEvidenceByKey(stepNumber);
-  const effective: Record<string, boolean> = {};
-  items.forEach((item) => {
-    const evidence = evidenceByKey.get(item.key);
-    if (evidence?.uploadDriven) {
-      const hasDoc = hasInlineEvidenceDoc(docs, evidence.documentType);
-      effective[item.key] =
-        item.mode === "auto" ? hasDoc && !!autoStates[item.key] : hasDoc;
-    } else if (item.mode === "auto") {
-      effective[item.key] = !!autoStates[item.key];
-    } else if (evidence) {
-      effective[item.key] =
-        hasInlineEvidenceDoc(docs, evidence.documentType) && !!manualChecklist[item.key];
-    } else {
-      effective[item.key] = !!manualChecklist[item.key];
-    }
-  });
-  const { done, total, allDone } = countSmartChecklistProgressFromItems(items, effective);
-  return { effective, done, total, allDone };
 }

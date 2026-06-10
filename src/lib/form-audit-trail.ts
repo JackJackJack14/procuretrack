@@ -9,9 +9,14 @@ import {
   STEP3_DOC,
   STEP4_DOC,
   STEP5_DOC,
+  STEP6_DOC,
   isStep4CommitteeReportDocType,
   isStep5EgpWinnerDocType,
   isStep5PhysicalBoardDocType,
+  isStep6AgencyReportDocType,
+  isStep6AppealEvidenceDocType,
+  isStep6CgdReportDocType,
+  isStep6NoAppealEgpDocType,
 } from "@/lib/step-doc-types";
 
 export const FORM_AUDIT_TRAIL_STANDARD = {
@@ -251,13 +256,41 @@ export const CHECKLIST_EVIDENCE_RULES: ChecklistEvidenceRule[] = [
   },
   {
     stepNumber: 6,
-    checklistKey: "appeal_documents_verified",
-    checklistIndex: 4,
-    enforce: "when_checked",
+    checklistKey: "appeal_period_passed_no_objection",
+    checklistIndex: 2,
+    enforce: "always",
     binding: {
       kind: "document",
-      documentTypes: ["บันทึกรับเรื่องอุทธรณ์ (ถ้ามี)", "มติ/คำวินิจฉัยคณะกรรมการอุทธรณ์"],
-      message: "ข้อที่ 4: กรุณาแนบเอกสารอุทธรณ์/มติคณะกรรมการ (ถ้ามี) ใน Document Hub",
+      documentTypes: [
+        STEP6_DOC.NO_APPEAL_EGP_SCREENSHOT,
+        STEP6_DOC.APPEAL_RESULT_EVIDENCE,
+      ],
+      message:
+        "ข้อที่ 2: กรุณาแนบภาพแคปหน้าจอ e-GP ยืนยันไม่มีผู้ยื่นอุทธรณ์",
+    },
+  },
+  {
+    stepNumber: 6,
+    checklistKey: "appeal_agency_report_done",
+    checklistIndex: 2,
+    enforce: "always",
+    binding: {
+      kind: "document",
+      documentTypes: [STEP6_DOC.AGENCY_APPEAL_REPORT],
+      message:
+        "ข้อที่ 2: กรุณาแนบหนังสือรายงานผลการพิจารณาอุทธรณ์ของหน่วยงาน (PDF)",
+    },
+  },
+  {
+    stepNumber: 6,
+    checklistKey: "appeal_sent_to_cgd",
+    checklistIndex: 3,
+    enforce: "always",
+    binding: {
+      kind: "document",
+      documentTypes: [STEP6_DOC.CGD_APPEAL_REPORT],
+      message:
+        "ข้อที่ 3: กรุณาแนบหลักฐานส่งรายงานผลอุทธรณ์ให้กรมบัญชีกลาง (PDF)",
     },
   },
   {
@@ -410,6 +443,23 @@ export function hasStep5EgpWinnerDoc(uploadedDocTypes: string[]): boolean {
 
 export function hasStep5PhysicalBoardDoc(uploadedDocTypes: string[]): boolean {
   return uploadedDocTypes.some((t) => isStep5PhysicalBoardDocType(t));
+}
+
+export function hasStep6NoAppealEgpDoc(uploadedDocTypes: string[]): boolean {
+  return uploadedDocTypes.some((t) => isStep6NoAppealEgpDocType(t));
+}
+
+export function hasStep6AgencyReportDoc(uploadedDocTypes: string[]): boolean {
+  return uploadedDocTypes.some((t) => isStep6AgencyReportDocType(t));
+}
+
+export function hasStep6CgdReportDoc(uploadedDocTypes: string[]): boolean {
+  return uploadedDocTypes.some((t) => isStep6CgdReportDocType(t));
+}
+
+/** @deprecated */
+export function hasStep6AppealEvidenceDoc(uploadedDocTypes: string[]): boolean {
+  return hasStep6NoAppealEgpDoc(uploadedDocTypes);
 }
 
 /** ตรวจเอกสารบังคับขั้น 5 — รองรับชื่อเอกสารเก่าใน DB */

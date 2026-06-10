@@ -74,15 +74,32 @@ import {
   getStep4TimelineDisplayLines,
   type Step4Timeline,
   type Step6AppealState,
+  type Step6Checklist,
+  type Step6ChecklistKey,
   type Step5Announcement,
   type Step5Checklist,
   type Step5ChecklistKey,
+  isStep5WinnerAnnouncementBeforeEvaluation,
+  getStep5WinnerAnnouncementBeforeEvaluationMsg,
   STEP4_EVALUATION_APPROVAL_BEFORE_BID_END_MSG,
   STEP4_EVALUATION_APPROVAL_OVERDUE_MSG,
 } from "@/lib/step-form";
+import { toast } from "sonner";
 import { formatBaht } from "@/lib/procurement";
 import { SmartChecklist, type SmartChecklistDocBinder } from "@/components/SmartChecklist";
-import { getSmartChecklistItems } from "@/lib/smart-checklist";
+import { getSmartChecklistItems, getStep6ChecklistItems } from "@/lib/smart-checklist";
+import { computeAppealDeadlineISO } from "@/lib/workdays";
+import type { DocItem } from "@/lib/procurement";
+import { StepInlineDocList } from "@/components/steps/StepInlineDocList";
+import { StepDocumentHub } from "@/components/steps/StepDocumentHub";
+
+/**
+ * มาตรฐานลำดับ Layout ทุกขั้นตอน (Step 1–10):
+ * 1. Guideline Box — แสดงใน projects_.$projectId.tsx ด้านบนการ์ด
+ * 2. Smart Checklist (inline upload ท้ายแถว)
+ * 3. โซนฟอร์มคีย์ข้อมูล / เงื่อนไข
+ * 4. ปุ่มบันทึก — แสดงใน projects_.$projectId.tsx ด้านล่าง
+ */
 
 const inputCls =
   "w-full h-10 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring";
@@ -1548,77 +1565,171 @@ export function Step4DetailForm({
   );
 }
 
-type Step6AppealFormProps = {
-  appeal: Step6AppealState;
-  onAppealChange: (patch: Partial<Step6AppealState>) => void;
-  readOnly?: boolean;
+type Step6DocBinder = {
+  project: ProjectDocRef;
+  stepNumber: number;
+  docs: StepDocRecord[];
+  onDocsChange: () => void;
 };
 
-/** ขั้นตอนที่ 6 — สถานะการอุทธรณ์ (หลังประกาศผู้ชนะ) */
-export function Step6AppealForm({ appeal, onAppealChange, readOnly = false }: Step6AppealFormProps) {
-  return (
-    <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4 max-w-2xl">
-      <SectionTitle>สถานะการอุทธรณ์</SectionTitle>
-      <p className="text-xs text-muted-foreground leading-relaxed">
-        บันทึกหลังครบระยะเวลารออุทธรณ์ 7 วันทำการ — ขั้นตอนนี้จึงสามารถระบุสถานะอุทธรณ์ได้ตามระเบียบพัสดุ
-      </p>
-      <fieldset disabled={readOnly} className="space-y-2 disabled:opacity-60">
-        <label className="flex items-start gap-2 text-sm cursor-pointer">
-          <input
-            type="radio"
-            name="step6_appeal"
-            checked={appeal.appeal_status === "none"}
-            onChange={() =>
-              onAppealChange({
-                appeal_status: "none",
-                appeal_report_letter_no: "",
-                appeal_consideration_status: "",
-              })
-            }
-            className="mt-0.5 h-4 w-4"
-          />
-          ไม่มีผู้ยื่นอุทธรณ์ภายในกำหนด (พร้อมทำสัญญา)
-        </label>
-        <label className="flex items-start gap-2 text-sm cursor-pointer">
-          <input
-            type="radio"
-            name="step6_appeal"
-            checked={appeal.appeal_status === "pending"}
-            onChange={() => onAppealChange({ appeal_status: "pending" })}
-            className="mt-0.5 h-4 w-4"
-          />
-          มีผู้ยื่นอุทธรณ์โครงการ (ชะลอการทำสัญญา)
-        </label>
-      </fieldset>
+type Step6AppealFormProps = {
+  checklist: Step6Checklist;
+  onChecklistChange: (key: Step6ChecklistKey, checked: boolean) => void;
+  autoCheckStates: Record<string, boolean>;
+  appeal: Step6AppealState;
+  onAppealChange: (patch: Partial<Step6AppealState>) => void;
+  responsibleName: string;
+  onResponsibleNameChange: (value: string) => void;
+  step1ResponsibleDefault: string;
+  note: string;
+  onNoteChange: (value: string) => void;
+  winnerAnnouncementDate: string;
+  readOnly?: boolean;
+  docBinder: Step6DocBinder;
+};
 
-      {appeal.appeal_status === "pending" && (
-        <div className="space-y-4 rounded-md border border-destructive/30 bg-destructive/5 p-4">
-          <p className="text-sm font-medium text-destructive">
-            ⚠️ แจ้งเตือน: โครงการนี้ติดสถานะอุทธรณ์ ไม่สามารถไปขั้นตอนทำสัญญาได้
-          </p>
-          <FieldRow label="เลขที่หนังสือรายงานผลอุทธรณ์">
+/** ขั้นตอนที่ 6 — อุทธรณ์ (มาตรา 117) */
+export function Step6AppealForm({
+  checklist,
+  onChecklistChange,
+  autoCheckStates,
+  appeal,
+  onAppealChange,
+  responsibleName,
+  onResponsibleNameChange,
+  step1ResponsibleDefault,
+  note,
+  onNoteChange,
+  winnerAnnouncementDate,
+  readOnly = false,
+  docBinder,
+}: Step6AppealFormProps) {
+  const appealStatus = appeal.appeal_status ?? "";
+  const checklistItems = getStep6ChecklistItems(appealStatus);
+  const appealDeadlineISO = winnerAnnouncementDate
+    ? computeAppealDeadlineISO(winnerAnnouncementDate)
+    : "";
+  const approvalDate = appeal.appeal_report_approval_date ?? "";
+
+  return (
+    <div className="space-y-4 max-w-2xl">
+      <SmartChecklist
+        stepNumber={6}
+        stepLabel="ขั้นตอนที่ 6"
+        items={checklistItems}
+        manualChecklist={checklist as Record<string, boolean>}
+        autoStates={autoCheckStates}
+        onManualChange={(key, checked) =>
+          onChecklistChange(key as Step6ChecklistKey, checked)
+        }
+        readOnly={readOnly}
+        docBinder={docBinder}
+      />
+
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
+        <p className="text-sm font-medium text-foreground">กลุ่มที่ 1: ข้อมูลงานขั้นตอนอุทธรณ์</p>
+        <ResponsibleOfficerField
+          stepNumber={6}
+          value={responsibleName}
+          onChange={onResponsibleNameChange}
+          step1Default={step1ResponsibleDefault}
+        />
+        <FieldRow label="⏱ วันสิ้นสุดระยะอุทธรณ์">
+          <div className="space-y-1">
             <input
-              value={appeal.appeal_report_letter_no ?? ""}
-              onChange={(e) => onAppealChange({ appeal_report_letter_no: e.target.value })}
-              placeholder="เช่น กษ ๐๖๐๒ / ๔๕๖"
-              className={inputCls}
-              disabled={readOnly}
-            />
-          </FieldRow>
-          <FieldRow label="สถานะผลการพิจารณาอุทธรณ์">
-            <textarea
-              value={appeal.appeal_consideration_status ?? ""}
-              onChange={(e) =>
-                onAppealChange({ appeal_consideration_status: e.target.value })
+              type="text"
+              readOnly
+              value={
+                appealDeadlineISO
+                  ? formatThaiDateSlash(appealDeadlineISO)
+                  : "— กรุณาบันทึกวันประกาศผู้ชนะในขั้นตอนที่ 5 ก่อน —"
               }
-              rows={3}
-              placeholder="บันทึกสถานะ/ผลการพิจารณาอุทธรณ์ เช่น อยู่ระหว่างพิจารณา / ยกเลิกอุทธรณ์ / รอมติคณะกรรมการ"
-              className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
-              disabled={readOnly}
+              className={`${inputCls} bg-muted/50 cursor-not-allowed`}
+              aria-readonly
             />
-          </FieldRow>
-        </div>
-      )}
+            {appealDeadlineISO && (
+              <p className="text-xs text-muted-foreground">
+                คำนวณจากวันประกาศผู้ชนะ ({formatThaiDateSlash(winnerAnnouncementDate)}) + 7
+                วันทำการ ไม่นับวันหยุดราชการ
+              </p>
+            )}
+          </div>
+        </FieldRow>
+        <FieldRow label="หมายเหตุ">
+          <textarea
+            value={note}
+            onChange={(e) => onNoteChange(e.target.value)}
+            rows={3}
+            placeholder="บันทึกหมายเหตุเพิ่มเติม (ถ้ามี)"
+            className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
+            disabled={readOnly}
+          />
+        </FieldRow>
+      </div>
+
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
+        <SectionTitle>กลุ่มที่ 2: สถานะการอุทธรณ์โครงการ</SectionTitle>
+        <fieldset disabled={readOnly} className="space-y-2 disabled:opacity-60">
+          <label className="flex items-start gap-2 text-sm cursor-pointer">
+            <input
+              type="radio"
+              name="step6_appeal"
+              checked={appeal.appeal_status === "none"}
+              onChange={() =>
+                onAppealChange({
+                  appeal_status: "none",
+                  appeal_report_letter_no: "",
+                  appeal_report_approval_date: "",
+                  appeal_consideration_status: "",
+                })
+              }
+              className="mt-0.5 h-4 w-4"
+            />
+            ไม่มีผู้ยื่นอุทธรณ์ภายในกำหนด (พร้อมเดินหน้าทำสัญญา)
+          </label>
+          <label className="flex items-start gap-2 text-sm cursor-pointer">
+            <input
+              type="radio"
+              name="step6_appeal"
+              checked={appeal.appeal_status === "pending"}
+              onChange={() => onAppealChange({ appeal_status: "pending" })}
+              className="mt-0.5 h-4 w-4"
+            />
+            มีผู้ยื่นอุทธรณ์โครงการ (ชะลอการทำสัญญาและต้องพิจารณาอุทธรณ์)
+          </label>
+        </fieldset>
+
+        {appeal.appeal_status === "pending" && (
+          <div className="space-y-4 rounded-md border border-amber-300/50 bg-amber-50/50 p-4">
+            <p className="text-sm font-medium text-amber-900">
+              ⚠️ มีผู้ยื่นอุทธรณ์ — กรุณาบันทึกหนังสือรายงานผลและแนบหลักฐานตาม Checklist
+            </p>
+            <FieldRow label="เลขที่หนังสือรายงานผลการพิจารณาอุทธรณ์">
+              <input
+                value={appeal.appeal_report_letter_no ?? ""}
+                onChange={(e) => onAppealChange({ appeal_report_letter_no: e.target.value })}
+                placeholder="เช่น กษ ๐๖๐๒ / ๔๕๖"
+                className={inputCls}
+                disabled={readOnly}
+              />
+            </FieldRow>
+            <FieldRow label="วันที่หัวหน้าหน่วยงานลงนามในหนังสือผลอุทธรณ์">
+              <div className="space-y-1">
+                <ThaiDatePicker
+                  value={approvalDate}
+                  onChange={(v) => onAppealChange({ appeal_report_approval_date: v })}
+                  disabled={readOnly}
+                />
+                {approvalDate && (
+                  <p className="text-xs text-muted-foreground">
+                    📅 {formatThaiDate(approvalDate)}
+                  </p>
+                )}
+              </div>
+            </FieldRow>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -1637,6 +1748,8 @@ type Step5FormProps = {
   readOnly?: boolean;
   announcement: Step5Announcement;
   onAnnouncementChange: (patch: Partial<Step5Announcement>) => void;
+  /** วันที่หัวหน้าหน่วยงานลงนามอนุมัติผล — จากขั้นตอนที่ 4 (ใช้เป็น minDate) */
+  evaluationApprovalDate: string;
   docBinder: Step5DocBinder;
 };
 
@@ -1648,8 +1761,39 @@ export function Step5DetailForm({
   readOnly,
   announcement,
   onAnnouncementChange,
+  evaluationApprovalDate,
   docBinder,
 }: Step5FormProps) {
+  const [announcementDateRejected, setAnnouncementDateRejected] = useState(false);
+  const minAnnouncementDate = evaluationApprovalDate?.trim() || undefined;
+  const winnerDate = announcement.winner_announcement_date ?? "";
+  const showAnnouncementDateError =
+    announcementDateRejected ||
+    (!!winnerDate &&
+      !!minAnnouncementDate &&
+      isStep5WinnerAnnouncementBeforeEvaluation(winnerDate, minAnnouncementDate));
+  const announcementDateErrorMsg = minAnnouncementDate
+    ? getStep5WinnerAnnouncementBeforeEvaluationMsg(minAnnouncementDate)
+    : "";
+
+  const handleWinnerAnnouncementDateChange = (v: string) => {
+    if (!v) {
+      setAnnouncementDateRejected(false);
+      onAnnouncementChange({ winner_announcement_date: "" });
+      return;
+    }
+    if (
+      minAnnouncementDate &&
+      isStep5WinnerAnnouncementBeforeEvaluation(v, minAnnouncementDate)
+    ) {
+      setAnnouncementDateRejected(true);
+      toast.error(announcementDateErrorMsg);
+      return;
+    }
+    setAnnouncementDateRejected(false);
+    onAnnouncementChange({ winner_announcement_date: v });
+  };
+
   return (
     <div className="space-y-4 max-w-2xl">
       <SmartChecklist
@@ -1682,13 +1826,34 @@ export function Step5DetailForm({
         <FieldRow label="วันที่ลงนามในประกาศผู้ชนะ">
           <div className="space-y-1">
             <ThaiDatePicker
-              value={announcement.winner_announcement_date ?? ""}
-              onChange={(v) => onAnnouncementChange({ winner_announcement_date: v })}
+              value={winnerDate}
+              onChange={handleWinnerAnnouncementDateChange}
+              minDate={minAnnouncementDate}
               disabled={readOnly}
+              onInvalidDate={() => {
+                setAnnouncementDateRejected(true);
+                if (announcementDateErrorMsg) toast.error(announcementDateErrorMsg);
+              }}
             />
-            {announcement.winner_announcement_date && (
+            {winnerDate && !showAnnouncementDateError && (
               <p className="text-xs text-muted-foreground">
-                📅 {formatThaiDate(announcement.winner_announcement_date)}
+                📅 {formatThaiDate(winnerDate)}
+              </p>
+            )}
+            {minAnnouncementDate ? (
+              <p className="text-xs text-muted-foreground">
+                เลือกได้ตั้งแต่ {formatThaiDateSlash(minAnnouncementDate)} เป็นต้นไป
+                (วันที่หัวหน้าหน่วยงานอนุมัติผลการพิจารณา)
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                เลือกได้ตั้งแต่วันที่หัวหน้าหน่วยงานอนุมัติผลการพิจารณาในขั้นตอนที่ 4 เป็นต้นไป
+                (วันที่หัวหน้าหน่วยงานอนุมัติผลการพิจารณา)
+              </p>
+            )}
+            {showAnnouncementDateError && announcementDateErrorMsg && (
+              <p className="text-xs text-destructive font-medium mt-1">
+                {announcementDateErrorMsg}
               </p>
             )}
           </div>
@@ -1698,8 +1863,8 @@ export function Step5DetailForm({
   );
 }
 
-/** Smart Checklist มาตรฐาน — ขั้นตอนที่ 6–10 */
-export function GenericStepChecklistPanel({
+/** Smart Checklist มาตรฐาน — ขั้นตอนที่ 7–10 (ใช้ภายใน GenericStepDetailForm) */
+function GenericStepChecklistPanel({
   stepNumber,
   manualChecklist,
   onManualChange,
@@ -1727,5 +1892,119 @@ export function GenericStepChecklistPanel({
       readOnly={readOnly}
       docBinder={docBinder}
     />
+  );
+}
+
+type GenericStepDetailFormProps = {
+  stepNumber: number;
+  manualChecklist: Record<string, boolean>;
+  onManualChange: (key: string, checked: boolean) => void;
+  autoCheckStates: Record<string, boolean>;
+  readOnly?: boolean;
+  docBinder: SmartChecklistDocBinder;
+  dueDate: string;
+  onDueDateChange: (value: string) => void;
+  dueTooEarly?: boolean;
+  dueTooLateContract?: boolean;
+  minDeadline?: string;
+  responsibleName: string;
+  onResponsibleNameChange: (value: string) => void;
+  step1ResponsibleDefault?: string;
+  note: string;
+  onNoteChange: (value: string) => void;
+  project: ProjectDocRef;
+  docList: DocItem[];
+  docsForStep: StepDocRecord[];
+  onDocsChange: () => void;
+  projectName: string;
+};
+
+/** ขั้นตอนที่ 7–10 — Checklist ด้านบน ฟอร์มทั่วไปด้านล่าง (มาตรฐานเดียวกับ Step 1–6) */
+export function GenericStepDetailForm({
+  stepNumber,
+  manualChecklist,
+  onManualChange,
+  autoCheckStates,
+  readOnly,
+  docBinder,
+  dueDate,
+  onDueDateChange,
+  dueTooEarly,
+  dueTooLateContract,
+  minDeadline,
+  responsibleName,
+  onResponsibleNameChange,
+  step1ResponsibleDefault = "",
+  note,
+  onNoteChange,
+  project,
+  docList,
+  docsForStep,
+  onDocsChange,
+  projectName,
+}: GenericStepDetailFormProps) {
+  return (
+    <div className="space-y-4 max-w-2xl">
+      <GenericStepChecklistPanel
+        stepNumber={stepNumber}
+        manualChecklist={manualChecklist}
+        onManualChange={onManualChange}
+        autoCheckStates={autoCheckStates}
+        readOnly={readOnly}
+        docBinder={docBinder}
+      />
+
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
+        <p className="text-sm font-medium text-foreground">ข้อมูลงานขั้นตอนนี้</p>
+        <FieldRow label="กำหนดเสร็จ">
+          <div className="space-y-1">
+            <ThaiDatePicker value={dueDate} onChange={onDueDateChange} disabled={readOnly} />
+            {dueDate && (
+              <p className="text-xs text-muted-foreground">📅 {formatThaiDate(dueDate)}</p>
+            )}
+            {dueTooEarly && minDeadline && (
+              <p className="text-xs" style={{ color: "#EA580C" }}>
+                ⚠️ วันที่เลือกสั้นกว่ากำหนดตาม พ.ร.บ. กรุณาเลือกวันที่{" "}
+                {formatThaiDate(minDeadline)} หรือหลังจากนั้น มิฉะนั้น สตง. อาจทักท้วงได้
+              </p>
+            )}
+            {dueTooLateContract && (
+              <p className="text-xs" style={{ color: "#EA580C" }}>
+                ⚠️ ควรลงนามสัญญาภายใน 7 วันทำการ หลังพ้นอุทธรณ์
+              </p>
+            )}
+          </div>
+        </FieldRow>
+        <ResponsibleOfficerField
+          stepNumber={stepNumber}
+          value={responsibleName}
+          onChange={onResponsibleNameChange}
+          step1Default={step1ResponsibleDefault}
+        />
+        <FieldRow label="หมายเหตุ">
+          <textarea
+            value={note}
+            onChange={(e) => onNoteChange(e.target.value)}
+            rows={4}
+            disabled={readOnly}
+            className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
+          />
+        </FieldRow>
+      </div>
+
+      <StepInlineDocList
+        project={project}
+        stepNumber={stepNumber}
+        docList={docList}
+        existing={docsForStep}
+        onChange={onDocsChange}
+      />
+      <StepDocumentHub
+        stepNumber={stepNumber}
+        docList={docList}
+        docs={docsForStep}
+        projectName={projectName}
+      />
+    </div>
   );
 }

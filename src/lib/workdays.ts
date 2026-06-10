@@ -281,3 +281,29 @@ export function getStepMinDays(stepNumber: number, method: string, budget: numbe
   const key = `step${stepNumber}` as keyof StepMinDays;
   return getMinDays(method, budget)[key] ?? 0;
 }
+
+/** ระยะเวลาอุทธรณ์ — พ.ร.บ. จัดซื้อจัดจ้างฯ มาตรา 117 */
+export const APPEAL_PERIOD_WORKDAYS = 7;
+
+/**
+ * วันสิ้นสุดระยะอุทธรณ์ — นับจากวันประกาศผู้ชนะ (ขั้น 5) + 7 วันทำการ
+ * ไม่นับวันหยุดราชการ (ใช้ addWorkdays)
+ */
+export function computeAppealDeadlineISO(winnerAnnouncementISO: string): string {
+  const start = parseISODateLocal(winnerAnnouncementISO?.trim() ?? "");
+  if (!start || APPEAL_PERIOD_WORKDAYS < 1) return "";
+  return toISODate(addWorkdays(start, APPEAL_PERIOD_WORKDAYS));
+}
+
+/** วันเริ่มลงนามสัญญาได้ — วันทำการถัดจากวันสิ้นสุดอุทธรณ์ */
+export function computeContractEarliestISO(winnerAnnouncementISO: string): string {
+  const deadlineISO = computeAppealDeadlineISO(winnerAnnouncementISO);
+  if (!deadlineISO) return "";
+  const d = parseISODateLocal(deadlineISO);
+  if (!d) return "";
+  d.setDate(d.getDate() + 1);
+  while (!isWorkday(d)) {
+    d.setDate(d.getDate() + 1);
+  }
+  return toISODate(d);
+}

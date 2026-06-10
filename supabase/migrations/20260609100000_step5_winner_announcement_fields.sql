@@ -5,3 +5,5 @@ alter table public.projects
 
 comment on column public.projects.winner_announcement_no is 'เลขที่ประกาศผลผู้ชนะในระบบ e-GP — ขั้นตอนที่ 5';
 comment on column public.projects.winner_announcement_date is 'วันที่ลงนามในประกาศผู้ชนะ — ขั้นตอนที่ 5';
+
+notify pgrst, 'reload schema';
