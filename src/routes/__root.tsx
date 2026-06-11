@@ -46,6 +46,11 @@ function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
         <p className="mt-2 text-sm text-muted-foreground">
           กรุณาลองรีเฟรชหรือกลับไปยังหน้าหลัก
         </p>
+        {error?.message && (
+          <p className="mt-3 text-left text-xs text-destructive/90 rounded-md border border-destructive/20 bg-destructive/5 p-3 break-words">
+            {error.message}
+          </p>
+        )}
         <div className="mt-6 flex flex-wrap justify-center gap-2">
           <button
             onClick={() => {

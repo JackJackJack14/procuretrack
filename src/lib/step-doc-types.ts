@@ -116,6 +116,36 @@ export function isStep6CgdReportDocType(documentType: string): boolean {
   return documentType === STEP6_DOC.CGD_APPEAL_REPORT;
 }
 
+/** ประเภทเอกสารขั้นตอนที่ 7 — แจ้งให้ผู้ชนะมาลงนามในสัญญา (ข้อ 161) */
+export const STEP7_DOC = {
+  /** หลักฐานข้อที่ 2 — หนังสือแจ้งลงนามสัญญา (ลงนามหัวหน้าหน่วยงาน) */
+  CONTRACT_NOTICE_LETTER: "หนังสือแจ้งให้ผู้ชนะมาลงนามในสัญญา (ลงนามหัวหน้าหน่วยงาน)",
+  /** หลักฐานข้อที่ 3 — ใบตอบรับ/หลักฐานนำส่ง */
+  CONTRACT_NOTICE_DELIVERY_PROOF: "หลักฐานการนำส่งหรือตอบรับหนังสือแจ้งทำสัญญา",
+} as const;
+
+/** @deprecated ชื่อเอกสารเก่าใน DB */
+export const STEP7_DOC_LEGACY = {
+  DRAFT_CONTRACT: "ร่างสัญญาจ้างก่อสร้าง",
+  CORRESPONDENCE: "หนังสือโต้ตอบก่อนลงนาม (ถ้ามี)",
+} as const;
+
+/** ประเภทเอกสารขั้นตอนที่ 8 — ตรวจหลักประกันและลงนามสัญญา */
+export const STEP8_DOC = {
+  /** หลักฐานข้อที่ 2 — ยืนยันหลักประกันสัญญา */
+  GUARANTEE_VERIFICATION: "หลักฐานยืนยันหลักประกันสัญญา",
+  /** หลักฐานข้อที่ 3 — สัญญาลงนามครบและติดอากร */
+  SIGNED_CONTRACT: "สัญญาจ้างลงนามครบและติดอากรแสตมป์",
+} as const;
+
+/** @deprecated ชื่อเอกสารเก่าใน DB */
+export const STEP8_DOC_LEGACY = {
+  GUARANTEE: "หลักประกันสัญญา (LG/แคชเชียร์เช็ค)",
+  SIGNED: "สัญญาจ้างก่อสร้าง (ต้นฉบับ ติดอากรแสตมป์)",
+  COMPANY_REG: "สำเนาทะเบียนบริษัทผู้รับจ้าง",
+  POWER_OF_ATTORNEY: "หนังสือมอบอำนาจ (ถ้ามี)",
+} as const;
+
 /** @deprecated */
 export function isStep6AppealEvidenceDocType(documentType: string): boolean {
   return isStep6NoAppealEgpDocType(documentType);

@@ -1,4 +1,13 @@
-import { STEP2_DOC, STEP3_DOC, STEP4_DOC, STEP5_DOC, STEP6_DOC } from "@/lib/step-doc-types";
+import {
+  STEP2_DOC,
+  STEP3_DOC,
+  STEP4_DOC,
+  STEP5_DOC,
+  STEP6_DOC,
+  STEP7_DOC,
+  STEP8_DOC,
+  STEP8_DOC_LEGACY,
+} from "@/lib/step-doc-types";
 
 export type DocFilePolicyId =
   | "pdf_only"
@@ -96,6 +105,15 @@ const DOC_TYPE_POLICY: Record<string, DocFilePolicyId> = {
   [STEP6_DOC.AGENCY_APPEAL_REPORT]: "pdf_only",
   [STEP6_DOC.CGD_APPEAL_REPORT]: "pdf_only",
   [STEP6_DOC.APPEAL_RESULT_EVIDENCE]: "screenshot_evidence",
+
+  [STEP7_DOC.CONTRACT_NOTICE_LETTER]: "pdf_only",
+  [STEP7_DOC.CONTRACT_NOTICE_DELIVERY_PROOF]: "screenshot_evidence",
+  "ร่างสัญญาจ้างก่อสร้าง": "pdf_only",
+
+  [STEP8_DOC.GUARANTEE_VERIFICATION]: "screenshot_evidence",
+  [STEP8_DOC.SIGNED_CONTRACT]: "pdf_only",
+  [STEP8_DOC_LEGACY.GUARANTEE]: "screenshot_evidence",
+  [STEP8_DOC_LEGACY.SIGNED]: "pdf_only",
 };
 
 /** นโยบายไฟล์ตาม inline evidence config */

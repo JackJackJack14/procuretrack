@@ -2,6 +2,8 @@ import { Step3GuidelineBox } from "@/components/Step3GuidelineBox";
 import { Step4GuidelineBox } from "@/components/Step4GuidelineBox";
 import { Step5GuidelineBox } from "@/components/Step5GuidelineBox";
 import { Step6GuidelineBox } from "@/components/Step6GuidelineBox";
+import { Step7GuidelineBox } from "@/components/Step7GuidelineBox";
+import { Step8GuidelineBox } from "@/components/Step8GuidelineBox";
 import { STEP_GUIDELINES } from "@/lib/guidelines";
 import type { Step3SkipReason } from "@/lib/step3-hearing";
 import type { Step4Timeline } from "@/lib/step-form";
@@ -63,6 +65,14 @@ export function GuidelineBox({
 
   if (stepNumber === 6) {
     return <Step6GuidelineBox winnerAnnouncementDate={winnerAnnouncementDate} />;
+  }
+
+  if (stepNumber === 7) {
+    return <Step7GuidelineBox winnerAnnouncementDate={winnerAnnouncementDate} />;
+  }
+
+  if (stepNumber === 8) {
+    return <Step8GuidelineBox winnerAnnouncementDate={winnerAnnouncementDate} />;
   }
 
   const g = STEP_GUIDELINES[stepNumber - 1];

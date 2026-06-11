@@ -213,7 +213,7 @@ function ConstructionPage() {
             hint={
               contract?.end_date
                 ? `ครบ ${formatThaiDate(contract.end_date)}`
-                : "⚠️ ยังไม่มีข้อมูลสัญญา กรุณากรอกข้อมูลสัญญาในขั้นตอนที่ 7 ก่อน"
+                : "⚠️ ยังไม่มีข้อมูลสัญญา กรุณากรอกข้อมูลสัญญาในขั้นตอนที่ 8 ก่อน"
             }
           />
         </div>
@@ -455,7 +455,7 @@ function ReportForm({
       {!contract && (
         <div className="rounded-md bg-warning/10 border border-warning/30 p-3 text-sm text-warning flex items-start gap-2">
           <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-          <p>ยังไม่มีข้อมูลสัญญา กรุณากรอกข้อมูลสัญญาในขั้นตอนที่ 7 ก่อนจึงจะส่งรายงานได้</p>
+          <p>ยังไม่มีข้อมูลสัญญา กรุณากรอกข้อมูลสัญญาในขั้นตอนที่ 8 ก่อนจึงจะส่งรายงานได้</p>
         </div>
       )}
 

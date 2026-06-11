@@ -79,6 +79,11 @@ import {
   type Step5Announcement,
   type Step5Checklist,
   type Step5ChecklistKey,
+  type Step7ContractNotice,
+  type Step8ContractExecution,
+  type Step8GuaranteeType,
+  STEP8_GUARANTEE_TYPE_OPTIONS,
+  computeRecommendedGuaranteeAmount,
   isStep5WinnerAnnouncementBeforeEvaluation,
   getStep5WinnerAnnouncementBeforeEvaluationMsg,
   STEP4_EVALUATION_APPROVAL_BEFORE_BID_END_MSG,
@@ -88,10 +93,16 @@ import { toast } from "sonner";
 import { formatBaht } from "@/lib/procurement";
 import { SmartChecklist, type SmartChecklistDocBinder } from "@/components/SmartChecklist";
 import { getSmartChecklistItems, getStep6ChecklistItems } from "@/lib/smart-checklist";
-import { computeAppealDeadlineISO } from "@/lib/workdays";
+import {
+  computeAppealDeadlineISO,
+  computeContractNotificationDeadlineISO,
+  CONTRACT_NOTIFICATION_WORKDAYS,
+} from "@/lib/workdays";
 import type { DocItem } from "@/lib/procurement";
 import { StepInlineDocList } from "@/components/steps/StepInlineDocList";
 import { StepDocumentHub } from "@/components/steps/StepDocumentHub";
+import { FieldLabelTooltip } from "@/components/FieldLabelTooltip";
+import { getFieldTooltip, type FieldTooltipKey } from "@/constants/tooltips";
 
 /**
  * มาตรฐานลำดับ Layout ทุกขั้นตอน (Step 1–10):
@@ -104,12 +115,40 @@ import { StepDocumentHub } from "@/components/steps/StepDocumentHub";
 const inputCls =
   "w-full h-10 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring";
 
-export function FieldRow({ label, children }: { label: string; children: React.ReactNode }) {
+export function FieldRow({
+  label,
+  children,
+  tooltipKey,
+}: {
+  label: string;
+  children: React.ReactNode;
+  tooltipKey?: FieldTooltipKey;
+}) {
+  const tooltipText = getFieldTooltip(tooltipKey);
   return (
     <div>
-      <label className="block text-sm font-medium mb-1.5">{label}</label>
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <label className="text-sm font-medium">{label}</label>
+        <FieldLabelTooltip text={tooltipText} />
+      </div>
       {children}
     </div>
+  );
+}
+
+function SectionTitle({
+  children,
+  tooltipKey,
+}: {
+  children: React.ReactNode;
+  tooltipKey?: FieldTooltipKey;
+}) {
+  const tooltipText = getFieldTooltip(tooltipKey);
+  return (
+    <p className="text-sm font-medium text-foreground inline-flex items-center gap-1.5 flex-wrap">
+      {children}
+      <FieldLabelTooltip text={tooltipText} />
+    </p>
   );
 }
 
@@ -208,7 +247,7 @@ export function Step1DetailForm({
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
         <p className="text-sm font-medium text-foreground">ข้อมูลขั้นตอนที่ 1 — จัดทำแผนการจัดซื้อจัดจ้าง</p>
-        <FieldRow label="รหัสแผนจัดซื้อจัดจ้าง e-GP">
+        <FieldRow label="รหัสแผนจัดซื้อจัดจ้าง e-GP" tooltipKey="step1.egp_plan_code">
           <input
             value={egpCode}
             onChange={(e) => onEgpCodeChange(e.target.value)}
@@ -222,7 +261,7 @@ export function Step1DetailForm({
             </p>
           )}
         </FieldRow>
-      <FieldRow label="วงเงินงบประมาณ (บาท)">
+      <FieldRow label="วงเงินงบประมาณ (บาท)" tooltipKey="step1.budget">
         <input
           value={budget}
           onChange={(e) => onBudgetChange(formatBudgetInput(e.target.value))}
@@ -503,6 +542,17 @@ export function Step2DetailForm({
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
         <SectionTitle>กลุ่มที่ 2: ข้อมูลราคากลาง</SectionTitle>
+        <FieldRow
+          label="เลขที่หนังสืออนุมัติราคากลาง"
+          tooltipKey="step2.median_approval_letter_no"
+        >
+          <input
+            value={medianPrice.median_approval_letter_no ?? ""}
+            onChange={(e) => onMedianPriceChange({ median_approval_letter_no: e.target.value })}
+            placeholder="เช่น กษ ๐๖๐๑ / ๑๒๓"
+            className={inputCls}
+          />
+        </FieldRow>
         <FieldRow label="ราคากลาง (บาท)">
           <input
             value={medianPriceDisplay}
@@ -531,7 +581,10 @@ export function Step2DetailForm({
             <p className="text-xs text-warning mt-2 font-medium">{STEP2_MEDIAN_OVER_BUDGET_MSG}</p>
           )}
         </FieldRow>
-        <FieldRow label="วันที่หัวหน้าหน่วยงานอนุมัติราคากลาง">
+        <FieldRow
+          label="วันที่หัวหน้าหน่วยงานอนุมัติราคากลาง"
+          tooltipKey="step2.median_price_approval_date"
+        >
           <ThaiDatePicker
             value={medianPrice.median_price_approval_date ?? ""}
             minDate={appointmentDate || undefined}
@@ -619,10 +672,6 @@ type Step3FormProps = {
   step1ResponsibleDefault?: string;
   docBinder: Step3DocBinder;
 };
-
-function SectionTitle({ children }: { children: React.ReactNode }) {
-  return <p className="text-sm font-medium text-foreground">{children}</p>;
-}
 
 /** ขั้นตอนที่ 3 — จัดทำร่างประกาศและเอกสารประกวดราคา */
 export function Step3DetailForm({
@@ -885,7 +934,10 @@ export function Step3DetailForm({
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
         <SectionTitle>ข้อมูลบันทึกข้อความเสนอลงนาม</SectionTitle>
-        <FieldRow label="เลขที่บันทึกข้อความเสนอขอเห็นชอบ (ภายในหน่วยงาน)">
+        <FieldRow
+          label="เลขที่บันทึกข้อความเสนอขอเห็นชอบ (ภายในหน่วยงาน)"
+          tooltipKey="step3.approval_letter_no"
+        >
           <input
             value={announcement.approval_letter_no ?? ""}
             onChange={(e) => onAnnouncementChange({ approval_letter_no: e.target.value })}
@@ -916,7 +968,7 @@ export function Step3DetailForm({
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
         <SectionTitle>ข้อมูลการเผยแพร่ระบบ e-GP</SectionTitle>
-        <FieldRow label="เลขที่โครงการในระบบ e-GP">
+        <FieldRow label="เลขที่โครงการในระบบ e-GP" tooltipKey="step3.egp_project_code">
           <input
             value={announcement.egp_project_code ?? ""}
             onChange={(e) => onAnnouncementChange({ egp_project_code: e.target.value })}
@@ -960,7 +1012,7 @@ export function Step3DetailForm({
           </p>
         </FieldRow>
         <div className="grid sm:grid-cols-2 gap-4">
-          <FieldRow label="วันที่เริ่มเผยแพร่ร่างประกาศ">
+          <FieldRow label="วันที่เริ่มเผยแพร่ร่างประกาศ" tooltipKey="step3.publication_start">
             <ThaiDatePicker
               value={announcement.publication_start ?? ""}
               onChange={handlePublicationStartChange}
@@ -1486,7 +1538,10 @@ export function Step4DetailForm({
             ขั้นตอนที่ 3 เพื่อคำนวณกำหนดการอัตโนมัติ
           </div>
         )}
-        <FieldRow label="เลขที่หนังสือรายงานผลการพิจารณา">
+        <FieldRow
+          label="เลขที่หนังสือรายงานผลการพิจารณา"
+          tooltipKey="step4.evaluation_report_letter_no"
+        >
           <input
             value={bidResult.evaluation_report_letter_no ?? ""}
             onChange={(e) =>
@@ -1496,7 +1551,10 @@ export function Step4DetailForm({
             className={inputCls}
           />
         </FieldRow>
-        <FieldRow label="วันที่หัวหน้าหน่วยงานลงนามอนุมัติผล">
+        <FieldRow
+          label="วันที่หัวหน้าหน่วยงานลงนามอนุมัติผล"
+          tooltipKey="step4.evaluation_report_approval_date"
+        >
           <ThaiDatePicker
             value={approvalDate}
             onChange={handleEvaluationApprovalDateChange}
@@ -1668,7 +1726,9 @@ export function Step6AppealForm({
       </div>
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
-        <SectionTitle>กลุ่มที่ 2: สถานะการอุทธรณ์โครงการ</SectionTitle>
+        <SectionTitle tooltipKey="step6.appeal_status">
+          กลุ่มที่ 2: สถานะการอุทธรณ์โครงการ
+        </SectionTitle>
         <fieldset disabled={readOnly} className="space-y-2 disabled:opacity-60">
           <label className="flex items-start gap-2 text-sm cursor-pointer">
             <input
@@ -1704,7 +1764,10 @@ export function Step6AppealForm({
             <p className="text-sm font-medium text-amber-900">
               ⚠️ มีผู้ยื่นอุทธรณ์ — กรุณาบันทึกหนังสือรายงานผลและแนบหลักฐานตาม Checklist
             </p>
-            <FieldRow label="เลขที่หนังสือรายงานผลการพิจารณาอุทธรณ์">
+            <FieldRow
+              label="เลขที่หนังสือรายงานผลการพิจารณาอุทธรณ์"
+              tooltipKey="step6.appeal_report_letter_no"
+            >
               <input
                 value={appeal.appeal_report_letter_no ?? ""}
                 onChange={(e) => onAppealChange({ appeal_report_letter_no: e.target.value })}
@@ -1813,7 +1876,10 @@ export function Step5DetailForm({
         <p className="text-sm font-medium text-foreground">
           กลุ่มที่ 1: ข้อมูลประกาศผู้ชนะในระบบ e-GP
         </p>
-        <FieldRow label="เลขที่ประกาศผลผู้ชนะในระบบ e-GP">
+        <FieldRow
+          label="เลขที่ประกาศผลผู้ชนะในระบบ e-GP"
+          tooltipKey="step5.winner_announcement_no"
+        >
           <input
             type="text"
             value={announcement.winner_announcement_no ?? ""}
@@ -1823,7 +1889,10 @@ export function Step5DetailForm({
             disabled={readOnly}
           />
         </FieldRow>
-        <FieldRow label="วันที่ลงนามในประกาศผู้ชนะ">
+        <FieldRow
+          label="วันที่ลงนามในประกาศผู้ชนะ"
+          tooltipKey="step5.winner_announcement_date"
+        >
           <div className="space-y-1">
             <ThaiDatePicker
               value={winnerDate}
@@ -1866,16 +1935,16 @@ export function Step5DetailForm({
 /** Smart Checklist มาตรฐาน — ขั้นตอนที่ 7–10 (ใช้ภายใน GenericStepDetailForm) */
 function GenericStepChecklistPanel({
   stepNumber,
-  manualChecklist,
+  manualChecklist = {},
   onManualChange,
-  autoCheckStates,
+  autoCheckStates = {},
   readOnly,
   docBinder,
 }: {
   stepNumber: number;
-  manualChecklist: Record<string, boolean>;
+  manualChecklist?: Record<string, boolean>;
   onManualChange: (key: string, checked: boolean) => void;
-  autoCheckStates: Record<string, boolean>;
+  autoCheckStates?: Record<string, boolean>;
   readOnly?: boolean;
   docBinder?: SmartChecklistDocBinder;
 }) {
@@ -1919,7 +1988,401 @@ type GenericStepDetailFormProps = {
   projectName: string;
 };
 
-/** ขั้นตอนที่ 7–10 — Checklist ด้านบน ฟอร์มทั่วไปด้านล่าง (มาตรฐานเดียวกับ Step 1–6) */
+type Step7ContractNoticeFormProps = {
+  manualChecklist: Record<string, boolean>;
+  onManualChange: (key: string, checked: boolean) => void;
+  autoCheckStates: Record<string, boolean>;
+  contractNotice: Step7ContractNotice;
+  onContractNoticeChange: (patch: Partial<Step7ContractNotice>) => void;
+  appealDeadlineISO: string;
+  notificationDeadlineISO: string;
+  letterDateTooLate?: boolean;
+  readOnly?: boolean;
+  docBinder: SmartChecklistDocBinder;
+  responsibleName: string;
+  onResponsibleNameChange: (value: string) => void;
+  step1ResponsibleDefault?: string;
+  note: string;
+  onNoteChange: (value: string) => void;
+};
+
+/** ขั้นตอนที่ 7 — แจ้งให้ผู้ชนะมาลงนามในสัญญา (ข้อ 161) */
+export function Step7ContractNoticeForm({
+  manualChecklist,
+  onManualChange,
+  autoCheckStates,
+  contractNotice,
+  onContractNoticeChange,
+  appealDeadlineISO,
+  notificationDeadlineISO,
+  letterDateTooLate,
+  readOnly,
+  docBinder,
+  responsibleName,
+  onResponsibleNameChange,
+  step1ResponsibleDefault = "",
+  note,
+  onNoteChange,
+}: Step7ContractNoticeFormProps) {
+  const letterDate = contractNotice?.contract_notice_letter_date ?? "";
+
+  return (
+    <div className="space-y-4 max-w-2xl">
+      <SmartChecklist
+        stepNumber={7}
+        stepLabel="ขั้นตอนที่ 7"
+        items={getSmartChecklistItems(7)}
+        manualChecklist={manualChecklist ?? {}}
+        autoStates={autoCheckStates ?? {}}
+        onManualChange={onManualChange}
+        readOnly={readOnly}
+        docBinder={docBinder}
+      />
+
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-5">
+        <p className="text-sm font-medium text-foreground">
+          ข้อมูลหนังสือแจ้งทำสัญญา — ขั้นตอนที่ 7
+        </p>
+
+        <div className="space-y-4">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+            กลุ่มที่ 1: ข้อมูลหนังสือราชการภายใน
+          </p>
+          <FieldRow
+            label="เลขที่หนังสือแจ้งให้ผู้ชนะมาลงนามในสัญญา"
+            tooltipKey="step7.contract_notice_letter_no"
+          >
+            <input
+              type="text"
+              value={contractNotice?.contract_notice_letter_no ?? ""}
+              onChange={(e) =>
+                onContractNoticeChange({ contract_notice_letter_no: e.target.value })
+              }
+              disabled={readOnly}
+              className={inputCls}
+              placeholder="เช่น อว 1234.5/ว 1234"
+            />
+          </FieldRow>
+          <FieldRow label="วันที่ออกหนังสือแจ้ง" tooltipKey="step7.contract_notice_letter_date">
+            <div className="space-y-1">
+              <ThaiDatePicker
+                value={letterDate}
+                onChange={(v) => onContractNoticeChange({ contract_notice_letter_date: v })}
+                disabled={readOnly}
+                minDate={appealDeadlineISO || undefined}
+                onInvalidDate={() =>
+                  toast.error(
+                    appealDeadlineISO
+                      ? `วันที่ออกหนังสือแจ้งต้องไม่ก่อนวันสิ้นสุดระยะอุทธรณ์ (${formatThaiDateSlash(appealDeadlineISO)})`
+                      : "วันที่ออกหนังสือแจ้งไม่ถูกต้อง",
+                  )
+                }
+              />
+              {letterDate && (
+                <p className="text-xs text-muted-foreground">
+                  📅 {formatThaiDate(letterDate)}
+                </p>
+              )}
+              {appealDeadlineISO && (
+                <p className="text-xs text-muted-foreground">
+                  วันที่เลือกได้ตั้งแต่ {formatThaiDateSlash(appealDeadlineISO)} (วันสิ้นสุดอุทธรณ์)
+                </p>
+              )}
+              {letterDateTooLate && notificationDeadlineISO && (
+                <p className="text-xs" style={{ color: "#EA580C" }}>
+                  ⚠️ วันที่ออกหนังสือเกิน {CONTRACT_NOTIFICATION_WORKDAYS} วันทำการตามที่ระเบียบกำหนด
+                  (เดดไลน์ข้อ 161: {formatThaiDateSlash(notificationDeadlineISO)})
+                </p>
+              )}
+            </div>
+          </FieldRow>
+        </div>
+
+        <div className="space-y-4 pt-1 border-t border-border/60">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+            กลุ่มที่ 2: ข้อมูลผู้ดูแลและบันทึกเพิ่มเติม
+          </p>
+          <ResponsibleOfficerField
+            stepNumber={7}
+            value={responsibleName}
+            onChange={onResponsibleNameChange}
+            step1Default={step1ResponsibleDefault}
+          />
+          <FieldRow label="หมายเหตุ">
+            <textarea
+              value={note}
+              onChange={(e) => onNoteChange(e.target.value)}
+              rows={4}
+              disabled={readOnly}
+              className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
+            />
+          </FieldRow>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type Step8ContractGuaranteeFormProps = {
+  manualChecklist: Record<string, boolean>;
+  onManualChange: (key: string, checked: boolean) => void;
+  autoCheckStates: Record<string, boolean>;
+  contractExecution: Step8ContractExecution;
+  /** ราคาที่ตกลงซื้อหรือจ้างจริงจากขั้นตอนที่ 4 — ใช้เป็นค่าเริ่มต้นเมื่อยังไม่มีมูลค่าสัญญา */
+  defaultContractAmountFromStep4?: number | null;
+  onContractExecutionChange: (patch: Partial<Step8ContractExecution>) => void;
+  earliestSigningISO: string;
+  appealDeadlineISO: string;
+  readOnly?: boolean;
+  docBinder: SmartChecklistDocBinder;
+  responsibleName: string;
+  onResponsibleNameChange: (value: string) => void;
+  step1ResponsibleDefault?: string;
+  note: string;
+  onNoteChange: (value: string) => void;
+};
+
+/** ขั้นตอนที่ 8 — ตรวจสอบหลักประกันสัญญาและจัดทำสัญญา */
+export function Step8ContractGuaranteeForm({
+  manualChecklist,
+  onManualChange,
+  autoCheckStates,
+  contractExecution,
+  defaultContractAmountFromStep4 = null,
+  onContractExecutionChange,
+  earliestSigningISO,
+  appealDeadlineISO,
+  readOnly,
+  docBinder,
+  responsibleName,
+  onResponsibleNameChange,
+  step1ResponsibleDefault = "",
+  note,
+  onNoteChange,
+}: Step8ContractGuaranteeFormProps) {
+  const signedDate = contractExecution?.contract_signed_date ?? "";
+  const storedContractAmount = contractExecution?.contract_amount;
+  const effectiveContractAmount =
+    storedContractAmount != null && storedContractAmount > 0
+      ? storedContractAmount
+      : defaultContractAmountFromStep4 != null && defaultContractAmountFromStep4 > 0
+        ? defaultContractAmountFromStep4
+        : null;
+  const recommendedGuarantee = computeRecommendedGuaranteeAmount(effectiveContractAmount);
+  const contractAmountDisplay =
+    effectiveContractAmount != null && effectiveContractAmount > 0
+      ? formatBudgetInput(String(effectiveContractAmount))
+      : "";
+  const showStep4SourceHint =
+    defaultContractAmountFromStep4 != null &&
+    defaultContractAmountFromStep4 > 0 &&
+    effectiveContractAmount === defaultContractAmountFromStep4;
+
+  useEffect(() => {
+    if (readOnly) return;
+    if (storedContractAmount != null && storedContractAmount > 0) return;
+    if (defaultContractAmountFromStep4 == null || defaultContractAmountFromStep4 <= 0) return;
+    onContractExecutionChange({ contract_amount: defaultContractAmountFromStep4 });
+  }, [
+    readOnly,
+    storedContractAmount,
+    defaultContractAmountFromStep4,
+    onContractExecutionChange,
+  ]);
+  const guaranteeAmountDisplay =
+    contractExecution?.guarantee_amount != null && contractExecution.guarantee_amount > 0
+      ? formatBudgetInput(String(contractExecution.guarantee_amount))
+      : "";
+
+  return (
+    <div className="space-y-4 max-w-2xl">
+      <SmartChecklist
+        stepNumber={8}
+        stepLabel="ขั้นตอนที่ 8"
+        items={getSmartChecklistItems(8)}
+        manualChecklist={manualChecklist ?? {}}
+        autoStates={autoCheckStates ?? {}}
+        onManualChange={onManualChange}
+        readOnly={readOnly}
+        docBinder={docBinder}
+      />
+
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-5">
+        <p className="text-sm font-medium text-foreground">
+          ข้อมูลลงนามสัญญาและหลักประกัน — ขั้นตอนที่ 8
+        </p>
+
+        <div className="space-y-4">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+            กลุ่มที่ 1: ข้อมูลการลงนามสัญญา
+          </p>
+          <FieldRow label="เลขที่สัญญา" tooltipKey="step8.contract_no">
+            <input
+              type="text"
+              value={contractExecution?.contract_no ?? ""}
+              onChange={(e) => onContractExecutionChange({ contract_no: e.target.value })}
+              disabled={readOnly}
+              className={inputCls}
+              placeholder="เช่น XX/๒๕๖๙"
+            />
+          </FieldRow>
+          <FieldRow label="วันที่ลงนามในสัญญา" tooltipKey="step8.contract_signed_date">
+            <div className="space-y-1">
+              <ThaiDatePicker
+                value={signedDate}
+                onChange={(v) => onContractExecutionChange({ contract_signed_date: v })}
+                disabled={readOnly}
+                minDate={earliestSigningISO || undefined}
+                onInvalidDate={() =>
+                  toast.error(
+                    earliestSigningISO
+                      ? `วันที่ลงนามในสัญญาต้องไม่ก่อนวันที่ ${formatThaiDateSlash(earliestSigningISO)}`
+                      : "วันที่ลงนามในสัญญาไม่ถูกต้อง",
+                  )
+                }
+              />
+              {signedDate && (
+                <p className="text-xs text-muted-foreground">📅 {formatThaiDate(signedDate)}</p>
+              )}
+              {earliestSigningISO && (
+                <p className="text-xs text-muted-foreground">
+                  เลือกได้ตั้งแต่ {formatThaiDateSlash(earliestSigningISO)} เป็นต้นไป
+                  {appealDeadlineISO && (
+                    <span>
+                      {" "}
+                      (หลังวันสิ้นสุดอุทธรณ์ {formatThaiDateSlash(appealDeadlineISO)})
+                    </span>
+                  )}
+                </p>
+              )}
+            </div>
+          </FieldRow>
+          <FieldRow label="มูลค่าสัญญาจัดซื้อจัดจ้างจริง (บาท)">
+            <div className="space-y-1">
+              <input
+                type="text"
+                inputMode="numeric"
+                value={contractAmountDisplay}
+                onChange={(e) => {
+                  const parsed = parseBudgetInput(e.target.value);
+                  onContractExecutionChange({
+                    contract_amount: parsed > 0 ? parsed : null,
+                  });
+                }}
+                disabled={readOnly}
+                className={inputCls}
+                placeholder="ระบุมูลค่าสัญญา (บาท)"
+              />
+              {effectiveContractAmount != null && effectiveContractAmount > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  {formatBaht(effectiveContractAmount)} บาท
+                  {showStep4SourceHint && (
+                    <span className="block mt-0.5">
+                      ดึงจากราคาที่ตกลงซื้อหรือจ้างจริง (ขั้นตอนที่ 4) — แก้ไขได้หากมีการต่อรองราคาก่อนลงนาม
+                    </span>
+                  )}
+                </p>
+              )}
+            </div>
+          </FieldRow>
+        </div>
+
+        <div className="space-y-4 pt-1 border-t border-border/60">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+            กลุ่มที่ 2: รายละเอียดหลักประกันสัญญา (Contract Security)
+          </p>
+          <FieldRow label="ประเภทหลักประกัน">
+            <select
+              value={contractExecution?.guarantee_type ?? ""}
+              onChange={(e) =>
+                onContractExecutionChange({
+                  guarantee_type: e.target.value as Step8GuaranteeType,
+                })
+              }
+              disabled={readOnly}
+              className={inputCls}
+            >
+              <option value="">— เลือกประเภทหลักประกัน —</option>
+              {STEP8_GUARANTEE_TYPE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </FieldRow>
+          <FieldRow label="มูลค่าหลักประกันสัญญา (บาท)">
+            <div className="space-y-1">
+              <input
+                type="text"
+                inputMode="numeric"
+                value={guaranteeAmountDisplay}
+                onChange={(e) => {
+                  const parsed = parseBudgetInput(e.target.value);
+                  onContractExecutionChange({
+                    guarantee_amount: parsed > 0 ? parsed : null,
+                  });
+                }}
+                disabled={readOnly}
+                className={inputCls}
+                placeholder={
+                  recommendedGuarantee != null
+                    ? `แนะนำขั้นต่ำ 5% = ${formatBudgetInput(String(recommendedGuarantee))} บาท`
+                    : "มูลค่าสัญญา × 0.05 (5%)"
+                }
+              />
+              {recommendedGuarantee != null && (
+                <p className="text-xs text-muted-foreground">
+                  💡 แนะนำขั้นต่ำตามระเบียบ: {formatBaht(recommendedGuarantee)} บาท (5% ของมูลค่าสัญญา)
+                </p>
+              )}
+              {contractExecution?.guarantee_amount != null &&
+                contractExecution.guarantee_amount > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    {formatBaht(contractExecution.guarantee_amount)} บาท
+                  </p>
+                )}
+            </div>
+          </FieldRow>
+          <FieldRow label="เลขที่เอกสารหลักประกัน" tooltipKey="step8.guarantee_document_no">
+            <input
+              type="text"
+              value={contractExecution?.guarantee_document_no ?? ""}
+              onChange={(e) =>
+                onContractExecutionChange({ guarantee_document_no: e.target.value })
+              }
+              disabled={readOnly}
+              className={inputCls}
+              placeholder="เช่น เลขที่หนังสือ BG"
+            />
+          </FieldRow>
+        </div>
+
+        <div className="space-y-4 pt-1 border-t border-border/60">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+            กลุ่มที่ 3: ข้อมูลผู้บันทึก
+          </p>
+          <ResponsibleOfficerField
+            stepNumber={8}
+            value={responsibleName}
+            onChange={onResponsibleNameChange}
+            step1Default={step1ResponsibleDefault}
+          />
+          <FieldRow label="หมายเหตุ">
+            <textarea
+              value={note}
+              onChange={(e) => onNoteChange(e.target.value)}
+              rows={4}
+              disabled={readOnly}
+              className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
+            />
+          </FieldRow>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** ขั้นตอนที่ 9–10 — Checklist ด้านบน ฟอร์มด้านล่าง */
 export function GenericStepDetailForm({
   stepNumber,
   manualChecklist,

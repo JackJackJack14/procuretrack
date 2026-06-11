@@ -9,6 +9,8 @@ import {
   computeAutoChecklistState,
   getStep6ChecklistItems,
   STEP5_CHECKLIST_ITEMS,
+  STEP7_CHECKLIST_ITEMS,
+  STEP8_CHECKLIST_ITEMS,
 } from "@/lib/smart-checklist";
 import {
   countWorkdaysAfterStartISO,
@@ -103,6 +105,7 @@ export type Step2CommitteeOrder = {
 
 /** ข้อมูลราคากลาง — ขั้นตอนที่ 2 */
 export type Step2MedianPrice = {
+  median_approval_letter_no?: string;
   approved_median_price?: number | null;
   median_price_approval_date?: string;
 };
@@ -115,6 +118,7 @@ export const EMPTY_STEP2_COMMITTEE_ORDER: Required<Step2CommitteeOrder> = {
 export const EMPTY_STEP2_MEDIAN_PRICE: Required<
   Omit<Step2MedianPrice, never>
 > = {
+  median_approval_letter_no: "",
   approved_median_price: null,
   median_price_approval_date: "",
 };
@@ -587,12 +591,88 @@ export type Step3FormData = {
 export type Step4FormData = { checklist?: Step4Checklist; bidResult?: Step4BidResult };
 export type Step5FormData = { checklist?: Step5Checklist; announcement?: Step5Announcement };
 
+/** ข้อมูลหนังสือแจ้งทำสัญญา — ขั้นตอนที่ 7 */
+export type Step7ContractNotice = {
+  contract_notice_letter_no: string;
+  contract_notice_letter_date: string;
+};
+
+export type Step7FormData = {
+  checklist?: Record<string, boolean>;
+  contractNotice?: Step7ContractNotice;
+};
+
+export const EMPTY_STEP7_CONTRACT_NOTICE: Step7ContractNotice = {
+  contract_notice_letter_no: "",
+  contract_notice_letter_date: "",
+};
+
+/** ประเภทหลักประกันสัญญา — ขั้นตอนที่ 8 */
+export type Step8GuaranteeType =
+  | "cash"
+  | "cashier_check"
+  | "bank_guarantee"
+  | "finance_guarantee"
+  | "";
+
+export const STEP8_GUARANTEE_TYPE_OPTIONS: Array<{
+  value: Exclude<Step8GuaranteeType, "">;
+  label: string;
+}> = [
+  { value: "cash", label: "เงินสด" },
+  { value: "cashier_check", label: "เช็คที่ธนาคารเซ็นสั่งจ่าย" },
+  { value: "bank_guarantee", label: "หนังสือค้ำประกันธนาคาร (BG)" },
+  { value: "finance_guarantee", label: "หนังสือค้ำประกันของบริษัทเงินทุน" },
+];
+
+export function step8GuaranteeTypeLabel(code: Step8GuaranteeType): string {
+  if (!code) return "";
+  return STEP8_GUARANTEE_TYPE_OPTIONS.find((o) => o.value === code)?.label ?? code;
+}
+
+export function parseStep8GuaranteeTypeFromProject(
+  stored?: string | null,
+): Step8GuaranteeType {
+  if (!stored?.trim()) return "";
+  const trimmed = stored.trim();
+  const byLabel = STEP8_GUARANTEE_TYPE_OPTIONS.find((o) => o.label === trimmed);
+  if (byLabel) return byLabel.value;
+  const byCode = STEP8_GUARANTEE_TYPE_OPTIONS.find((o) => o.value === trimmed);
+  return (byCode?.value ?? "") as Step8GuaranteeType;
+}
+
+/** ข้อมูลลงนามสัญญาและหลักประกัน — ขั้นตอนที่ 8 */
+export type Step8ContractExecution = {
+  contract_no: string;
+  contract_signed_date: string;
+  contract_amount: number | null;
+  guarantee_type: Step8GuaranteeType;
+  guarantee_amount: number | null;
+  guarantee_document_no: string;
+};
+
+export type Step8FormData = {
+  checklist?: Record<string, boolean>;
+  contractExecution?: Step8ContractExecution;
+};
+
+export const EMPTY_STEP8_CONTRACT_EXECUTION: Step8ContractExecution = {
+  contract_no: "",
+  contract_signed_date: "",
+  contract_amount: null,
+  guarantee_type: "",
+  guarantee_amount: null,
+  guarantee_document_no: "",
+};
+
 export type StepFormData =
   | Step1FormData
   | Step2FormData
   | Step3FormData
   | Step4FormData
-  | Step5FormData;
+  | Step5FormData
+  | Step7FormData
+  | Step8FormData;
 
 export const EMPTY_STEP4_BID_RESULT: Required<
   Omit<Step4BidResult, never>
@@ -635,6 +715,20 @@ export const EMPTY_STEP3_ANNOUNCEMENT: Required<
 
 const FORM_MARKER = "__STEP_FORM__:";
 
+/** มาร์กเกอร์ที่ใช้เก็บ form state ใน note (ไม่แสดงในช่องหมายเหตุผู้ใช้) */
+export const STEP_FORM_MARKERS = ["__STEP_FORM__:", "__PROCURE_FORM__:"] as const;
+
+/** ตัด payload ฟอร์มหลังบ้านออกจากข้อความ — เหลือเฉพาะหมายเหตุที่ผู้ใช้พิมพ์ */
+export function stripStepFormPayload(raw: string | null | undefined): string {
+  if (!raw) return "";
+  let text = raw;
+  for (const marker of STEP_FORM_MARKERS) {
+    const idx = text.indexOf(marker);
+    if (idx >= 0) text = text.slice(0, idx);
+  }
+  return text.trim();
+}
+
 export function formatBudgetInput(v: string): string {
   const num = v.replace(/[^\d]/g, "");
   if (!num) return "";
@@ -646,18 +740,29 @@ export function parseBudgetInput(v: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-/** แยกหมายเหตุผู้ใช้ กับข้อมูลฟอร์มที่เก็บใน note (ขั้นตอนที่ 2–3) */
+/** แยกหมายเหตุผู้ใช้ กับข้อมูลฟอร์มที่เก็บใน note (metadata หลังบ้าน) */
 export function parseStepNote(note: string | null): { userNote: string; form: StepFormData } {
   if (!note) return { userNote: "", form: {} };
-  const idx = note.indexOf(FORM_MARKER);
-  if (idx === -1) return { userNote: note, form: {} };
-  const userNote = note.slice(0, idx).trim();
-  const raw = note.slice(idx + FORM_MARKER.length);
+
+  let markerIdx = -1;
+  let markerLen = 0;
+  for (const marker of STEP_FORM_MARKERS) {
+    const idx = note.indexOf(marker);
+    if (idx >= 0 && (markerIdx < 0 || idx < markerIdx)) {
+      markerIdx = idx;
+      markerLen = marker.length;
+    }
+  }
+
+  if (markerIdx === -1) return { userNote: note.trim(), form: {} };
+
+  const userNote = note.slice(0, markerIdx).trim();
+  const raw = note.slice(markerIdx + markerLen);
   try {
     const form = JSON.parse(raw) as StepFormData;
     return { userNote, form: form ?? {} };
   } catch {
-    return { userNote: note, form: {} };
+    return { userNote: stripStepFormPayload(note), form: {} };
   }
 }
 
@@ -696,9 +801,10 @@ export function buildStepDraftFields(
   userNote: string,
   dueDate: string,
 ): StepDraftFields {
+  const cleanNote = stripStepFormPayload(userNote);
   return {
     responsible_officer_name: responsibleName.trim() || null,
-    step_notes: userNote.trim() || null,
+    step_notes: cleanNote || null,
     due_date: dueDate?.trim() ? dueDate.trim() : null,
   };
 }
@@ -716,10 +822,13 @@ export function loadStepDraftFields(step: StepLike): {
   userNote: string;
   dueDate: string;
 } {
-  const legacy = splitNoteAndResponsible(step.note);
+  const { userNote: noteColumnText } = parseStepNote(step.note);
+  const legacy = splitNoteAndResponsible(noteColumnText);
+  const fromStepNotes =
+    step.step_notes != null ? stripStepFormPayload(step.step_notes) : null;
   return {
     responsible: step.responsible_officer_name?.trim() || legacy.responsible,
-    userNote: step.step_notes?.trim() ?? legacy.userNote,
+    userNote: fromStepNotes ?? legacy.userNote,
     dueDate: step.due_date ?? "",
   };
 }
@@ -1928,7 +2037,28 @@ function formHasPersistedData(form: StepFormData): boolean {
   }
   if (announcementHasData((form as Step3FormData).announcement)) return true;
   if (step4BidResultHasData((form as Step4FormData).bidResult)) return true;
-  return step5AnnouncementHasData((form as Step5FormData).announcement);
+  if (step5AnnouncementHasData((form as Step5FormData).announcement)) return true;
+  if (step7ContractNoticeHasData((form as Step7FormData).contractNotice)) return true;
+  return step8ContractExecutionHasData((form as Step8FormData).contractExecution);
+}
+
+function step7ContractNoticeHasData(notice?: Step7ContractNotice): boolean {
+  if (!notice) return false;
+  return !!(
+    notice.contract_notice_letter_no?.trim() || notice.contract_notice_letter_date?.trim()
+  );
+}
+
+function step8ContractExecutionHasData(execution?: Step8ContractExecution): boolean {
+  if (!execution) return false;
+  return !!(
+    execution.contract_no?.trim() ||
+    execution.contract_signed_date?.trim() ||
+    (execution.contract_amount != null && execution.contract_amount > 0) ||
+    execution.guarantee_type ||
+    (execution.guarantee_amount != null && execution.guarantee_amount > 0) ||
+    execution.guarantee_document_no?.trim()
+  );
 }
 
 function step5AnnouncementHasData(announcement?: Step5Announcement): boolean {
@@ -2164,6 +2294,298 @@ export function mergeStep5FromProject(
   };
 }
 
+export type Step7ComplianceIssue = { id: string; message: string };
+
+/** ตรวจความพร้อมก่อนไปขั้นถัดไป — ขั้นตอนที่ 7 (3/3 Checklist + หนังสือแจ้งทำสัญญา) */
+export function getStep7ComplianceIssues(
+  contractNotice: Step7ContractNotice,
+  manualChecklist: Record<string, boolean> | null | undefined,
+  opts: {
+    responsibleName: string;
+    appealDeadlineISO: string;
+    stepDocs?: Array<{ document_type: string }>;
+  },
+  autoStates?: Record<string, boolean>,
+): Step7ComplianceIssue[] {
+  const issues: Step7ComplianceIssue[] = [];
+  const auto =
+    autoStates ??
+    computeAutoChecklistState({
+      stepNumber: 7,
+      step7ContractNotice: contractNotice,
+    });
+  const effective = buildEffectiveChecklist(
+    7,
+    manualChecklist,
+    auto,
+    opts.stepDocs,
+  );
+
+  if (!contractNotice?.contract_notice_letter_no?.trim()) {
+    issues.push({
+      id: "contract_notice_letter_no",
+      message: "กรุณาระบุเลขที่หนังสือแจ้งให้ผู้ชนะมาลงนามในสัญญา",
+    });
+  }
+  const letterDate = contractNotice?.contract_notice_letter_date?.trim() ?? "";
+  if (!letterDate) {
+    issues.push({
+      id: "contract_notice_letter_date",
+      message: "กรุณาระบุวันที่ออกหนังสือแจ้ง",
+    });
+  }
+  const appealEnd = opts.appealDeadlineISO?.trim() ?? "";
+  if (letterDate && appealEnd && letterDate < appealEnd) {
+    issues.push({
+      id: "contract_notice_letter_date_min",
+      message: `วันที่ออกหนังสือแจ้งต้องไม่ก่อนวันสิ้นสุดระยะอุทธรณ์ (${formatThaiDateSlash(appealEnd)})`,
+    });
+  }
+
+  STEP7_CHECKLIST_ITEMS.forEach((item, index) => {
+    if (!effective[item.key]) {
+      const prefix =
+        item.mode === "auto" ? "ระบบตรวจพบยังไม่ครบ (Auto)" : "ยังไม่ได้แนบหลักฐาน";
+      issues.push({
+        id: `checklist-${item.key}`,
+        message: `${prefix} ข้อที่ ${index + 1}: ${item.label}`,
+      });
+    }
+  });
+
+  if (!opts.responsibleName.trim()) {
+    issues.push({
+      id: "responsible_officer",
+      message: "กรุณาระบุเจ้าหน้าที่ผู้รับผิดชอบโครงการ",
+    });
+  }
+
+  return issues;
+}
+
+export function isStep7ReadyForNext(
+  contractNotice: Step7ContractNotice,
+  manualChecklist: Record<string, boolean> | null | undefined,
+  opts: Parameters<typeof getStep7ComplianceIssues>[2],
+  autoStates?: Record<string, boolean>,
+): boolean {
+  return (
+    getStep7ComplianceIssues(contractNotice, manualChecklist, opts, autoStates).length === 0
+  );
+}
+
+/** โหลดข้อมูลฟอร์มขั้นตอนที่ 7 จาก note */
+export function loadStep7FormFromNote(note: string | null): Step7FormData {
+  const { form } = parseStepNote(note);
+  const f = form as Step7FormData;
+  return {
+    checklist: f.checklist,
+    contractNotice: {
+      ...EMPTY_STEP7_CONTRACT_NOTICE,
+      ...f.contractNotice,
+    },
+  };
+}
+
+export function resolveDefaultStep8ContractAmount(
+  project: {
+    final_agreed_amount?: number | null;
+    winning_bid_amount?: number | null;
+  } | null,
+  bidResult?: Pick<Step4BidResult, "final_agreed_amount" | "winning_bid_amount">,
+): number | null {
+  if (bidResult) return resolveStep4ContractAmount(bidResult);
+  return resolveStep4ContractAmount({
+    final_agreed_amount: project?.final_agreed_amount ?? null,
+    winning_bid_amount: project?.winning_bid_amount ?? null,
+  });
+}
+
+export function mergeStep8FromProject(
+  execution: Step8ContractExecution,
+  project: {
+    contract_no?: string | null;
+    contract_signed_date?: string | null;
+    final_agreed_amount?: number | null;
+    winning_bid_amount?: number | null;
+    contract_guarantee_type?: string | null;
+    contract_guarantee_amount?: number | null;
+    contract_guarantee_document_no?: string | null;
+  } | null,
+  step4BidResult?: Pick<Step4BidResult, "final_agreed_amount" | "winning_bid_amount"> | null,
+): Step8ContractExecution {
+  const defaultAmount = resolveDefaultStep8ContractAmount(project, step4BidResult ?? undefined);
+  return {
+    contract_no: execution.contract_no?.trim() || project?.contract_no?.trim() || "",
+    contract_signed_date:
+      execution.contract_signed_date?.trim() || project?.contract_signed_date?.trim() || "",
+    contract_amount:
+      execution.contract_amount != null && execution.contract_amount > 0
+        ? execution.contract_amount
+        : defaultAmount,
+    guarantee_type:
+      execution.guarantee_type ||
+      parseStep8GuaranteeTypeFromProject(project?.contract_guarantee_type),
+    guarantee_amount:
+      execution.guarantee_amount != null && execution.guarantee_amount > 0
+        ? execution.guarantee_amount
+        : project?.contract_guarantee_amount ?? null,
+    guarantee_document_no:
+      execution.guarantee_document_no?.trim() ||
+      project?.contract_guarantee_document_no?.trim() ||
+      "",
+  };
+}
+
+export function buildProjectStep8Fields(execution: Step8ContractExecution) {
+  const guaranteeLabel = execution.guarantee_type
+    ? step8GuaranteeTypeLabel(execution.guarantee_type)
+    : null;
+  return {
+    contract_no: execution.contract_no?.trim() || null,
+    contract_signed_date: execution.contract_signed_date?.trim() || null,
+    final_agreed_amount:
+      execution.contract_amount != null && execution.contract_amount > 0
+        ? execution.contract_amount
+        : null,
+    contract_guarantee_type: guaranteeLabel,
+    contract_guarantee_amount:
+      execution.guarantee_amount != null && execution.guarantee_amount > 0
+        ? execution.guarantee_amount
+        : null,
+    contract_guarantee_document_no: execution.guarantee_document_no?.trim() || null,
+  };
+}
+
+/** มูลค่าหลักประกันขั้นต่ำแนะนำ — 5% ของมูลค่าสัญญา */
+export function computeRecommendedGuaranteeAmount(
+  contractAmount: number | null | undefined,
+): number | null {
+  if (contractAmount == null || !Number.isFinite(contractAmount) || contractAmount <= 0) {
+    return null;
+  }
+  return Math.round(contractAmount * 0.05 * 100) / 100;
+}
+
+export type Step8ComplianceIssue = { id: string; message: string };
+
+/** ตรวจความพร้อมก่อนไปขั้นถัดไป — ขั้นตอนที่ 8 (3/3 Checklist) */
+export function getStep8ComplianceIssues(
+  contractExecution: Step8ContractExecution,
+  manualChecklist: Record<string, boolean> | null | undefined,
+  opts: {
+    responsibleName: string;
+    earliestSigningISO: string;
+    appealDeadlineISO: string;
+    stepDocs?: Array<{ document_type: string }>;
+  },
+  autoStates?: Record<string, boolean>,
+): Step8ComplianceIssue[] {
+  const issues: Step8ComplianceIssue[] = [];
+  const auto =
+    autoStates ??
+    computeAutoChecklistState({
+      stepNumber: 8,
+      step8ContractExecution: contractExecution,
+    });
+  const effective = buildEffectiveChecklist(
+    8,
+    manualChecklist,
+    auto,
+    opts.stepDocs,
+  );
+
+  if (!contractExecution?.contract_no?.trim()) {
+    issues.push({ id: "contract_no", message: "กรุณาระบุเลขที่สัญญา" });
+  }
+  const signedDate = contractExecution?.contract_signed_date?.trim() ?? "";
+  if (!signedDate) {
+    issues.push({ id: "contract_signed_date", message: "กรุณาระบุวันที่ลงนามในสัญญา" });
+  }
+  const earliest = opts.earliestSigningISO?.trim() ?? "";
+  const appealEnd = opts.appealDeadlineISO?.trim() ?? "";
+  if (signedDate && earliest && signedDate < earliest) {
+    issues.push({
+      id: "contract_signed_date_min",
+      message: `วันที่ลงนามในสัญญาต้องไม่ก่อนวันที่ ${formatThaiDateSlash(earliest)} (วันถัดจากสิ้นสุดอุทธรณ์)`,
+    });
+  } else if (signedDate && appealEnd && signedDate <= appealEnd) {
+    issues.push({
+      id: "contract_signed_date_appeal",
+      message: `ห้ามเลือกวันที่ลงนามในสัญญาก่อนวันพ้นระยะอุทธรณ์ (${formatThaiDateSlash(appealEnd)})`,
+    });
+  }
+  const contractAmount = contractExecution?.contract_amount;
+  if (contractAmount == null || !Number.isFinite(contractAmount) || contractAmount <= 0) {
+    issues.push({
+      id: "contract_amount",
+      message: "กรุณาระบุมูลค่าสัญญาจัดซื้อจัดจ้างจริง (บาท)",
+    });
+  }
+  if (!contractExecution?.guarantee_type) {
+    issues.push({ id: "guarantee_type", message: "กรุณาเลือกประเภทหลักประกันสัญญา" });
+  }
+  const guaranteeAmount = contractExecution?.guarantee_amount;
+  if (guaranteeAmount == null || !Number.isFinite(guaranteeAmount) || guaranteeAmount <= 0) {
+    issues.push({
+      id: "guarantee_amount",
+      message: "กรุณาระบุมูลค่าหลักประกันสัญญา (บาท)",
+    });
+  }
+  if (!contractExecution?.guarantee_document_no?.trim()) {
+    issues.push({
+      id: "guarantee_document_no",
+      message: "กรุณาระบุเลขที่เอกสารหลักประกัน",
+    });
+  }
+
+  STEP8_CHECKLIST_ITEMS.forEach((item, index) => {
+    if (!effective[item.key]) {
+      const prefix =
+        item.mode === "auto" ? "ระบบตรวจพบยังไม่ครบ (Auto)" : "ยังไม่ได้แนบหลักฐาน";
+      issues.push({
+        id: `checklist-${item.key}`,
+        message: `${prefix} ข้อที่ ${index + 1}: ${item.label}`,
+      });
+    }
+  });
+
+  if (!opts.responsibleName.trim()) {
+    issues.push({
+      id: "responsible_officer",
+      message: "กรุณาระบุเจ้าหน้าที่ผู้รับผิดชอบโครงการ",
+    });
+  }
+
+  return issues;
+}
+
+export function isStep8ReadyForNext(
+  contractExecution: Step8ContractExecution,
+  manualChecklist: Record<string, boolean> | null | undefined,
+  opts: Parameters<typeof getStep8ComplianceIssues>[2],
+  autoStates?: Record<string, boolean>,
+): boolean {
+  return (
+    getStep8ComplianceIssues(contractExecution, manualChecklist, opts, autoStates).length === 0
+  );
+}
+
+/** โหลดข้อมูลฟอร์มขั้นตอนที่ 8 จาก note */
+export function loadStep8FormFromNote(note: string | null): Step8FormData {
+  const { form } = parseStepNote(note);
+  const f = form as Step8FormData;
+  const raw = f.contractExecution;
+  return {
+    checklist: f.checklist,
+    contractExecution: {
+      ...EMPTY_STEP8_CONTRACT_EXECUTION,
+      ...raw,
+      guarantee_type: (raw?.guarantee_type ?? "") as Step8GuaranteeType,
+    },
+  };
+}
+
 /** โหลดข้อมูลฟอร์มขั้นตอนที่ 5 จาก note */
 export function loadStep5FormFromNote(note: string | null): Step5FormData {
   const { form } = parseStepNote(note);
@@ -2340,7 +2762,8 @@ export function mergeStep4BidResultFromProject(
 }
 
 export function serializeStepNote(userNote: string, form: StepFormData): string {
-  if (!formHasPersistedData(form)) return userNote.trim();
+  const clean = stripStepFormPayload(userNote);
+  if (!formHasPersistedData(form)) return clean;
   const payload = JSON.stringify(form);
-  return userNote.trim() ? `${userNote.trim()}\n${FORM_MARKER}${payload}` : `${FORM_MARKER}${payload}`;
+  return clean ? `${clean}\n${FORM_MARKER}${payload}` : `${FORM_MARKER}${payload}`;
 }

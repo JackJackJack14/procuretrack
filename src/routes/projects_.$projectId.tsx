@@ -15,12 +15,16 @@ import {
   getMilestoneLabel,
 } from "@/lib/egp-milestones";
 import { formatThaiDate } from "@/lib/utils";
+import { buildProjectTimelineItems } from "@/lib/project-timeline";
 import { resolveDocFilePolicy, validateDocFile } from "@/lib/doc-file-types";
 import { uploadStepDocument } from "@/lib/doc-upload";
 import { checkStorageQuota, incrementStorageUsage, decrementStorageUsage } from "@/lib/storage";
 import { ThaiDatePicker } from "@/components/ThaiDatePicker";
 import { GuidelineBox } from "@/components/GuidelineBox";
 import { StepWorkflowBanner } from "@/components/StepWorkflowBanner";
+import { GuideModeToggle } from "@/components/GuideModeToggle";
+import { GuideModeProvider } from "@/contexts/GuideModeContext";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   Step1DetailForm,
   Step2DetailForm,
@@ -28,6 +32,8 @@ import {
   Step4DetailForm,
   Step5DetailForm,
   Step6AppealForm,
+  Step7ContractNoticeForm,
+  Step8ContractGuaranteeForm,
   GenericStepDetailForm,
 } from "@/components/steps/ProjectStepForms";
 import {
@@ -44,6 +50,8 @@ import { CompletedStepView } from "@/components/steps/CompletedStepView";
 import {
   addWorkdays,
   computeAppealDeadlineISO,
+  computeContractEarliestISO,
+  computeContractNotificationDeadlineISO,
   parseISODateLocal,
   getStepMinDays,
   getMinDays,
@@ -52,7 +60,6 @@ import {
 import {
   formatBudgetInput,
   parseBudgetInput,
-  parseStepNote,
   serializeStepNote,
   buildStepDraftFields,
   loadStepDraftFields,
@@ -113,6 +120,19 @@ import {
   getStep4ComplianceIssues,
   getStep6ComplianceIssues,
   isStep6ReadyForNext,
+  EMPTY_STEP7_CONTRACT_NOTICE,
+  loadStep7FormFromNote,
+  getStep7ComplianceIssues,
+  isStep7ReadyForNext,
+  type Step7ContractNotice,
+  EMPTY_STEP8_CONTRACT_EXECUTION,
+  loadStep8FormFromNote,
+  mergeStep8FromProject,
+  resolveDefaultStep8ContractAmount,
+  buildProjectStep8Fields,
+  getStep8ComplianceIssues,
+  isStep8ReadyForNext,
+  type Step8ContractExecution,
   resolveWinnerAnnouncementDate,
   computeStep4Timeline,
   resolveStep4ContractAmount,
@@ -298,18 +318,38 @@ function ProjectDetailPage() {
     {},
   );
   const [step6Appeal, setStep6Appeal] = useState<Step6AppealState>({ ...EMPTY_STEP6_APPEAL });
+  const [step7ContractNotice, setStep7ContractNotice] = useState<Step7ContractNotice>({
+    ...EMPTY_STEP7_CONTRACT_NOTICE,
+  });
+  const [step8ContractExecution, setStep8ContractExecution] = useState<Step8ContractExecution>({
+    ...EMPTY_STEP8_CONTRACT_EXECUTION,
+  });
 
   const { data, isLoading: loading, refetch } = useQuery({
     queryKey: ["project", projectId],
     queryFn: async () => {
       const { data: u } = await supabase.auth.getUser();
       if (!u.user) { navigate({ to: "/login" }); return null; }
-      const [{ data: p }, { data: s }, { data: d }, { data: c }] = await Promise.all([
+      const [
+        { data: p, error: pErr },
+        { data: s, error: sErr },
+        { data: d, error: dErr },
+        { data: c, error: cErr },
+      ] = await Promise.all([
         supabase.from("projects").select("*").eq("id", projectId).single(),
         supabase.from("procurement_steps").select("*").eq("project_id", projectId).order("step_number"),
         supabase.from("documents").select("*").eq("project_id", projectId),
         supabase.from("committees").select("*").eq("project_id", projectId).in("committee_type", [...STEP2_COMMITTEE_DB_TYPES]).order("created_at"),
       ]);
+      const loadErr = pErr ?? sErr ?? dErr ?? cErr;
+      if (loadErr) {
+        if (/jwt|session|refresh token/i.test(loadErr.message)) {
+          await supabase.auth.signOut();
+          navigate({ to: "/login" });
+          return null;
+        }
+        throw new Error(loadErr.message);
+      }
       return {
         project: p as Project | null,
         steps: ((s as Step[]) ?? []),
@@ -466,6 +506,28 @@ function ProjectDetailPage() {
     [project, step3Record?.note],
   );
 
+  const mergedStep4BidResult = useMemo(() => {
+    if (!project) return { ...EMPTY_STEP4_BID_RESULT };
+    if (!step4Record) {
+      return mergeStep4BidResultFromProject({ ...EMPTY_STEP4_BID_RESULT }, project);
+    }
+    const step4Form = loadStep4FormFromNote(step4Record.note);
+    return mergeStep4BidResultFromProject(
+      step4Form.bidResult ?? { ...EMPTY_STEP4_BID_RESULT },
+      project,
+    );
+  }, [step4Record, project]);
+
+  const step4ContractAmountDefault = useMemo(
+    () => resolveDefaultStep8ContractAmount(project, mergedStep4BidResult),
+    [project, mergedStep4BidResult],
+  );
+
+  const step4ApprovalFromNote = useMemo(
+    () => mergedStep4BidResult.evaluation_report_approval_date?.trim() || "",
+    [mergedStep4BidResult],
+  );
+
   useEffect(() => {
     if (!steps.length) return;
     const active = steps.find((s) => s.step_number === activeStep);
@@ -487,7 +549,6 @@ function ProjectDetailPage() {
       return;
     }
     if (current.step_number === 2) {
-      const { userNote } = parseStepNote(current.note);
       const step2Form = mergeStep2FormFromProject(
         loadStep2FormFromStep(current as Step),
         project,
@@ -509,15 +570,14 @@ function ProjectDetailPage() {
         ),
       );
       setStep2ComplianceLog(step2Form.complianceLog ?? {});
-      const draft2 = loadStepDraftFields({ ...current, note: userNote });
+      const draft2 = loadStepDraftFields(current);
       setNote(draft2.userNote);
       setDueDate("");
       return;
     }
     if (current.step_number === 3) {
-      const { userNote } = parseStepNote(current.note);
       const step3Form = loadStep3FormFromStep(current as Step);
-      const draft3 = loadStepDraftFields({ ...current, note: userNote });
+      const draft3 = loadStepDraftFields(current);
       setStep3Checklist(step3Form.checklist ?? { ...EMPTY_STEP3_CHECKLIST });
       setStep3Announcement({
         ...EMPTY_STEP3_ANNOUNCEMENT,
@@ -541,7 +601,6 @@ function ProjectDetailPage() {
       return;
     }
     if (current.step_number === 4) {
-      const { userNote } = parseStepNote(current.note);
       const step4Form = loadStep4FormFromNote(current.note);
       setStep4Checklist(step4Form.checklist ?? { ...EMPTY_STEP4_CHECKLIST });
       setStep4BidResult(
@@ -550,7 +609,8 @@ function ProjectDetailPage() {
           project,
         ),
       );
-      setNote("");
+      const draft4 = loadStepDraftFields(current);
+      setNote(draft4.userNote);
       setDueDate("");
       return;
     }
@@ -563,7 +623,8 @@ function ProjectDetailPage() {
           project,
         ),
       );
-      setNote("");
+      const draft5 = loadStepDraftFields(current);
+      setNote(draft5.userNote);
       setDueDate("");
       return;
     }
@@ -580,26 +641,45 @@ function ProjectDetailPage() {
       setDueDate(draft.dueDate);
       return;
     }
+    if (current.step_number === 7) {
+      const step7Form = loadStep7FormFromNote(current.note);
+      setGenericManualChecklist(
+        normalizeManualChecklist(7, step7Form.checklist),
+      );
+      setStep7ContractNotice(
+        step7Form.contractNotice ?? { ...EMPTY_STEP7_CONTRACT_NOTICE },
+      );
+      const draft = loadStepDraftFields(current);
+      setNote(draft.userNote);
+      setDueDate("");
+      return;
+    }
+    if (current.step_number === 8) {
+      const step8Form = loadStep8FormFromNote(current.note);
+      setGenericManualChecklist(
+        normalizeManualChecklist(8, step8Form.checklist),
+      );
+      setStep8ContractExecution(
+        mergeStep8FromProject(
+          step8Form.contractExecution ?? { ...EMPTY_STEP8_CONTRACT_EXECUTION },
+          project,
+          mergedStep4BidResult,
+        ),
+      );
+      const draft = loadStepDraftFields(current);
+      setNote(draft.userNote);
+      setDueDate("");
+      return;
+    }
     const draft = loadStepDraftFields(current);
     setGenericManualChecklist(loadManualChecklistFromNote(current.step_number, current.note));
     setNote(draft.userNote);
     setDueDate(draft.dueDate);
-  }, [current?.id, project?.id, project?.committee_appointment_mode, committees.length]); // eslint-disable-line
+  }, [current?.id, project?.id, project?.committee_appointment_mode, committees.length, mergedStep4BidResult]); // eslint-disable-line
 
   const effectiveResponsibleName =
     responsibleName.trim() || step1ResponsibleDefault.trim();
 
-  /** วันที่อนุมัติผลขั้น 4 — ใช้เป็น minDate ของประกาศผู้ชนะขั้น 5 */
-  const step4ApprovalFromNote = useMemo(() => {
-    if (!step4Record) return "";
-    const step4Form = loadStep4FormFromNote(step4Record.note);
-    return (
-      mergeStep4BidResultFromProject(
-        step4Form.bidResult ?? { ...EMPTY_STEP4_BID_RESULT },
-        project,
-      ).evaluation_report_approval_date?.trim() || ""
-    );
-  }, [step4Record, project]);
   const step5EvaluationApprovalDate =
     project?.evaluation_report_approval_date?.trim() ||
     step4BidResult.evaluation_report_approval_date?.trim() ||
@@ -958,7 +1038,7 @@ function ProjectDetailPage() {
       });
       const { error: e } = await patchStepDraft(
         current.id,
-        buildStepDraftFields(effectiveResponsibleName, "", ""),
+        buildStepDraftFields(effectiveResponsibleName, note, ""),
         { note: formNote || null, step3_checklist: step3Checklist },
       );
       if (e?.error) {
@@ -979,13 +1059,13 @@ function ProjectDetailPage() {
     }
 
     if (current.step_number === 4) {
-      const formNote = serializeStepNote("", {
+      const formNote = serializeStepNote(note, {
         checklist: step4Checklist,
         bidResult: step4BidResult,
       });
       const { error: e } = await patchStepDraft(
         current.id,
-        buildStepDraftFields(effectiveResponsibleName, "", ""),
+        buildStepDraftFields(effectiveResponsibleName, note, ""),
         { note: formNote || null },
       );
       if (e?.error) {
@@ -1019,13 +1099,13 @@ function ProjectDetailPage() {
         setError(msg);
         return;
       }
-      const formNote = serializeStepNote("", {
+      const formNote = serializeStepNote(note, {
         checklist: step5Checklist,
         announcement: step5Announcement,
       });
       const { error: e } = await patchStepDraft(
         current.id,
-        buildStepDraftFields(effectiveResponsibleName, "", ""),
+        buildStepDraftFields(effectiveResponsibleName, note, ""),
         { note: formNote || null },
       );
       if (e?.error) {
@@ -1070,9 +1150,19 @@ function ProjectDetailPage() {
     }
 
     const formNote =
-      current.step_number >= 7
-        ? serializeStepNote(note, { checklist: genericManualChecklist })
-        : null;
+      current.step_number === 7
+        ? serializeStepNote(note, {
+            checklist: genericManualChecklist,
+            contractNotice: step7ContractNotice,
+          })
+        : current.step_number === 8
+          ? serializeStepNote(note, {
+              checklist: genericManualChecklist,
+              contractExecution: step8ContractExecution,
+            })
+          : current.step_number >= 9
+            ? serializeStepNote(note, { checklist: genericManualChecklist })
+            : null;
     const { error: e } = await patchStepDraft(
       current.id,
       buildStepDraftFields(effectiveResponsibleName, note, dueDate),
@@ -1081,6 +1171,15 @@ function ProjectDetailPage() {
     if (e?.error) {
       setError(e.error.message);
       return;
+    }
+    if (current.step_number === 8) {
+      const { error: projErr } = await supabase
+        .from("projects")
+        .update(buildProjectStep8Fields(step8ContractExecution))
+        .eq("id", project.id);
+      if (projErr) {
+        console.warn("[Step8] contract fields sync failed", projErr);
+      }
     }
     await propagateResponsibleToStep1(effectiveResponsibleName);
     await invalidateAll();
@@ -1253,7 +1352,59 @@ function ProjectDetailPage() {
         return;
       }
     }
-    if (current.step_number >= 7 && current.step_number <= 10) {
+    if (current.step_number === 7) {
+      const step7Docs = docs.filter((d) => d.step_number === 7);
+      const appealDeadlineISO = winnerAnnouncementDate
+        ? computeAppealDeadlineISO(winnerAnnouncementDate)
+        : "";
+      const complianceIssues = getStep7ComplianceIssues(
+        step7ContractNotice,
+        genericManualChecklist,
+        {
+          responsibleName: effectiveResponsibleName,
+          appealDeadlineISO,
+          stepDocs: step7Docs,
+        },
+        computeAutoChecklistState({
+          stepNumber: 7,
+          step7ContractNotice,
+        }),
+      );
+      if (complianceIssues.length > 0) {
+        toast.error(complianceIssues[0].message);
+        setError(complianceIssues[0].message);
+        return;
+      }
+    }
+    if (current.step_number === 8) {
+      const step8Docs = docs.filter((d) => d.step_number === 8);
+      const appealDeadlineISO = winnerAnnouncementDate
+        ? computeAppealDeadlineISO(winnerAnnouncementDate)
+        : "";
+      const earliestSigningISO = winnerAnnouncementDate
+        ? computeContractEarliestISO(winnerAnnouncementDate)
+        : "";
+      const complianceIssues = getStep8ComplianceIssues(
+        step8ContractExecution,
+        genericManualChecklist,
+        {
+          responsibleName: effectiveResponsibleName,
+          earliestSigningISO,
+          appealDeadlineISO,
+          stepDocs: step8Docs,
+        },
+        computeAutoChecklistState({
+          stepNumber: 8,
+          step8ContractExecution,
+        }),
+      );
+      if (complianceIssues.length > 0) {
+        toast.error(complianceIssues[0].message);
+        setError(complianceIssues[0].message);
+        return;
+      }
+    }
+    if (current.step_number >= 9 && current.step_number <= 10) {
       const stepDocs = docs.filter((d) => d.step_number === current.step_number);
       const requiredDocs = (STEP_DOCS_DETAILED[current.step_number - 1] ?? []).filter(
         (d) => d.required,
@@ -1384,6 +1535,8 @@ function ProjectDetailPage() {
 
   return (
     <AppShell breadcrumb={`โครงการ / ${project.name}`}>
+      <GuideModeProvider>
+      <TooltipProvider delayDuration={200}>
       <div className="space-y-5">
         <Link to="/projects" className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
           <ArrowLeft className="h-4 w-4" /> กลับไปยังรายการโครงการ
@@ -1489,7 +1642,11 @@ function ProjectDetailPage() {
         </div>
 
         {/* Timeline summary */}
-        <ProjectTimeline project={project} steps={steps} />
+        <ProjectTimeline
+          project={project}
+          steps={steps}
+          step3Note={step3Record?.note ?? null}
+        />
 
         {/* Detail panel */}
         {current && (() => {
@@ -1513,11 +1670,32 @@ function ProjectDetailPage() {
               ? 0
               : getStepMinDays(current.step_number, calcMethod, calcBudget);
           const appealDeadlineDate =
-            current.step_number === 6 && winnerAnnouncementDate
+            winnerAnnouncementDate
               ? parseISODateLocal(computeAppealDeadlineISO(winnerAnnouncementDate))
               : null;
+          const step7AppealDeadlineISO =
+            current.step_number === 7 && winnerAnnouncementDate
+              ? computeAppealDeadlineISO(winnerAnnouncementDate)
+              : "";
+          const step7NotificationDeadlineISO =
+            current.step_number === 7 && winnerAnnouncementDate
+              ? computeContractNotificationDeadlineISO(winnerAnnouncementDate)
+              : "";
+          const step7LetterDateTooLate =
+            current.step_number === 7 &&
+            !!step7ContractNotice?.contract_notice_letter_date?.trim() &&
+            !!step7NotificationDeadlineISO &&
+            step7ContractNotice.contract_notice_letter_date > step7NotificationDeadlineISO;
+          const step8AppealDeadlineISO =
+            (current.step_number === 7 || current.step_number === 8) && winnerAnnouncementDate
+              ? computeAppealDeadlineISO(winnerAnnouncementDate)
+              : "";
+          const step8EarliestSigningISO =
+            current.step_number === 8 && winnerAnnouncementDate
+              ? computeContractEarliestISO(winnerAnnouncementDate)
+              : "";
           const minDeadline =
-            appealDeadlineDate ??
+            (current.step_number === 6 ? appealDeadlineDate : null) ??
             (minDays > 0 ? addWorkdays(new Date(stepStartDate), minDays) : null);
           const dueDateObj = dueDate ? new Date(dueDate) : null;
           const dueValid = !!dueDateObj && !isNaN(dueDateObj.getTime());
@@ -1526,7 +1704,9 @@ function ProjectDetailPage() {
             ? addWorkdays(new Date(stepStartDate), 7)
             : null;
           const dueTooEarly =
-            !!minDeadline && dueValid && dueDateObj! < minDeadline;
+            !!minDeadline &&
+            dueValid &&
+            dueDateObj! < minDeadline;
           const dueTooLateContract =
             isContractStep &&
             !!contractMaxDeadline &&
@@ -1594,6 +1774,10 @@ function ProjectDetailPage() {
                   }
                 : undefined,
             step5Announcement,
+            step7ContractNotice:
+              current.step_number === 7 ? step7ContractNotice : undefined,
+            step8ContractExecution:
+              current.step_number === 8 ? step8ContractExecution : undefined,
             evaluationApprovalDate: step5EvaluationApprovalDate,
             requiredDocs: requiredDocsForStep,
             uploadedDocTypes: uploadedDocTypesForAuto,
@@ -1608,6 +1792,11 @@ function ProjectDetailPage() {
               currentWorkflowStep={workflowStep}
               onUnlockEdit={() => setHistoricalEditUnlocked(true)}
             />
+            {!isStepCompletedView && current.step_number <= 8 && (
+              <div className="flex justify-end">
+                <GuideModeToggle />
+              </div>
+            )}
             {!isStepCompletedView && (
             <GuidelineBox
               stepNumber={current.step_number}
@@ -1618,7 +1807,11 @@ function ProjectDetailPage() {
                 current.step_number === 4 ? step4Timeline : undefined
               }
               winnerAnnouncementDate={
-                current.step_number === 6 ? winnerAnnouncementDate : undefined
+                current.step_number === 6 ||
+                current.step_number === 7 ||
+                current.step_number === 8
+                  ? winnerAnnouncementDate
+                  : undefined
               }
               readOnly={workflowReadOnly}
               onSkipStep3={
@@ -1828,7 +2021,59 @@ function ProjectDetailPage() {
                       }}
                     />
                   )}
-                  {current.step_number >= 7 && current.step_number <= 10 && (
+                  {current.step_number === 7 && (
+                    <Step7ContractNoticeForm
+                      manualChecklist={genericManualChecklist}
+                      onManualChange={setGenericManualCheck}
+                      autoCheckStates={autoCheckStates}
+                      contractNotice={step7ContractNotice}
+                      onContractNoticeChange={(patch) =>
+                        setStep7ContractNotice((prev) => ({ ...prev, ...patch }))
+                      }
+                      appealDeadlineISO={step7AppealDeadlineISO}
+                      notificationDeadlineISO={step7NotificationDeadlineISO}
+                      letterDateTooLate={step7LetterDateTooLate}
+                      readOnly={workflowReadOnly}
+                      docBinder={{
+                        project,
+                        stepNumber: 7,
+                        docs: docsForStep,
+                        onDocsChange: invalidateAll,
+                      }}
+                      responsibleName={responsibleName}
+                      onResponsibleNameChange={setResponsibleName}
+                      step1ResponsibleDefault={step1ResponsibleDefault}
+                      note={note}
+                      onNoteChange={setNote}
+                    />
+                  )}
+                  {current.step_number === 8 && (
+                    <Step8ContractGuaranteeForm
+                      manualChecklist={genericManualChecklist}
+                      onManualChange={setGenericManualCheck}
+                      autoCheckStates={autoCheckStates}
+                      contractExecution={step8ContractExecution}
+                      defaultContractAmountFromStep4={step4ContractAmountDefault}
+                      onContractExecutionChange={(patch) =>
+                        setStep8ContractExecution((prev) => ({ ...prev, ...patch }))
+                      }
+                      earliestSigningISO={step8EarliestSigningISO}
+                      appealDeadlineISO={step8AppealDeadlineISO}
+                      readOnly={workflowReadOnly}
+                      docBinder={{
+                        project,
+                        stepNumber: 8,
+                        docs: docsForStep,
+                        onDocsChange: invalidateAll,
+                      }}
+                      responsibleName={responsibleName}
+                      onResponsibleNameChange={setResponsibleName}
+                      step1ResponsibleDefault={step1ResponsibleDefault}
+                      note={note}
+                      onNoteChange={setNote}
+                    />
+                  )}
+                  {current.step_number >= 9 && current.step_number <= 10 && (
                     <GenericStepDetailForm
                       stepNumber={current.step_number}
                       manualChecklist={genericManualChecklist}
@@ -2089,8 +2334,60 @@ function ProjectDetailPage() {
                     },
                     autoCheckStates,
                   );
+                const step7ComplianceIssues =
+                  current.step_number === 7
+                    ? getStep7ComplianceIssues(
+                        step7ContractNotice,
+                        genericManualChecklist,
+                        {
+                          responsibleName: effectiveResponsibleName,
+                          appealDeadlineISO: step7AppealDeadlineISO,
+                          stepDocs: docsForStep,
+                        },
+                        autoCheckStates,
+                      )
+                    : [];
+                const step7Ready =
+                  current.step_number !== 7 ||
+                  isStep7ReadyForNext(
+                    step7ContractNotice,
+                    genericManualChecklist,
+                    {
+                      responsibleName: effectiveResponsibleName,
+                      appealDeadlineISO: step7AppealDeadlineISO,
+                      stepDocs: docsForStep,
+                    },
+                    autoCheckStates,
+                  );
+                const step8ComplianceIssues =
+                  current.step_number === 8
+                    ? getStep8ComplianceIssues(
+                        step8ContractExecution,
+                        genericManualChecklist,
+                        {
+                          responsibleName: effectiveResponsibleName,
+                          earliestSigningISO: step8EarliestSigningISO,
+                          appealDeadlineISO: step8AppealDeadlineISO,
+                          stepDocs: docsForStep,
+                        },
+                        autoCheckStates,
+                      )
+                    : [];
+                const step8Ready =
+                  current.step_number !== 8 ||
+                  isStep8ReadyForNext(
+                    step8ContractExecution,
+                    genericManualChecklist,
+                    {
+                      responsibleName: effectiveResponsibleName,
+                      earliestSigningISO: step8EarliestSigningISO,
+                      appealDeadlineISO: step8AppealDeadlineISO,
+                      stepDocs: docsForStep,
+                    },
+                    autoCheckStates,
+                  );
                 const genericComplianceIssues =
-                  current.step_number >= 7 && current.step_number <= 10
+                  current.step_number >= 9 && current.step_number <= 10
                     ? getGenericStepComplianceIssues(
                         current.step_number,
                         genericManualChecklist,
@@ -2103,7 +2400,7 @@ function ProjectDetailPage() {
                       )
                     : [];
                 const genericReady =
-                  current.step_number < 7 ||
+                  current.step_number < 9 ||
                   current.step_number > 10 ||
                   isGenericStepReadyForNext(
                     current.step_number,
@@ -2166,9 +2463,13 @@ function ProjectDetailPage() {
                             ? step5ComplianceIssues.map((i) => i.message)
                             : current.step_number === 6
                               ? step6ComplianceIssues.map((i) => i.message)
-                              : current.step_number >= 7 && current.step_number <= 10
-                                ? genericComplianceIssues.map((i) => i.message)
-                                : [];
+                              : current.step_number === 7
+                                ? step7ComplianceIssues.map((i) => i.message)
+                                : current.step_number === 8
+                                  ? step8ComplianceIssues.map((i) => i.message)
+                                  : current.step_number >= 9 && current.step_number <= 10
+                                    ? genericComplianceIssues.map((i) => i.message)
+                                    : [];
                 const appealBlocking =
                   current.step_number === 6 && isAppealBlocking(step6Appeal);
                 const disabled =
@@ -2185,9 +2486,13 @@ function ProjectDetailPage() {
                             ? !step5Ready
                             : current.step_number === 6
                               ? !step6Ready
-                              : current.step_number >= 7
-                                ? !genericReady
-                                : !allUploaded);
+                              : current.step_number === 7
+                                ? !step7Ready
+                                : current.step_number === 8
+                                  ? !step8Ready
+                                  : current.step_number >= 9
+                                    ? !genericReady
+                                    : !allUploaded);
                 const showCompleteBtn =
                   workflowMode === "current" &&
                   !isCompleted &&
@@ -2257,7 +2562,7 @@ function ProjectDetailPage() {
                     {appealBlocking && !isCompleted && (
                       <p className="text-sm text-amber-800 mt-3 font-medium rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
                         ⚠️ มีผู้ยื่นอุทธรณ์ — ชะลอการลงนามสัญญาจนกว่าจะพิจารณาผลอุทธรณ์เสร็จสิ้น
-                        (สามารถบันทึกขั้นตอนนี้และไปจัดทำร่างสัญญาได้เมื่อ Checklist ครบ)
+                        (สามารถบันทึกขั้นตอนนี้และไปแจ้งผู้ชนะลงนามสัญญาได้เมื่อ Checklist ครบ)
                       </p>
                     )}
                     {current.step_number === 3 &&
@@ -2363,7 +2668,45 @@ function ProjectDetailPage() {
                         </ul>
                       </div>
                     )}
-                    {current.step_number >= 7 &&
+                    {current.step_number === 7 &&
+                      !isCompleted &&
+                      !step7Ready &&
+                      step7ComplianceIssues.length > 0 && (
+                      <div className="text-sm text-muted-foreground mt-3 space-y-1 rounded-md border border-dashed border-border bg-muted/30 p-3">
+                        <p className="font-medium text-foreground flex items-center gap-1.5">
+                          <AlertTriangle className="h-4 w-4 text-warning shrink-0" />
+                          กรุณาดำเนินการให้ครบก่อนไปขั้นถัดไป:
+                        </p>
+                        <ul className="list-disc list-inside space-y-0.5 text-xs">
+                          {step7ComplianceIssues.slice(0, 4).map((issue) => (
+                            <li key={issue.id}>{issue.message}</li>
+                          ))}
+                          {step7ComplianceIssues.length > 4 && (
+                            <li>และอีก {step7ComplianceIssues.length - 4} รายการ...</li>
+                          )}
+                        </ul>
+                      </div>
+                    )}
+                    {current.step_number === 8 &&
+                      !isCompleted &&
+                      !step8Ready &&
+                      step8ComplianceIssues.length > 0 && (
+                      <div className="text-sm text-muted-foreground mt-3 space-y-1 rounded-md border border-dashed border-border bg-muted/30 p-3">
+                        <p className="font-medium text-foreground flex items-center gap-1.5">
+                          <AlertTriangle className="h-4 w-4 text-warning shrink-0" />
+                          กรุณาดำเนินการให้ครบก่อนไปขั้นถัดไป:
+                        </p>
+                        <ul className="list-disc list-inside space-y-0.5 text-xs">
+                          {step8ComplianceIssues.slice(0, 4).map((issue) => (
+                            <li key={issue.id}>{issue.message}</li>
+                          ))}
+                          {step8ComplianceIssues.length > 4 && (
+                            <li>และอีก {step8ComplianceIssues.length - 4} รายการ...</li>
+                          )}
+                        </ul>
+                      </div>
+                    )}
+                    {current.step_number >= 9 &&
                       current.step_number <= 10 &&
                       !isCompleted &&
                       !genericReady &&
@@ -2392,6 +2735,8 @@ function ProjectDetailPage() {
           );
         })()}
       </div>
+      </TooltipProvider>
+      </GuideModeProvider>
     </AppShell>
   );
 }
@@ -2988,59 +3333,50 @@ function ContractForm({ project, onSaved }: { project: Project; onSaved: () => P
   );
 }
 
-function ProjectTimeline({ project, steps }: { project: Project; steps: Step[] }) {
-  const sorted = [...steps].sort((a, b) => a.step_number - b.step_number);
-  const mins = getMinDays(project.method, Number(project.budget));
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+function ProjectTimeline({
+  project,
+  steps,
+  step3Note,
+}: {
+  project: Project;
+  steps: Step[];
+  step3Note?: string | null;
+}) {
+  const items = useMemo(
+    () => buildProjectTimelineItems(steps, project, step3Note),
+    [steps, project, step3Note],
+  );
 
-  // build cursor for estimating future steps
-  const lastCompleted = [...sorted].reverse().find((s) => s.completed_at);
-  let cursor = lastCompleted?.completed_at
-    ? new Date(lastCompleted.completed_at)
-    : new Date(project.created_at);
-  if (cursor < today) {
-    // estimates start from today for in-progress / future
-  }
-
-  const items = sorted.map((s) => {
-    const isDone = !!s.completed_at;
-    const isCurrent = s.step_number === project.current_step && !isDone;
-    let date: Date | null = null;
-    let estimated = false;
-    if (isDone) {
-      date = new Date(s.completed_at as string);
-    } else {
-      const minDays = (mins as any)[`step${s.step_number}`] ?? 3;
-      const start = cursor < today ? today : cursor;
-      date = addWorkdays(start, Math.max(minDays, 1));
-      cursor = date;
-      estimated = true;
-    }
-    return { step: s, date, estimated, isCurrent, isDone };
-  });
-
-  const color = (it: typeof items[0]) =>
+  const color = (it: (typeof items)[0]) =>
     it.isDone ? "#16A34A" : it.isCurrent ? "#2563EB" : "#9CA3AF";
 
   return (
     <div className="bg-card border rounded-[10px] p-5">
       <h3 className="font-semibold mb-4">ไทม์ไลน์โครงการ</h3>
+      <p className="text-xs text-muted-foreground mb-3">
+        แสดงวันที่มีผลทางระเบียบจากฟอร์มแต่ละขั้น (ไม่ใช่วันที่ระบบสร้างข้อมูล)
+      </p>
       <div className="overflow-x-auto">
         <div className="flex items-start gap-2 min-w-max pb-2">
           {items.map((it, i) => (
-            <div key={it.step.id} className="flex items-start gap-2">
+            <div key={it.stepNumber} className="flex items-start gap-2">
               <div className="flex flex-col items-center w-28">
                 <div
                   className="h-4 w-4 rounded-full border-2 border-background shadow"
                   style={{ backgroundColor: color(it) }}
                 />
                 <p className="text-[11px] font-medium mt-2 text-center leading-tight">
-                  {it.step.step_number}. {getMilestoneLabel(it.step.step_number)}
+                  {it.stepNumber}. {getMilestoneLabel(it.stepNumber)}
                 </p>
                 <p className="text-[11px] text-muted-foreground mt-0.5">
-                  {it.estimated && "~ "}
-                  {formatThaiDate(it.date)}
+                  {it.date ? (
+                    <>
+                      {it.estimated && "~ "}
+                      {formatThaiDate(it.date)}
+                    </>
+                  ) : (
+                    "—"
+                  )}
                 </p>
                 {it.isCurrent && (
                   <p className="text-[10px] mt-0.5" style={{ color: "#2563EB" }}>
@@ -3058,7 +3394,7 @@ function ProjectTimeline({ project, steps }: { project: Project; steps: Step[] }
       <div className="flex gap-4 mt-3 text-xs text-muted-foreground">
         <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: "#16A34A" }} />เสร็จแล้ว</span>
         <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: "#2563EB" }} />กำลังดำเนินการ</span>
-        <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: "#9CA3AF" }} />ประมาณการ</span>
+        <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: "#9CA3AF" }} />~ ประมาณการ</span>
       </div>
     </div>
   );

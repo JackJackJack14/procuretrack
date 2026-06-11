@@ -7,7 +7,14 @@ export {
   getMilestoneLabel,
   milestoneProgressPercent,
 } from "@/lib/egp-milestones";
-import { STEP3_DOC, STEP4_DOC, STEP5_DOC, STEP6_DOC } from "@/lib/step-doc-types";
+import {
+  STEP3_DOC,
+  STEP4_DOC,
+  STEP5_DOC,
+  STEP6_DOC,
+  STEP7_DOC,
+  STEP8_DOC,
+} from "@/lib/step-doc-types";
 
 export type DocItem = { name: string; required: boolean };
 
@@ -51,14 +58,12 @@ export const STEP_DOCS_DETAILED: DocItem[][] = [
     { name: STEP6_DOC.CGD_APPEAL_REPORT, required: false },
   ],
   [
-    { name: "ร่างสัญญาจ้างก่อสร้าง", required: true },
-    { name: "หนังสือโต้ตอบก่อนลงนาม (ถ้ามี)", required: false },
+    { name: STEP7_DOC.CONTRACT_NOTICE_LETTER, required: true },
+    { name: STEP7_DOC.CONTRACT_NOTICE_DELIVERY_PROOF, required: true },
   ],
   [
-    { name: "หลักประกันสัญญา (LG/แคชเชียร์เช็ค)", required: true },
-    { name: "สัญญาจ้างก่อสร้าง (ต้นฉบับ ติดอากรแสตมป์)", required: true },
-    { name: "สำเนาทะเบียนบริษัทผู้รับจ้าง", required: true },
-    { name: "หนังสือมอบอำนาจ (ถ้ามี)", required: false },
+    { name: STEP8_DOC.GUARANTEE_VERIFICATION, required: true },
+    { name: STEP8_DOC.SIGNED_CONTRACT, required: true },
   ],
   [
     { name: "สรุปสาระสำคัญสัญญา (วงเงิน/ระยะเวลา/งวดงาน)", required: true },

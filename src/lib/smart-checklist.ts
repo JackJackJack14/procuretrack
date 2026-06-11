@@ -140,32 +140,52 @@ export function getStep6ChecklistItems(
 /** @deprecated ใช้ getStep6ChecklistItems */
 export const STEP6_CHECKLIST_ITEMS: SmartChecklistItem[] = getStep6ChecklistItems("none");
 
-export const STEP7_CHECKLIST_ITEMS: SmartChecklistItem[] = [
-  { key: "required_docs_uploaded", label: "อัปโหลดเอกสารบังคับครบถ้วน", mode: "auto" },
-  { key: "responsible_officer_assigned", label: "ระบุเจ้าหน้าที่ผู้รับผิดชอบแล้ว", mode: "auto" },
+export type Step7ChecklistKey =
+  | "contract_notice_recorded"
+  | "contract_notice_letter_uploaded"
+  | "contract_notice_delivery_proof";
+
+export const STEP7_CHECKLIST_ITEMS: SmartChecklistItem<Step7ChecklistKey>[] = [
   {
-    key: "draft_contract_reviewed",
-    label: "ตรวจสอบร่างสัญญาจ้างก่อสร้างตรงกับ TOR และผลเสนอราคา",
+    key: "contract_notice_recorded",
+    label: "บันทึกข้อมูลเลขที่และวันที่ออกหนังสือแจ้งเรียบร้อยแล้ว",
+    mode: "auto",
+  },
+  {
+    key: "contract_notice_letter_uploaded",
+    label: "แนบไฟล์หนังสือแจ้งให้มาลงนามในสัญญาอย่างเป็นทางการ",
+    hint: "หลักฐาน: บันทึกข้อความหรือหนังสือแจ้งที่หัวหน้าหน่วยงานลงนามแล้ว",
     mode: "manual",
   },
   {
-    key: "contract_terms_compliant",
-    label: "ตรวจสอบเงื่อนไขสัญญาเป็นไปตามระเบียบพัสดุ",
+    key: "contract_notice_delivery_proof",
+    label: "แนบหลักฐานการนำส่งหรือการตอบรับหนังสือแจ้ง",
+    hint: "หลักฐาน: ใบตอบรับไปรษณีย์ EMS หรือสำเนาหนังสือที่มีตัวแทนบริษัทเซ็นชื่อรับจริง",
     mode: "manual",
   },
 ];
 
-export const STEP8_CHECKLIST_ITEMS: SmartChecklistItem[] = [
-  { key: "required_docs_uploaded", label: "อัปโหลดเอกสารบังคับครบถ้วน", mode: "auto" },
-  { key: "responsible_officer_assigned", label: "ระบุเจ้าหน้าที่ผู้รับผิดชอบแล้ว", mode: "auto" },
+export type Step8ChecklistKey =
+  | "contract_guarantee_recorded"
+  | "contract_guarantee_verified"
+  | "contract_signed_stamped";
+
+export const STEP8_CHECKLIST_ITEMS: SmartChecklistItem<Step8ChecklistKey>[] = [
+  {
+    key: "contract_guarantee_recorded",
+    label: "บันทึกข้อมูลรายละเอียดและมูลค่าหลักประกันสัญญาครบถ้วน",
+    mode: "auto",
+  },
   {
     key: "contract_guarantee_verified",
-    label: "ตรวจสอบหลักประกันสัญญา (LG/แคชเชียร์เช็ค) ครบถ้วน",
+    label: "ตรวจสอบและยืนยันความถูกต้องของหลักประกันสัญญาเรียบร้อยแล้ว",
+    hint: "หลักฐาน: ใบเสร็จรับเงินค้ำประกัน หรือหนังสือตอบกลับยืนยันจากธนาคารเจ้าของ BG",
     mode: "manual",
   },
   {
     key: "contract_signed_stamped",
-    label: "ตรวจสอบสัญญาต้นฉบับติดอากรแสตมป์และลงนามครบ",
+    label: "ลงนามในสัญญาและติดอากรแสตมป์/ชำระอากรถูกต้องตามกฎหมาย",
+    hint: "หลักฐาน: ไฟล์สแกนเล่มสัญญาฉบับที่ลงนามครบทุกฝ่ายและมีดวงตราอากรแสตมป์หรือใบเสร็จ e-Stamp",
     mode: "manual",
   },
 ];
@@ -300,6 +320,18 @@ export type SmartChecklistAutoContext = {
     appeal_report_approval_date?: string;
   };
   step5Announcement?: { winner_announcement_no?: string; winner_announcement_date?: string };
+  step7ContractNotice?: {
+    contract_notice_letter_no?: string;
+    contract_notice_letter_date?: string;
+  };
+  step8ContractExecution?: {
+    contract_no?: string;
+    contract_signed_date?: string;
+    contract_amount?: number | null;
+    guarantee_type?: string;
+    guarantee_amount?: number | null;
+    guarantee_document_no?: string;
+  };
   evaluationApprovalDate?: string | null;
   requiredDocs?: DocItem[];
   uploadedDocTypes?: string[];
@@ -411,7 +443,27 @@ export function computeAutoChecklistState(ctx: SmartChecklistAutoContext): Recor
     return auto;
   }
 
-  if (stepNumber >= 7 && stepNumber <= 10) {
+  if (stepNumber === 7) {
+    const notice = ctx.step7ContractNotice;
+    auto.contract_notice_recorded =
+      !!notice?.contract_notice_letter_no?.trim() &&
+      !!notice?.contract_notice_letter_date?.trim();
+    return auto;
+  }
+
+  if (stepNumber === 8) {
+    const exec = ctx.step8ContractExecution;
+    const guaranteeAmount = exec?.guarantee_amount;
+    auto.contract_guarantee_recorded =
+      !!exec?.guarantee_type?.trim() &&
+      guaranteeAmount != null &&
+      Number.isFinite(guaranteeAmount) &&
+      guaranteeAmount > 0 &&
+      !!exec?.guarantee_document_no?.trim();
+    return auto;
+  }
+
+  if (stepNumber >= 9 && stepNumber <= 10) {
     auto.required_docs_uploaded = requiredDocsComplete(required, uploaded);
     auto.responsible_officer_assigned = !!responsible;
     return auto;
@@ -422,27 +474,37 @@ export function computeAutoChecklistState(ctx: SmartChecklistAutoContext): Recor
 
 export function buildEffectiveChecklist(
   stepNumber: number,
-  manualChecklist: Record<string, boolean>,
-  autoStates: Record<string, boolean>,
+  manualChecklist: Record<string, boolean> | null | undefined,
+  autoStates: Record<string, boolean> | null | undefined,
   docs?: StepDocRef[],
   itemsOverride?: SmartChecklistItem[],
 ): Record<string, boolean> {
+  const manual = manualChecklist ?? {};
+  const auto = autoStates ?? {};
   const items = itemsOverride ?? getSmartChecklistItems(stepNumber);
   const evidenceByKey = docs ? getInlineEvidenceByKey(stepNumber) : null;
   const effective: Record<string, boolean> = {};
   items.forEach((item) => {
     const evidence = evidenceByKey?.get(item.key);
     if (evidence?.uploadDriven && docs) {
-      const hasDoc = hasInlineEvidenceDoc(docs, evidence.documentType);
+      const hasDoc = hasInlineEvidenceDoc(
+        docs,
+        evidence.documentType,
+        evidence.legacyDocumentTypes,
+      );
       effective[item.key] =
-        item.mode === "auto" ? hasDoc && !!autoStates[item.key] : hasDoc;
+        item.mode === "auto" ? hasDoc && !!auto[item.key] : hasDoc;
     } else if (item.mode === "auto") {
-      effective[item.key] = !!autoStates[item.key];
+      effective[item.key] = !!auto[item.key];
     } else if (evidence && docs && !evidence.uploadDriven) {
       effective[item.key] =
-        hasInlineEvidenceDoc(docs, evidence.documentType) && !!manualChecklist[item.key];
+        hasInlineEvidenceDoc(
+          docs,
+          evidence.documentType,
+          evidence.legacyDocumentTypes,
+        ) && !!manual[item.key];
     } else {
-      effective[item.key] = !!manualChecklist[item.key];
+      effective[item.key] = !!manual[item.key];
     }
   });
   return effective;
@@ -452,8 +514,8 @@ export function buildEffectiveChecklist(
 export function computeReactiveChecklistEffective(
   stepNumber: number,
   items: SmartChecklistItem[],
-  manualChecklist: Record<string, boolean>,
-  autoStates: Record<string, boolean>,
+  manualChecklist: Record<string, boolean> | null | undefined,
+  autoStates: Record<string, boolean> | null | undefined,
   docs: StepDocRef[],
 ): { effective: Record<string, boolean>; done: number; total: number; allDone: boolean } {
   const effective = buildEffectiveChecklist(
@@ -495,15 +557,17 @@ export type GenericStepComplianceIssue = { id: string; message: string };
 
 export function getGenericStepComplianceIssues(
   stepNumber: number,
-  manualChecklist: Record<string, boolean>,
-  autoStates: Record<string, boolean>,
+  manualChecklist: Record<string, boolean> | null | undefined,
+  autoStates: Record<string, boolean> | null | undefined,
   opts: {
     responsibleName: string;
-    requiredDocs: DocItem[];
-    uploadedDocTypes: string[];
+    requiredDocs?: DocItem[];
+    uploadedDocTypes?: string[];
   },
 ): GenericStepComplianceIssue[] {
-  const stepDocs = opts.uploadedDocTypes.map((document_type) => ({ document_type }));
+  const requiredDocs = opts.requiredDocs ?? [];
+  const uploadedDocTypes = opts.uploadedDocTypes ?? [];
+  const stepDocs = uploadedDocTypes.map((document_type) => ({ document_type }));
   const effective = buildEffectiveChecklist(
     stepNumber,
     manualChecklist,
@@ -530,8 +594,8 @@ export function getGenericStepComplianceIssues(
     });
   }
 
-  const missingDocs = opts.requiredDocs
-    .filter((d) => d.required && !opts.uploadedDocTypes.includes(d.name))
+  const missingDocs = requiredDocs
+    .filter((d) => d.required && !uploadedDocTypes.includes(d.name))
     .map((d) => d.name);
   if (missingDocs.length > 0) {
     issues.push({
@@ -541,9 +605,9 @@ export function getGenericStepComplianceIssues(
   }
 
   const evidenceCtx: EvidenceValidationContext = {
-    uploadedDocTypes: opts.uploadedDocTypes,
+    uploadedDocTypes,
   };
-  getChecklistEvidenceIssues(stepNumber, manualChecklist, evidenceCtx).forEach((issue) => {
+  getChecklistEvidenceIssues(stepNumber, manualChecklist ?? {}, evidenceCtx).forEach((issue) => {
     issues.push(issue);
   });
 
@@ -552,28 +616,32 @@ export function getGenericStepComplianceIssues(
 
 export function isGenericStepReadyForNext(
   stepNumber: number,
-  manualChecklist: Record<string, boolean>,
-  autoStates: Record<string, boolean>,
+  manualChecklist: Record<string, boolean> | null | undefined,
+  autoStates: Record<string, boolean> | null | undefined,
   opts: Parameters<typeof getGenericStepComplianceIssues>[3],
 ): boolean {
   return getGenericStepComplianceIssues(stepNumber, manualChecklist, autoStates, opts).length === 0;
 }
 
-/** โหลด manual checklist จาก note JSON (ขั้น 5–10) */
+/** โหลด manual checklist จาก note JSON (ขั้น 6–10) */
 export function loadManualChecklistFromNote(
   stepNumber: number,
   note: string | null,
 ): Record<string, boolean> {
   if (!note) return createEmptyManualChecklist(stepNumber);
-  const marker = "__PROCURE_FORM__";
-  const idx = note.indexOf(marker);
-  if (idx < 0) return createEmptyManualChecklist(stepNumber);
-  try {
-    const raw = JSON.parse(note.slice(idx + marker.length)) as { checklist?: Record<string, boolean> };
-    return normalizeManualChecklist(stepNumber, raw.checklist);
-  } catch {
-    return createEmptyManualChecklist(stepNumber);
+  for (const marker of ["__STEP_FORM__:", "__PROCURE_FORM__"]) {
+    const idx = note.indexOf(marker);
+    if (idx < 0) continue;
+    try {
+      const raw = JSON.parse(note.slice(idx + marker.length)) as {
+        checklist?: Record<string, boolean>;
+      };
+      return normalizeManualChecklist(stepNumber, raw?.checklist);
+    } catch {
+      break;
+    }
   }
+  return createEmptyManualChecklist(stepNumber);
 }
 
 export {

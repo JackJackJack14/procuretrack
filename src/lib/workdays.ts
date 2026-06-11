@@ -239,12 +239,19 @@ export type StepMinDays = Partial<Record<
   number
 >>;
 
+/** ระยะเวลาอุทธรณ์ — พ.ร.บ. จัดซื้อจัดจ้างฯ มาตรา 117 */
+export const APPEAL_PERIOD_WORKDAYS = 7;
+
+/** ระยะออกหนังสือแจ้งทำสัญญา — ระเบียบกระทรวงการคลังฯ ข้อ 161 */
+export const CONTRACT_NOTIFICATION_WORKDAYS = 5;
+
 /**
  * จำนวนวันทำการขั้นต่ำต่อ Milestone e-GP (10 ขั้น)
  *
- * - ขั้น 1,2,4,5,7,8,9,10: ไม่ล็อกขั้นต่ำ (คืน 0) — ผู้ใช้กำหนดกำหนดส่งเอง
+ * - ขั้น 1,2,4,5,8,9,10: ไม่ล็อกขั้นต่ำ (คืน 0) — ผู้ใช้กำหนดกำหนดส่งเอง
  * - ขั้น 3: ระยะประกาศ e-bidding ขั้นต่ำตามวงเงิน
  * - ขั้น 6: ระยะอุทธรณ์ 7 วันทำการก่อนทำสัญญา (ข้อ 62)
+ * - ขั้น 7: ออกหนังสือแจ้งทำสัญญา 5 วันทำการหลังพ้นอุทธรณ์ (ข้อ 161)
  */
 export function getMinDays(method: string, budget: number): StepMinDays {
   const flexibleSteps: StepMinDays = {
@@ -252,7 +259,6 @@ export function getMinDays(method: string, budget: number): StepMinDays {
     step2: 0,
     step4: 0,
     step5: 0,
-    step7: 0,
     step8: 0,
     step9: 0,
     step10: 0,
@@ -261,12 +267,15 @@ export function getMinDays(method: string, budget: number): StepMinDays {
   /** ข้อ 62 — ระยะอุทธรณ์ก่อนดำเนินการขั้นสัญญา */
   const appealPeriod: StepMinDays = { step6: 7 };
 
+  /** ข้อ 161 — ออกหนังสือแจ้งทำสัญญาหลังพ้นอุทธรณ์ */
+  const contractNotification: StepMinDays = { step7: CONTRACT_NOTIFICATION_WORKDAYS };
+
   if (method === "specific" || budget <= 500_000) {
-    return { ...flexibleSteps, step3: 0, ...appealPeriod };
+    return { ...flexibleSteps, step3: 0, ...appealPeriod, ...contractNotification };
   }
 
   if (method === "selective" || method === "selection") {
-    return { ...flexibleSteps, step3: 3, ...appealPeriod };
+    return { ...flexibleSteps, step3: 3, ...appealPeriod, ...contractNotification };
   }
 
   let step3 = 5;
@@ -274,16 +283,13 @@ export function getMinDays(method: string, budget: number): StepMinDays {
   else if (budget > 10_000_000) step3 = 12;
   else if (budget > 5_000_000) step3 = 10;
 
-  return { ...flexibleSteps, step3, ...appealPeriod };
+  return { ...flexibleSteps, step3, ...appealPeriod, ...contractNotification };
 }
 
 export function getStepMinDays(stepNumber: number, method: string, budget: number): number {
   const key = `step${stepNumber}` as keyof StepMinDays;
   return getMinDays(method, budget)[key] ?? 0;
 }
-
-/** ระยะเวลาอุทธรณ์ — พ.ร.บ. จัดซื้อจัดจ้างฯ มาตรา 117 */
-export const APPEAL_PERIOD_WORKDAYS = 7;
 
 /**
  * วันสิ้นสุดระยะอุทธรณ์ — นับจากวันประกาศผู้ชนะ (ขั้น 5) + 7 วันทำการ
@@ -306,4 +312,24 @@ export function computeContractEarliestISO(winnerAnnouncementISO: string): strin
     d.setDate(d.getDate() + 1);
   }
   return toISODate(d);
+}
+
+/**
+ * เดดไลน์ออกหนังสือแจ้งผู้ชนะมาทำสัญญา
+ * นับจากวันสิ้นสุดระยะอุทธรณ์ (Step 6) + 5 วันทำการ ไม่นับวันหยุดราชการ
+ */
+export function computeContractNotificationDeadlineISO(
+  winnerAnnouncementISO: string,
+): string {
+  const appealDeadlineISO = computeAppealDeadlineISO(winnerAnnouncementISO);
+  return computeContractNotificationDeadlineFromAppealISO(appealDeadlineISO);
+}
+
+/** เดดไลน์ออกหนังสือแจ้งทำสัญญา — จากวันสิ้นสุดอุทธรณ์ (yyyy-mm-dd) โดยตรง */
+export function computeContractNotificationDeadlineFromAppealISO(
+  appealDeadlineISO: string,
+): string {
+  const start = parseISODateLocal(appealDeadlineISO?.trim() ?? "");
+  if (!start || CONTRACT_NOTIFICATION_WORKDAYS < 1) return "";
+  return toISODate(addWorkdays(start, CONTRACT_NOTIFICATION_WORKDAYS));
 }

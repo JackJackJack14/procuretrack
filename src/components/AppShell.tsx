@@ -31,8 +31,12 @@ export function AppShell({ children, breadcrumb }: { children: React.ReactNode; 
 
   useEffect(() => {
     (async () => {
-      const { data: u } = await supabase.auth.getUser();
-      if (!u.user) { navigate({ to: "/login" }); return; }
+      const { data: u, error: authErr } = await supabase.auth.getUser();
+      if (authErr || !u.user) {
+        if (authErr) await supabase.auth.signOut();
+        navigate({ to: "/login" });
+        return;
+      }
       const { data: prof } = await supabase
         .from("profiles")
         .select("full_name, organizations(name)")

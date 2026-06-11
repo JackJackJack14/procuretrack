@@ -3,7 +3,16 @@
  * ตรวจข้อไหน แนบหลักฐานข้อนั้นในแถวเดียวกัน (Upload-Driven Reactive Check)
  */
 import type { DocFilePolicyId } from "@/lib/doc-file-types";
-import { STEP2_DOC, STEP3_DOC, STEP4_DOC, STEP5_DOC, STEP6_DOC } from "@/lib/step-doc-types";
+import {
+  STEP2_DOC,
+  STEP3_DOC,
+  STEP4_DOC,
+  STEP5_DOC,
+  STEP6_DOC,
+  STEP7_DOC,
+  STEP8_DOC,
+  STEP8_DOC_LEGACY,
+} from "@/lib/step-doc-types";
 
 export type ChecklistInlineEvidence = {
   checklistKey: string;
@@ -12,6 +21,8 @@ export type ChecklistInlineEvidence = {
   filePolicyId: DocFilePolicyId;
   /** ซ่อน checkbox — ติ๊กอัตโนมัติเมื่ออัปโหลด/ลบไฟล์ */
   uploadDriven: boolean;
+  /** ชื่อประเภทเอกสารเก่าใน DB — รองรับโปรเจกต์ก่อนอัปเกรด */
+  legacyDocumentTypes?: string[];
 };
 
 const STEP1_INLINE: ChecklistInlineEvidence[] = [
@@ -154,10 +165,17 @@ const STEP6_INLINE: ChecklistInlineEvidence[] = [
 
 const STEP7_INLINE: ChecklistInlineEvidence[] = [
   {
-    checklistKey: "draft_contract_reviewed",
-    documentType: "ร่างสัญญาจ้างก่อสร้าง",
-    uploadLabel: "แนบร่างสัญญา",
+    checklistKey: "contract_notice_letter_uploaded",
+    documentType: STEP7_DOC.CONTRACT_NOTICE_LETTER,
+    uploadLabel: "แนบหลักฐาน (.pdf)",
     filePolicyId: "pdf_only",
+    uploadDriven: true,
+  },
+  {
+    checklistKey: "contract_notice_delivery_proof",
+    documentType: STEP7_DOC.CONTRACT_NOTICE_DELIVERY_PROOF,
+    uploadLabel: "แนบหลักฐาน (.pdf, .png, .jpg)",
+    filePolicyId: "screenshot_evidence",
     uploadDriven: true,
   },
 ];
@@ -165,17 +183,19 @@ const STEP7_INLINE: ChecklistInlineEvidence[] = [
 const STEP8_INLINE: ChecklistInlineEvidence[] = [
   {
     checklistKey: "contract_guarantee_verified",
-    documentType: "หลักประกันสัญญา (LG/แคชเชียร์เช็ค)",
-    uploadLabel: "แนบหลักประกันสัญญา",
+    documentType: STEP8_DOC.GUARANTEE_VERIFICATION,
+    uploadLabel: "แนบหลักฐาน (.pdf, .png, .jpg)",
     filePolicyId: "screenshot_evidence",
     uploadDriven: true,
+    legacyDocumentTypes: [STEP8_DOC_LEGACY.GUARANTEE],
   },
   {
     checklistKey: "contract_signed_stamped",
-    documentType: "สัญญาจ้างก่อสร้าง (ต้นฉบับ ติดอากรแสตมป์)",
-    uploadLabel: "แนบสัญญาต้นฉบับ",
+    documentType: STEP8_DOC.SIGNED_CONTRACT,
+    uploadLabel: "แนบหลักฐาน (.pdf)",
     filePolicyId: "pdf_only",
     uploadDriven: true,
+    legacyDocumentTypes: [STEP8_DOC_LEGACY.SIGNED],
   },
 ];
 

@@ -635,6 +635,11 @@ export type Database = {
           committee_appointment_order_date: string | null
           committee_appointment_order_no: string | null
           committee_review_workdays: number | null
+          contract_guarantee_amount: number | null
+          contract_guarantee_document_no: string | null
+          contract_guarantee_type: string | null
+          contract_no: string | null
+          contract_signed_date: string | null
           created_at: string
           created_by: string | null
           current_step: number
@@ -677,6 +682,11 @@ export type Database = {
           committee_appointment_order_date?: string | null
           committee_appointment_order_no?: string | null
           committee_review_workdays?: number | null
+          contract_guarantee_amount?: number | null
+          contract_guarantee_document_no?: string | null
+          contract_guarantee_type?: string | null
+          contract_no?: string | null
+          contract_signed_date?: string | null
           created_at?: string
           created_by?: string | null
           current_step?: number
@@ -719,6 +729,11 @@ export type Database = {
           committee_appointment_order_date?: string | null
           committee_appointment_order_no?: string | null
           committee_review_workdays?: number | null
+          contract_guarantee_amount?: number | null
+          contract_guarantee_document_no?: string | null
+          contract_guarantee_type?: string | null
+          contract_no?: string | null
+          contract_signed_date?: string | null
           created_at?: string
           created_by?: string | null
           current_step?: number
