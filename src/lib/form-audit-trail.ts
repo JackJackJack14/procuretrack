@@ -344,7 +344,7 @@ export const CHECKLIST_EVIDENCE_RULES: ChecklistEvidenceRule[] = [
   {
     stepNumber: 9,
     checklistKey: "contract_summary_verified",
-    checklistIndex: 3,
+    checklistIndex: 2,
     enforce: "when_checked",
     binding: {
       kind: "document",
@@ -355,7 +355,7 @@ export const CHECKLIST_EVIDENCE_RULES: ChecklistEvidenceRule[] = [
   {
     stepNumber: 9,
     checklistKey: "construction_plan_reviewed",
-    checklistIndex: 4,
+    checklistIndex: 3,
     enforce: "when_checked",
     binding: {
       kind: "document",

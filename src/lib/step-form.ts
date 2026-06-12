@@ -11,6 +11,7 @@ import {
   STEP5_CHECKLIST_ITEMS,
   STEP7_CHECKLIST_ITEMS,
   STEP8_CHECKLIST_ITEMS,
+  STEP9_CHECKLIST_ITEMS,
 } from "@/lib/smart-checklist";
 import {
   countWorkdaysAfterStartISO,
@@ -656,6 +657,25 @@ export type Step8FormData = {
   contractExecution?: Step8ContractExecution;
 };
 
+/** ระยะเวลาและงวดงาน — ขั้นตอนที่ 9 */
+export type Step9ContractSchedule = {
+  contract_duration_days: number | null;
+  /** วันที่เริ่มปฏิบัติงานหน้างาน — sync กับ notice_to_proceed_date */
+  work_start_date: string;
+  notice_to_proceed_date: string;
+};
+
+export type Step9FormData = {
+  checklist?: Record<string, boolean>;
+  contractSchedule?: Step9ContractSchedule;
+};
+
+export const EMPTY_STEP9_CONTRACT_SCHEDULE: Step9ContractSchedule = {
+  contract_duration_days: null,
+  work_start_date: "",
+  notice_to_proceed_date: "",
+};
+
 export const EMPTY_STEP8_CONTRACT_EXECUTION: Step8ContractExecution = {
   contract_no: "",
   contract_signed_date: "",
@@ -672,7 +692,8 @@ export type StepFormData =
   | Step4FormData
   | Step5FormData
   | Step7FormData
-  | Step8FormData;
+  | Step8FormData
+  | Step9FormData;
 
 export const EMPTY_STEP4_BID_RESULT: Required<
   Omit<Step4BidResult, never>
@@ -2039,7 +2060,17 @@ function formHasPersistedData(form: StepFormData): boolean {
   if (step4BidResultHasData((form as Step4FormData).bidResult)) return true;
   if (step5AnnouncementHasData((form as Step5FormData).announcement)) return true;
   if (step7ContractNoticeHasData((form as Step7FormData).contractNotice)) return true;
-  return step8ContractExecutionHasData((form as Step8FormData).contractExecution);
+  if (step8ContractExecutionHasData((form as Step8FormData).contractExecution)) return true;
+  return step9ContractScheduleHasData((form as Step9FormData).contractSchedule);
+}
+
+function step9ContractScheduleHasData(schedule?: Step9ContractSchedule): boolean {
+  if (!schedule) return false;
+  return !!(
+    (schedule.contract_duration_days != null && schedule.contract_duration_days > 0) ||
+    schedule.work_start_date?.trim() ||
+    schedule.notice_to_proceed_date?.trim()
+  );
 }
 
 function step7ContractNoticeHasData(notice?: Step7ContractNotice): boolean {
@@ -2569,6 +2600,214 @@ export function isStep8ReadyForNext(
   return (
     getStep8ComplianceIssues(contractExecution, manualChecklist, opts, autoStates).length === 0
   );
+}
+
+function parseLocalISODate(iso: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso.trim());
+  if (!m) return null;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** เปรียบเทียบวันที่ ISO (yyyy-mm-dd) — a อยู่ก่อน b หรือไม่ */
+export function isISODateBefore(a: string, b: string): boolean {
+  const da = parseLocalISODate(a);
+  const db = parseLocalISODate(b);
+  if (!da || !db) return false;
+  return da.getTime() < db.getTime();
+}
+
+/** ล้างวันเริ่มงานถ้าอยู่ก่อนวันลงนามสัญญา (ขั้น 8) */
+export function sanitizeStep9WorkStartAgainstSignedDate(
+  schedule: Step9ContractSchedule,
+  contractSignedDate?: string | null,
+): Step9ContractSchedule {
+  const signed = contractSignedDate?.trim();
+  if (!signed) return schedule;
+  const workStart =
+    schedule.work_start_date?.trim() || schedule.notice_to_proceed_date?.trim() || "";
+  if (!workStart || !isISODateBefore(workStart, signed)) return schedule;
+  return syncStep9WorkStartDate(schedule, "");
+}
+
+function toLocalISO(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/** บวกวันปฏิทินตรงๆ — ไม่ตัดวันหยุดราชการ */
+export function addCalendarDaysISO(iso: string, days: number): string | null {
+  const start = parseLocalISODate(iso);
+  if (!start || days < 0) return null;
+  const end = new Date(start);
+  end.setDate(end.getDate() + days);
+  return toLocalISO(end);
+}
+
+/** วันครบกำหนดสิ้นสุดสัญญา — วันเริ่มงาน + ระยะเวลาทำงาน (วันปฏิทินตรงๆ) */
+export function computeStep9ContractEndDateISO(
+  workStartISO: string,
+  durationDays: number | null | undefined,
+): string | null {
+  const start = workStartISO?.trim();
+  if (!start) return null;
+  const days = durationDays;
+  if (days == null || !Number.isFinite(days) || days <= 0) return null;
+  return addCalendarDaysISO(start, Math.round(days));
+}
+
+/** Sync วันเริ่มงานระหว่างกลุ่มที่ 2 และกลุ่มที่ 3 */
+export function syncStep9WorkStartDate(
+  schedule: Step9ContractSchedule,
+  workStartISO: string,
+): Step9ContractSchedule {
+  const v = workStartISO.trim();
+  return {
+    ...schedule,
+    work_start_date: v,
+    notice_to_proceed_date: v,
+  };
+}
+
+export function mergeStep9ScheduleFromSources(
+  schedule: Step9ContractSchedule,
+  opts: {
+    step7NoticeDate?: string | null;
+    savedDueDate?: string | null;
+    contractDurationDays?: number | null;
+    /** วันที่ลงนามสัญญา (ขั้น 8) — วันเริ่มงานต้องไม่ก่อนวันนี้ */
+    contractSignedDate?: string | null;
+  },
+): Step9ContractSchedule {
+  const signed = opts.contractSignedDate?.trim() || "";
+  let workStart =
+    schedule.work_start_date?.trim() || schedule.notice_to_proceed_date?.trim() || "";
+  if (!workStart) {
+    const fromStep7 = opts.step7NoticeDate?.trim() || "";
+    if (fromStep7 && (!signed || !isISODateBefore(fromStep7, signed))) {
+      workStart = fromStep7;
+    }
+  }
+  const duration =
+    schedule.contract_duration_days != null && schedule.contract_duration_days > 0
+      ? schedule.contract_duration_days
+      : opts.contractDurationDays != null && opts.contractDurationDays > 0
+        ? opts.contractDurationDays
+        : null;
+  const synced = syncStep9WorkStartDate(
+    { ...EMPTY_STEP9_CONTRACT_SCHEDULE, ...schedule, contract_duration_days: duration },
+    workStart,
+  );
+  return sanitizeStep9WorkStartAgainstSignedDate(synced, signed);
+}
+
+/** โหลดข้อมูลฟอร์มขั้นตอนที่ 9 จาก note */
+export function loadStep9FormFromNote(note: string | null): Step9FormData {
+  const { form } = parseStepNote(note);
+  const f = form as Step9FormData;
+  const raw = f.contractSchedule;
+  const workStart = raw?.work_start_date?.trim() || raw?.notice_to_proceed_date?.trim() || "";
+  return {
+    checklist: f.checklist,
+    contractSchedule: syncStep9WorkStartDate(
+      {
+        ...EMPTY_STEP9_CONTRACT_SCHEDULE,
+        ...raw,
+        contract_duration_days: raw?.contract_duration_days ?? null,
+      },
+      workStart,
+    ),
+  };
+}
+
+export type Step9ComplianceIssue = { id: string; message: string };
+
+export function getStep9ComplianceIssues(
+  schedule: Step9ContractSchedule,
+  manualChecklist: Record<string, boolean> | null | undefined,
+  opts: {
+    responsibleName: string;
+    stepDocs?: Array<{ document_type: string }>;
+    contractSignedDate?: string | null;
+  },
+  autoStates?: Record<string, boolean>,
+): Step9ComplianceIssue[] {
+  const issues: Step9ComplianceIssue[] = [];
+  const auto =
+    autoStates ??
+    computeAutoChecklistState({
+      stepNumber: 9,
+      step9ContractSchedule: schedule,
+    });
+  const effective = buildEffectiveChecklist(
+    9,
+    manualChecklist,
+    auto,
+    opts.stepDocs,
+  );
+
+  const duration = schedule.contract_duration_days;
+  if (duration == null || !Number.isFinite(duration) || duration <= 0) {
+    issues.push({
+      id: "contract_duration_days",
+      message: "กรุณาระบุระยะเวลาทำงานตามสัญญา (วัน)",
+    });
+  }
+  if (!schedule.work_start_date?.trim()) {
+    issues.push({
+      id: "work_start_date",
+      message: "กรุณาระบุวันที่เริ่มปฏิบัติงานหน้างาน",
+    });
+  }
+  const signedDate = opts.contractSignedDate?.trim() ?? "";
+  const workStart = schedule.work_start_date?.trim() ?? "";
+  if (signedDate && workStart && isISODateBefore(workStart, signedDate)) {
+    issues.push({
+      id: "work_start_before_signed",
+      message: `วันที่เริ่มปฏิบัติงานต้องไม่ก่อนวันที่ลงนามในสัญญา — เลือกได้ตั้งแต่ ${formatThaiDateSlash(signedDate)} เป็นต้นไป`,
+    });
+  }
+  const endISO = computeStep9ContractEndDateISO(
+    schedule.work_start_date,
+    schedule.contract_duration_days,
+  );
+  if (!endISO && schedule.work_start_date?.trim() && duration && duration > 0) {
+    issues.push({
+      id: "contract_end_date",
+      message: "ไม่สามารถคำนวณวันครบกำหนดสิ้นสุดสัญญาได้ — ตรวจสอบวันที่เริ่มงานและระยะเวลา",
+    });
+  }
+
+  STEP9_CHECKLIST_ITEMS.forEach((item, index) => {
+    if (!effective[item.key]) {
+      const prefix =
+        item.mode === "auto" ? "ระบบตรวจพบยังไม่ครบ (Auto)" : "ยังไม่ได้แนบหลักฐาน";
+      issues.push({
+        id: `checklist-${item.key}`,
+        message: `${prefix} ข้อที่ ${index + 1}: ${item.label}`,
+      });
+    }
+  });
+
+  if (!opts.responsibleName.trim()) {
+    issues.push({
+      id: "responsible_officer",
+      message: "กรุณาระบุเจ้าหน้าที่ผู้รับผิดชอบโครงการ",
+    });
+  }
+
+  return issues;
+}
+
+export function isStep9ReadyForNext(
+  schedule: Step9ContractSchedule,
+  manualChecklist: Record<string, boolean> | null | undefined,
+  opts: Parameters<typeof getStep9ComplianceIssues>[2],
+  autoStates?: Record<string, boolean>,
+): boolean {
+  return getStep9ComplianceIssues(schedule, manualChecklist, opts, autoStates).length === 0;
 }
 
 /** โหลดข้อมูลฟอร์มขั้นตอนที่ 8 จาก note */

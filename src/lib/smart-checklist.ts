@@ -173,7 +173,7 @@ export type Step8ChecklistKey =
 export const STEP8_CHECKLIST_ITEMS: SmartChecklistItem<Step8ChecklistKey>[] = [
   {
     key: "contract_guarantee_recorded",
-    label: "บันทึกข้อมูลรายละเอียดและมูลค่าหลักประกันสัญญาครบถ้วน",
+    label: "บันทึกเลขที่สัญญา วันที่ลงนาม และมูลค่าสัญญาจัดซื้อจัดจ้างจริงครบถ้วน",
     mode: "auto",
   },
   {
@@ -190,17 +190,27 @@ export const STEP8_CHECKLIST_ITEMS: SmartChecklistItem<Step8ChecklistKey>[] = [
   },
 ];
 
-export const STEP9_CHECKLIST_ITEMS: SmartChecklistItem[] = [
-  { key: "required_docs_uploaded", label: "อัปโหลดเอกสารบังคับครบถ้วน", mode: "auto" },
-  { key: "responsible_officer_assigned", label: "ระบุเจ้าหน้าที่ผู้รับผิดชอบแล้ว", mode: "auto" },
+export type Step9ChecklistKey =
+  | "contract_schedule_recorded"
+  | "contract_summary_verified"
+  | "construction_plan_reviewed";
+
+export const STEP9_CHECKLIST_ITEMS: SmartChecklistItem<Step9ChecklistKey>[] = [
+  {
+    key: "contract_schedule_recorded",
+    label: "บันทึกระยะเวลาทำงานตามสัญญาและวันที่เริ่มปฏิบัติงานหน้างานครบถ้วน",
+    mode: "auto",
+  },
   {
     key: "contract_summary_verified",
     label: "ตรวจสอบสรุปสาระสำคัญสัญญา (วงเงิน/ระยะเวลา/งวดงาน)",
+    hint: "หลักฐาน: สรุปสาระสำคัญจากระบบ e-GP หรือเอกสารสรุปที่อนุมัติแล้ว",
     mode: "manual",
   },
   {
     key: "construction_plan_reviewed",
     label: "ตรวจสอบแผนปฏิบัติการก่อสร้าง (Gantt) สอดคล้องสัญญา",
+    hint: "หลักฐาน: ไฟล์แผนปฏิบัติการก่อสร้าง (Gantt Chart)",
     mode: "manual",
   },
 ];
@@ -332,6 +342,11 @@ export type SmartChecklistAutoContext = {
     guarantee_amount?: number | null;
     guarantee_document_no?: string;
   };
+  step9ContractSchedule?: {
+    contract_duration_days?: number | null;
+    work_start_date?: string;
+    notice_to_proceed_date?: string;
+  };
   evaluationApprovalDate?: string | null;
   requiredDocs?: DocItem[];
   uploadedDocTypes?: string[];
@@ -453,17 +468,30 @@ export function computeAutoChecklistState(ctx: SmartChecklistAutoContext): Recor
 
   if (stepNumber === 8) {
     const exec = ctx.step8ContractExecution;
-    const guaranteeAmount = exec?.guarantee_amount;
+    const contractAmount = exec?.contract_amount;
     auto.contract_guarantee_recorded =
-      !!exec?.guarantee_type?.trim() &&
-      guaranteeAmount != null &&
-      Number.isFinite(guaranteeAmount) &&
-      guaranteeAmount > 0 &&
-      !!exec?.guarantee_document_no?.trim();
+      !!exec?.contract_no?.trim() &&
+      !!exec?.contract_signed_date?.trim() &&
+      contractAmount != null &&
+      Number.isFinite(contractAmount) &&
+      contractAmount > 0;
     return auto;
   }
 
-  if (stepNumber >= 9 && stepNumber <= 10) {
+  if (stepNumber === 9) {
+    const schedule = ctx.step9ContractSchedule;
+    const duration = schedule?.contract_duration_days;
+    const workStart =
+      schedule?.work_start_date?.trim() || schedule?.notice_to_proceed_date?.trim() || "";
+    auto.contract_schedule_recorded =
+      duration != null &&
+      Number.isFinite(duration) &&
+      duration > 0 &&
+      !!workStart;
+    return auto;
+  }
+
+  if (stepNumber === 10) {
     auto.required_docs_uploaded = requiredDocsComplete(required, uploaded);
     auto.responsible_officer_assigned = !!responsible;
     return auto;

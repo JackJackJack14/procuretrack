@@ -84,6 +84,12 @@ import {
   type Step8GuaranteeType,
   STEP8_GUARANTEE_TYPE_OPTIONS,
   computeRecommendedGuaranteeAmount,
+  computeStep9ContractEndDateISO,
+  syncStep9WorkStartDate,
+  sanitizeStep9WorkStartAgainstSignedDate,
+  isISODateBefore,
+  EMPTY_STEP9_CONTRACT_SCHEDULE,
+  type Step9ContractSchedule,
   isStep5WinnerAnnouncementBeforeEvaluation,
   getStep5WinnerAnnouncementBeforeEvaluationMsg,
   STEP4_EVALUATION_APPROVAL_BEFORE_BID_END_MSG,
@@ -2382,7 +2388,246 @@ export function Step8ContractGuaranteeForm({
   );
 }
 
-/** ขั้นตอนที่ 9–10 — Checklist ด้านบน ฟอร์มด้านล่าง */
+type Step9DetailFormProps = {
+  manualChecklist: Record<string, boolean>;
+  onManualChange: (key: string, checked: boolean) => void;
+  autoCheckStates: Record<string, boolean>;
+  contractSchedule: Step9ContractSchedule;
+  onContractScheduleChange: (patch: Partial<Step9ContractSchedule>) => void;
+  readOnly?: boolean;
+  docBinder: SmartChecklistDocBinder;
+  responsibleName: string;
+  onResponsibleNameChange: (value: string) => void;
+  step1ResponsibleDefault?: string;
+  note: string;
+  onNoteChange: (value: string) => void;
+  project: ProjectDocRef;
+  docList: DocItem[];
+  docsForStep: StepDocRecord[];
+  onDocsChange: () => void;
+  projectName: string;
+  /** วันที่ลงนามในสัญญา (ขั้น 8) — ใช้เป็น minDate ของวันเริ่มปฏิบัติงาน */
+  contractSignedDate?: string;
+};
+
+/** ขั้นตอนที่ 9 — บันทึกสาระสำคัญสัญญา (Smart ระยะเวลา/งวดงาน) */
+export function Step9DetailForm({
+  manualChecklist,
+  onManualChange,
+  autoCheckStates,
+  contractSchedule,
+  onContractScheduleChange,
+  readOnly,
+  docBinder,
+  responsibleName,
+  onResponsibleNameChange,
+  step1ResponsibleDefault = "",
+  note,
+  onNoteChange,
+  project,
+  docList,
+  docsForStep,
+  onDocsChange,
+  projectName,
+  contractSignedDate = "",
+}: Step9DetailFormProps) {
+  const schedule = contractSchedule ?? { ...EMPTY_STEP9_CONTRACT_SCHEDULE };
+  const signedISO = contractSignedDate?.trim() || "";
+  const workStart = schedule.work_start_date?.trim() || schedule.notice_to_proceed_date?.trim() || "";
+  const workStartInvalid =
+    !!signedISO && !!workStart && isISODateBefore(workStart, signedISO);
+  const contractEndISO = computeStep9ContractEndDateISO(
+    workStartInvalid ? "" : workStart,
+    schedule.contract_duration_days,
+  );
+  const durationDisplay =
+    schedule.contract_duration_days != null && schedule.contract_duration_days > 0
+      ? String(schedule.contract_duration_days)
+      : "";
+
+  useEffect(() => {
+    if (!signedISO || readOnly) return;
+    const current =
+      schedule.work_start_date?.trim() || schedule.notice_to_proceed_date?.trim() || "";
+    if (!current || !isISODateBefore(current, signedISO)) return;
+    onContractScheduleChange(
+      sanitizeStep9WorkStartAgainstSignedDate(schedule, signedISO),
+    );
+  }, [
+    signedISO,
+    readOnly,
+    schedule.work_start_date,
+    schedule.notice_to_proceed_date,
+    onContractScheduleChange,
+    schedule,
+  ]);
+
+  const patchWorkStart = (iso: string) => {
+    if (signedISO && iso && isISODateBefore(iso, signedISO)) return;
+    onContractScheduleChange(syncStep9WorkStartDate(schedule, iso));
+  };
+
+  return (
+    <div className="space-y-4 max-w-2xl">
+      <GenericStepChecklistPanel
+        stepNumber={9}
+        manualChecklist={manualChecklist}
+        onManualChange={onManualChange}
+        autoCheckStates={autoCheckStates}
+        readOnly={readOnly}
+        docBinder={docBinder}
+      />
+
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-5">
+        <p className="text-sm font-medium text-foreground">
+          ข้อมูลสาระสำคัญสัญญา — ขั้นตอนที่ 9
+        </p>
+
+        <div className="space-y-4">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+            กลุ่มที่ 2: ข้อมูลระยะเวลาและงวดงาน
+          </p>
+          <FieldRow
+            label="ระยะเวลาทำงานตามสัญญา (วัน)"
+            tooltipKey="step9.contract_duration_days"
+          >
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={durationDisplay}
+              onChange={(e) => {
+                const raw = e.target.value.replace(/[^\d]/g, "");
+                onContractScheduleChange({
+                  contract_duration_days: raw ? Number(raw) : null,
+                });
+              }}
+              disabled={readOnly}
+              className={inputCls}
+              placeholder="เช่น 120"
+            />
+          </FieldRow>
+          <FieldRow label="วันที่เริ่มปฏิบัติงานหน้างาน">
+            <div className="space-y-1">
+              <ThaiDatePicker
+                value={workStartInvalid ? "" : workStart}
+                onChange={patchWorkStart}
+                minDate={signedISO || undefined}
+                disabled={readOnly || !signedISO}
+                onInvalidDate={() =>
+                  toast.error(
+                    signedISO
+                      ? `ห้ามเริ่มปฏิบัติงานก่อนวันลงนามสัญญา — เลือกได้ตั้งแต่ ${formatThaiDateSlash(signedISO)} เป็นต้นไป`
+                      : "กรุณาบันทึกวันที่ลงนามในสัญญา (ขั้นตอนที่ 8) ก่อน",
+                  )
+                }
+              />
+              {!signedISO && (
+                <p className="text-xs text-destructive">
+                  กรุณาบันทึกวันที่ลงนามในสัญญาในขั้นตอนที่ 8 ก่อนระบุวันเริ่มปฏิบัติงาน
+                </p>
+              )}
+              {signedISO && (
+                <p className="text-xs text-muted-foreground">
+                  เลือกได้ตั้งแต่ {formatThaiDateSlash(signedISO)} (วันที่ลงนามในสัญญา) เป็นต้นไป
+                </p>
+              )}
+              {workStart && !workStartInvalid && (
+                <p className="text-xs text-muted-foreground">📅 {formatThaiDate(workStart)}</p>
+              )}
+            </div>
+          </FieldRow>
+          <FieldRow label="วันครบกำหนดสิ้นสุดสัญญา (กำหนดเสร็จ)">
+            <div className="space-y-1">
+              <input
+                type="text"
+                readOnly
+                aria-readonly
+                value={
+                  contractEndISO ? formatThaiDateSlash(contractEndISO) : "— กรอกระยะเวลาและวันเริ่มงานก่อน —"
+                }
+                className={`${inputCls} bg-muted/50 cursor-not-allowed text-foreground`}
+                tabIndex={-1}
+              />
+              {contractEndISO && (
+                <>
+                  <p className="text-xs text-muted-foreground">
+                    {formatThaiDate(contractEndISO)} — คำนวณอัตโนมัติ (วันปฏิทิน)
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    สูตร: วันเริ่มปฏิบัติงาน + {schedule.contract_duration_days ?? "—"} วัน
+                    (นับรวมวันหยุดราชการ)
+                  </p>
+                </>
+              )}
+            </div>
+          </FieldRow>
+        </div>
+
+        <div className="space-y-4 pt-1 border-t border-border/60">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+            กลุ่มที่ 3: หนังสือแจ้งเริ่มงานและผู้บันทึก
+          </p>
+          <FieldRow label="วันที่เริ่มปฏิบัติงานตามหนังสือแจ้ง">
+            <div className="space-y-1">
+              <ThaiDatePicker
+                value={workStartInvalid ? "" : workStart}
+                onChange={patchWorkStart}
+                minDate={signedISO || undefined}
+                disabled={readOnly || !signedISO}
+                onInvalidDate={() =>
+                  toast.error(
+                    signedISO
+                      ? `ห้ามเริ่มปฏิบัติงานก่อนวันลงนามสัญญา — เลือกได้ตั้งแต่ ${formatThaiDateSlash(signedISO)} เป็นต้นไป`
+                      : "กรุณาบันทึกวันที่ลงนามในสัญญา (ขั้นตอนที่ 8) ก่อน",
+                  )
+                }
+              />
+              {signedISO && (
+                <p className="text-xs text-muted-foreground">
+                  Sync กับวันที่เริ่มปฏิบัติงานหน้างาน (กลุ่มที่ 2) — เลือกได้ตั้งแต่{" "}
+                  {formatThaiDateSlash(signedISO)} เป็นต้นไป
+                </p>
+              )}
+            </div>
+          </FieldRow>
+          <ResponsibleOfficerField
+            stepNumber={9}
+            value={responsibleName}
+            onChange={onResponsibleNameChange}
+            step1Default={step1ResponsibleDefault}
+          />
+          <FieldRow label="หมายเหตุ">
+            <textarea
+              value={note}
+              onChange={(e) => onNoteChange(e.target.value)}
+              rows={4}
+              disabled={readOnly}
+              placeholder="บันทึกหมายเหตุเพิ่มเติม (ถ้ามี)"
+              className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
+            />
+          </FieldRow>
+        </div>
+      </div>
+
+      <StepInlineDocList
+        project={project}
+        stepNumber={9}
+        docList={docList}
+        existing={docsForStep}
+        onChange={onDocsChange}
+      />
+      <StepDocumentHub
+        stepNumber={9}
+        docList={docList}
+        docs={docsForStep}
+        projectName={projectName}
+      />
+    </div>
+  );
+}
+
+/** ขั้นตอนที่ 10 — Checklist ด้านบน ฟอร์มด้านล่าง */
 export function GenericStepDetailForm({
   stepNumber,
   manualChecklist,

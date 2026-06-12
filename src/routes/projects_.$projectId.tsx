@@ -34,6 +34,7 @@ import {
   Step6AppealForm,
   Step7ContractNoticeForm,
   Step8ContractGuaranteeForm,
+  Step9DetailForm,
   GenericStepDetailForm,
 } from "@/components/steps/ProjectStepForms";
 import {
@@ -133,6 +134,14 @@ import {
   getStep8ComplianceIssues,
   isStep8ReadyForNext,
   type Step8ContractExecution,
+  EMPTY_STEP9_CONTRACT_SCHEDULE,
+  loadStep9FormFromNote,
+  mergeStep9ScheduleFromSources,
+  computeStep9ContractEndDateISO,
+  getStep9ComplianceIssues,
+  isStep9ReadyForNext,
+  sanitizeStep9WorkStartAgainstSignedDate,
+  type Step9ContractSchedule,
   resolveWinnerAnnouncementDate,
   computeStep4Timeline,
   resolveStep4ContractAmount,
@@ -151,6 +160,7 @@ import {
   type Step6AppealState,
   type Step6Checklist,
 } from "@/lib/step-form";
+import { resolveProjectContractSignedDate } from "@/lib/step9-guideline";
 import {
   hasStep4BlacklistEvidenceDoc,
   hasStep4CommitteeReportDoc,
@@ -324,6 +334,9 @@ function ProjectDetailPage() {
   const [step8ContractExecution, setStep8ContractExecution] = useState<Step8ContractExecution>({
     ...EMPTY_STEP8_CONTRACT_EXECUTION,
   });
+  const [step9ContractSchedule, setStep9ContractSchedule] = useState<Step9ContractSchedule>({
+    ...EMPTY_STEP9_CONTRACT_SCHEDULE,
+  });
 
   const { data, isLoading: loading, refetch } = useQuery({
     queryKey: ["project", projectId],
@@ -496,6 +509,8 @@ function ProjectDetailPage() {
   const step3Record = useMemo(() => steps.find((s) => s.step_number === 3), [steps]);
   const step4Record = useMemo(() => steps.find((s) => s.step_number === 4), [steps]);
   const step5Record = useMemo(() => steps.find((s) => s.step_number === 5), [steps]);
+  const step7Record = useMemo(() => steps.find((s) => s.step_number === 7), [steps]);
+  const step8Record = useMemo(() => steps.find((s) => s.step_number === 8), [steps]);
   const step1Record = useMemo(() => steps.find((s) => s.step_number === 1), [steps]);
   const step1ResponsibleDefault = useMemo(
     () => getStep1ResponsibleOfficer(steps),
@@ -521,6 +536,15 @@ function ProjectDetailPage() {
   const step4ContractAmountDefault = useMemo(
     () => resolveDefaultStep8ContractAmount(project, mergedStep4BidResult),
     [project, mergedStep4BidResult],
+  );
+
+  const contractSignedDate = useMemo(
+    () =>
+      resolveProjectContractSignedDate(
+        project,
+        step8Record?.note ?? null,
+      ),
+    [project, step8Record?.note, project?.contract_signed_date],
   );
 
   const step4ApprovalFromNote = useMemo(
@@ -671,11 +695,60 @@ function ProjectDetailPage() {
       setDueDate("");
       return;
     }
+    if (current.step_number === 9) {
+      const step9Form = loadStep9FormFromNote(current.note);
+      setGenericManualChecklist(
+        normalizeManualChecklist(9, step9Form.checklist),
+      );
+      const step7Form = loadStep7FormFromNote(step7Record?.note ?? null);
+      const draft = loadStepDraftFields(current);
+      setStep9ContractSchedule(
+        mergeStep9ScheduleFromSources(
+          step9Form.contractSchedule ?? { ...EMPTY_STEP9_CONTRACT_SCHEDULE },
+          {
+            step7NoticeDate: step7Form.contractNotice?.contract_notice_letter_date,
+            savedDueDate: draft.dueDate,
+            contractSignedDate,
+          },
+        ),
+      );
+      setNote(draft.userNote);
+      setDueDate(draft.dueDate);
+      return;
+    }
+    if (current.step_number === 10) {
+      const draft = loadStepDraftFields(current);
+      setGenericManualChecklist(
+        normalizeManualChecklist(10, loadManualChecklistFromNote(10, current.note)),
+      );
+      setNote(draft.userNote);
+      setDueDate(draft.dueDate);
+      return;
+    }
     const draft = loadStepDraftFields(current);
-    setGenericManualChecklist(loadManualChecklistFromNote(current.step_number, current.note));
     setNote(draft.userNote);
     setDueDate(draft.dueDate);
-  }, [current?.id, project?.id, project?.committee_appointment_mode, committees.length, mergedStep4BidResult]); // eslint-disable-line
+  }, [current?.id, project?.id, project?.committee_appointment_mode, committees.length, mergedStep4BidResult, step7Record?.note, contractSignedDate]); // eslint-disable-line
+
+  useEffect(() => {
+    if (current?.step_number !== 9 || !contractSignedDate?.trim()) return;
+    setStep9ContractSchedule((prev) =>
+      sanitizeStep9WorkStartAgainstSignedDate(prev, contractSignedDate),
+    );
+  }, [current?.step_number, contractSignedDate]);
+
+  useEffect(() => {
+    if (current?.step_number !== 9) return;
+    const endISO = computeStep9ContractEndDateISO(
+      step9ContractSchedule.work_start_date,
+      step9ContractSchedule.contract_duration_days,
+    );
+    setDueDate(endISO ?? "");
+  }, [
+    current?.step_number,
+    step9ContractSchedule.work_start_date,
+    step9ContractSchedule.contract_duration_days,
+  ]);
 
   const effectiveResponsibleName =
     responsibleName.trim() || step1ResponsibleDefault.trim();
@@ -1149,6 +1222,50 @@ function ProjectDetailPage() {
       return;
     }
 
+    if (current.step_number === 9) {
+      const endISO = computeStep9ContractEndDateISO(
+        step9ContractSchedule.work_start_date,
+        step9ContractSchedule.contract_duration_days,
+      );
+      const formNote = serializeStepNote(note, {
+        checklist: genericManualChecklist,
+        contractSchedule: step9ContractSchedule,
+      });
+      const { error: e } = await patchStepDraft(
+        current.id,
+        buildStepDraftFields(effectiveResponsibleName, note, endISO ?? ""),
+        { note: formNote || null },
+      );
+      if (e?.error) {
+        setError(e.error.message);
+        return;
+      }
+      if (endISO) {
+        const { data: contractRow } = await supabase
+          .from("contracts")
+          .select("id")
+          .eq("project_id", project.id)
+          .maybeSingle();
+        if (contractRow) {
+          const { error: contractErr } = await supabase
+            .from("contracts")
+            .update({
+              start_date: step9ContractSchedule.work_start_date,
+              end_date: endISO,
+              duration_days: step9ContractSchedule.contract_duration_days,
+            })
+            .eq("id", contractRow.id);
+          if (contractErr) {
+            console.warn("[Step9] contracts schedule sync failed", contractErr);
+          }
+        }
+      }
+      draftSavedToast("ขั้นตอนที่ 9 ");
+      await propagateResponsibleToStep1(effectiveResponsibleName);
+      await invalidateAll();
+      return;
+    }
+
     const formNote =
       current.step_number === 7
         ? serializeStepNote(note, {
@@ -1160,7 +1277,7 @@ function ProjectDetailPage() {
               checklist: genericManualChecklist,
               contractExecution: step8ContractExecution,
             })
-          : current.step_number >= 9
+          : current.step_number === 10
             ? serializeStepNote(note, { checklist: genericManualChecklist })
             : null;
     const { error: e } = await patchStepDraft(
@@ -1404,16 +1521,35 @@ function ProjectDetailPage() {
         return;
       }
     }
-    if (current.step_number >= 9 && current.step_number <= 10) {
-      const stepDocs = docs.filter((d) => d.step_number === current.step_number);
-      const requiredDocs = (STEP_DOCS_DETAILED[current.step_number - 1] ?? []).filter(
-        (d) => d.required,
+    if (current.step_number === 9) {
+      const step9Docs = docs.filter((d) => d.step_number === 9);
+      const complianceIssues = getStep9ComplianceIssues(
+        step9ContractSchedule,
+        genericManualChecklist,
+        {
+          responsibleName: effectiveResponsibleName,
+          stepDocs: step9Docs,
+          contractSignedDate,
+        },
+        computeAutoChecklistState({
+          stepNumber: 9,
+          step9ContractSchedule,
+        }),
       );
+      if (complianceIssues.length > 0) {
+        toast.error(complianceIssues[0].message);
+        setError(complianceIssues[0].message);
+        return;
+      }
+    }
+    if (current.step_number === 10) {
+      const stepDocs = docs.filter((d) => d.step_number === 10);
+      const requiredDocs = (STEP_DOCS_DETAILED[9] ?? []).filter((d) => d.required);
       const complianceIssues = getGenericStepComplianceIssues(
-        current.step_number,
+        10,
         genericManualChecklist,
         computeAutoChecklistState({
-          stepNumber: current.step_number,
+          stepNumber: 10,
           responsibleName: effectiveResponsibleName,
           requiredDocs,
           uploadedDocTypes: stepDocs.map((d) => d.document_type),
@@ -1778,6 +1914,8 @@ function ProjectDetailPage() {
               current.step_number === 7 ? step7ContractNotice : undefined,
             step8ContractExecution:
               current.step_number === 8 ? step8ContractExecution : undefined,
+            step9ContractSchedule:
+              current.step_number === 9 ? step9ContractSchedule : undefined,
             evaluationApprovalDate: step5EvaluationApprovalDate,
             requiredDocs: requiredDocsForStep,
             uploadedDocTypes: uploadedDocTypesForAuto,
@@ -1792,7 +1930,7 @@ function ProjectDetailPage() {
               currentWorkflowStep={workflowStep}
               onUnlockEdit={() => setHistoricalEditUnlocked(true)}
             />
-            {!isStepCompletedView && current.step_number <= 8 && (
+            {!isStepCompletedView && current.step_number <= 9 && (
               <div className="flex justify-end">
                 <GuideModeToggle />
               </div>
@@ -1812,6 +1950,9 @@ function ProjectDetailPage() {
                 current.step_number === 8
                   ? winnerAnnouncementDate
                   : undefined
+              }
+              contractSignedDate={
+                current.step_number === 9 ? contractSignedDate : undefined
               }
               readOnly={workflowReadOnly}
               onSkipStep3={
@@ -2073,16 +2214,45 @@ function ProjectDetailPage() {
                       onNoteChange={setNote}
                     />
                   )}
-                  {current.step_number >= 9 && current.step_number <= 10 && (
+                  {current.step_number === 9 && (
+                    <Step9DetailForm
+                      manualChecklist={genericManualChecklist}
+                      onManualChange={setGenericManualCheck}
+                      autoCheckStates={autoCheckStates}
+                      contractSchedule={step9ContractSchedule}
+                      onContractScheduleChange={(patch) =>
+                        setStep9ContractSchedule((prev) => ({ ...prev, ...patch }))
+                      }
+                      readOnly={workflowReadOnly}
+                      docBinder={{
+                        project,
+                        stepNumber: 9,
+                        docs: docsForStep,
+                        onDocsChange: invalidateAll,
+                      }}
+                      responsibleName={responsibleName}
+                      onResponsibleNameChange={setResponsibleName}
+                      step1ResponsibleDefault={step1ResponsibleDefault}
+                      note={note}
+                      onNoteChange={setNote}
+                      project={project}
+                      docList={STEP_DOCS_DETAILED[8] ?? []}
+                      docsForStep={docsForStep}
+                      onDocsChange={invalidateAll}
+                      projectName={project.name}
+                      contractSignedDate={contractSignedDate}
+                    />
+                  )}
+                  {current.step_number === 10 && (
                     <GenericStepDetailForm
-                      stepNumber={current.step_number}
+                      stepNumber={10}
                       manualChecklist={genericManualChecklist}
                       onManualChange={setGenericManualCheck}
                       autoCheckStates={autoCheckStates}
                       readOnly={workflowReadOnly}
                       docBinder={{
                         project,
-                        stepNumber: current.step_number,
+                        stepNumber: 10,
                         docs: docsForStep,
                         onDocsChange: invalidateAll,
                       }}
@@ -2097,7 +2267,7 @@ function ProjectDetailPage() {
                       note={note}
                       onNoteChange={setNote}
                       project={project}
-                      docList={STEP_DOCS_DETAILED[current.step_number - 1] ?? []}
+                      docList={STEP_DOCS_DETAILED[9] ?? []}
                       docsForStep={docsForStep}
                       onDocsChange={invalidateAll}
                       projectName={project.name}
@@ -2386,10 +2556,35 @@ function ProjectDetailPage() {
                     },
                     autoCheckStates,
                   );
+                const step9ComplianceIssues =
+                  current.step_number === 9
+                    ? getStep9ComplianceIssues(
+                        step9ContractSchedule,
+                        genericManualChecklist,
+                        {
+                          responsibleName: effectiveResponsibleName,
+                          stepDocs: docsForStep,
+                          contractSignedDate,
+                        },
+                        autoCheckStates,
+                      )
+                    : [];
+                const step9Ready =
+                  current.step_number !== 9 ||
+                  isStep9ReadyForNext(
+                    step9ContractSchedule,
+                    genericManualChecklist,
+                    {
+                      responsibleName: effectiveResponsibleName,
+                      stepDocs: docsForStep,
+                      contractSignedDate,
+                    },
+                    autoCheckStates,
+                  );
                 const genericComplianceIssues =
-                  current.step_number >= 9 && current.step_number <= 10
+                  current.step_number === 10
                     ? getGenericStepComplianceIssues(
-                        current.step_number,
+                        10,
                         genericManualChecklist,
                         autoCheckStates,
                         {
@@ -2400,10 +2595,9 @@ function ProjectDetailPage() {
                       )
                     : [];
                 const genericReady =
-                  current.step_number < 9 ||
-                  current.step_number > 10 ||
+                  current.step_number !== 10 ||
                   isGenericStepReadyForNext(
-                    current.step_number,
+                    10,
                     genericManualChecklist,
                     autoCheckStates,
                     {
@@ -2467,9 +2661,11 @@ function ProjectDetailPage() {
                                 ? step7ComplianceIssues.map((i) => i.message)
                                 : current.step_number === 8
                                   ? step8ComplianceIssues.map((i) => i.message)
-                                  : current.step_number >= 9 && current.step_number <= 10
-                                    ? genericComplianceIssues.map((i) => i.message)
-                                    : [];
+                                  : current.step_number === 9
+                                    ? step9ComplianceIssues.map((i) => i.message)
+                                    : current.step_number === 10
+                                      ? genericComplianceIssues.map((i) => i.message)
+                                      : [];
                 const appealBlocking =
                   current.step_number === 6 && isAppealBlocking(step6Appeal);
                 const disabled =
@@ -2490,9 +2686,11 @@ function ProjectDetailPage() {
                                 ? !step7Ready
                                 : current.step_number === 8
                                   ? !step8Ready
-                                  : current.step_number >= 9
-                                    ? !genericReady
-                                    : !allUploaded);
+                                  : current.step_number === 9
+                                    ? !step9Ready
+                                    : current.step_number === 10
+                                      ? !genericReady
+                                      : !allUploaded);
                 const showCompleteBtn =
                   workflowMode === "current" &&
                   !isCompleted &&
