@@ -288,15 +288,26 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-card border rounded-[12px] shadow-xl w-full max-w-lg my-8">
-        <div className="flex items-center justify-between p-5 border-b">
-          <h2 className="text-lg font-semibold">สร้างโครงการใหม่</h2>
-          <button onClick={onClose} className="h-8 w-8 rounded-md hover:bg-accent flex items-center justify-center">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 sm:p-6">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="create-project-title"
+        className="flex h-auto w-full max-h-[85vh] max-w-2xl flex-col overflow-hidden rounded-[12px] border bg-card shadow-xl"
+      >
+        <div className="flex shrink-0 items-center justify-between border-b p-5">
+          <h2 id="create-project-title" className="text-lg font-semibold">
+            สร้างโครงการใหม่
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-8 w-8 items-center justify-center rounded-md hover:bg-accent"
+          >
             <X className="h-4 w-4" />
           </button>
         </div>
-        <div className="p-5 space-y-4">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
           <Field label="ชื่อโครงการ *">
             <input value={name} onChange={(e) => setName(e.target.value)} className={inputCls} />
           </Field>
@@ -342,7 +353,7 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
           </Field>
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
-        <div className="flex gap-3 p-5 border-t">
+        <div className="flex shrink-0 gap-3 border-t bg-card p-5">
           <button onClick={onClose} className="flex-1 h-10 rounded-md border border-input bg-background text-sm font-medium hover:bg-accent">
             ยกเลิก
           </button>

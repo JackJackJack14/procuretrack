@@ -24,6 +24,13 @@ import {
   getInlineEvidenceByKey,
   hasInlineEvidenceDoc,
 } from "@/lib/checklist-inline-evidence";
+import { STEP9_DOC, isStep9GanttDocType } from "@/lib/step-doc-types";
+import {
+  hasStep10RowProgressRecorded,
+  isStep10RowInspectionPassed,
+  step10RowHasAllInstallmentDocs,
+} from "@/lib/step10-contract";
+import type { Step10InspectionRow } from "@/lib/step-form";
 import {
   getChecklistEvidenceIssues,
   type EvidenceValidationContext,
@@ -191,44 +198,63 @@ export const STEP8_CHECKLIST_ITEMS: SmartChecklistItem<Step8ChecklistKey>[] = [
 ];
 
 export type Step9ChecklistKey =
-  | "contract_schedule_recorded"
-  | "contract_summary_verified"
-  | "construction_plan_reviewed";
+  | "egp_and_schedule_form_recorded"
+  | "gantt_plan_saved"
+  | "egp_essential_publication_attached"
+  | "notice_to_proceed_attached";
 
 export const STEP9_CHECKLIST_ITEMS: SmartChecklistItem<Step9ChecklistKey>[] = [
   {
-    key: "contract_schedule_recorded",
-    label: "บันทึกระยะเวลาทำงานตามสัญญาและวันที่เริ่มปฏิบัติงานหน้างานครบถ้วน",
+    key: "egp_and_schedule_form_recorded",
+    label: "บันทึกข้อมูลกลุ่ม 1–2 ครบ (e-GP, ระยะเวลา/งวดงาน, วันเริ่มงาน)",
     mode: "auto",
   },
   {
-    key: "contract_summary_verified",
-    label: "ตรวจสอบสรุปสาระสำคัญสัญญา (วงเงิน/ระยะเวลา/งวดงาน)",
-    hint: "หลักฐาน: สรุปสาระสำคัญจากระบบ e-GP หรือเอกสารสรุปที่อนุมัติแล้ว",
+    key: "gantt_plan_saved",
+    label: "บันทึกแผนปฏิบัติการก่อสร้าง (Gantt) เรียบร้อย",
+    hint: "อัปโหลดไฟล์ Gantt ในกลุ่มที่ 2 ของฟอร์ม",
+    mode: "auto",
+  },
+  {
+    key: "egp_essential_publication_attached",
+    label: "แนบใบประกาศสาระสำคัญจาก e-GP",
+    hint: "รองรับ .pdf, .png, .jpg",
     mode: "manual",
   },
   {
-    key: "construction_plan_reviewed",
-    label: "ตรวจสอบแผนปฏิบัติการก่อสร้าง (Gantt) สอดคล้องสัญญา",
-    hint: "หลักฐาน: ไฟล์แผนปฏิบัติการก่อสร้าง (Gantt Chart)",
+    key: "notice_to_proceed_attached",
+    label: "แนบหนังสือแจ้งเริ่มงาน",
+    hint: "รองรับ .pdf เท่านั้น",
     mode: "manual",
   },
 ];
 
-export const STEP10_CHECKLIST_ITEMS: SmartChecklistItem[] = [
-  { key: "required_docs_uploaded", label: "อัปโหลดเอกสารบังคับครบถ้วน", mode: "auto" },
-  { key: "responsible_officer_assigned", label: "ระบุเจ้าหน้าที่ผู้รับผิดชอบแล้ว", mode: "auto" },
-  {
-    key: "progress_reports_verified",
-    label: "ตรวจสอบรายงานความคืบหน้าและรูปถ่ายหน้างาน",
-    mode: "manual",
-  },
-  {
-    key: "delivery_inspection_complete",
-    label: "ตรวจสอบการส่งมอบ/ตรวจรับงาน (บก.11) ครบถ้วน",
-    mode: "manual",
-  },
-];
+export type Step10ChecklistKey =
+  | "daily_progress_logs_recorded"
+  | "all_installments_closed";
+
+/** Checklist ขั้นตอนที่ 10 — 2 ข้อ (0/2) พร้อม label งวดที่ปิดแล้ว */
+export function getStep10ChecklistItems(
+  passedCount = 0,
+  totalCount = 0,
+): SmartChecklistItem<Step10ChecklistKey>[] {
+  return [
+    {
+      key: "daily_progress_logs_recorded",
+      label: "มีการบันทึกรายงานประจำวันของผู้ควบคุมงานอย่างต่อเนื่อง",
+      mode: "auto",
+    },
+    {
+      key: "all_installments_closed",
+      label: `ตรวจรับและปิดงวดงานครบถ้วนทุกงวด (${passedCount} / ${totalCount} งวด)`,
+      mode: "auto",
+    },
+  ];
+}
+
+/** @deprecated ใช้ getStep10ChecklistItems() สำหรับ label แบบ dynamic */
+export const STEP10_CHECKLIST_ITEMS: SmartChecklistItem<Step10ChecklistKey>[] =
+  getStep10ChecklistItems(0, 0);
 
 const GENERIC_STEP_ITEMS: Record<number, SmartChecklistItem[]> = {
   7: STEP7_CHECKLIST_ITEMS,
@@ -304,6 +330,8 @@ export type SmartChecklistAutoContext = {
   responsibleName?: string;
   egpCode?: string;
   budget?: string;
+  projectName?: string;
+  method?: string;
   committees?: Step2CommitteesState;
   committeeOrder?: Step2CommitteeOrder;
   medianPrice?: Step2MedianPrice;
@@ -344,9 +372,14 @@ export type SmartChecklistAutoContext = {
   };
   step9ContractSchedule?: {
     contract_duration_days?: number | null;
+    total_installment_count?: number | null;
     work_start_date?: string;
     notice_to_proceed_date?: string;
+    egp_essential_publication_date?: string;
+    egp_contract_control_no?: string;
+    notice_to_proceed_letter_no?: string;
   };
+  step10InspectionRows?: Step10InspectionRow[];
   evaluationApprovalDate?: string | null;
   requiredDocs?: DocItem[];
   uploadedDocTypes?: string[];
@@ -363,6 +396,8 @@ export function computeAutoChecklistState(ctx: SmartChecklistAutoContext): Recor
     const budgetVal = parseBudgetInput(ctx.budget ?? "");
     auto.budget_allocated_confirmed = !!budgetVal && budgetVal > 0;
     auto.egp_plan_code_verified = !!ctx.egpCode?.trim();
+    auto.project_name_and_type_verified =
+      !!ctx.projectName?.trim() && !!ctx.method?.trim();
     auto.responsible_officer_confirmed = !!responsible;
     return auto;
   }
@@ -480,20 +515,35 @@ export function computeAutoChecklistState(ctx: SmartChecklistAutoContext): Recor
 
   if (stepNumber === 9) {
     const schedule = ctx.step9ContractSchedule;
-    const duration = schedule?.contract_duration_days;
+    const uploaded = ctx.uploadedDocTypes ?? [];
+    const group1Complete =
+      !!schedule?.egp_essential_publication_date?.trim() &&
+      !!schedule?.egp_contract_control_no?.trim();
     const workStart =
       schedule?.work_start_date?.trim() || schedule?.notice_to_proceed_date?.trim() || "";
-    auto.contract_schedule_recorded =
-      duration != null &&
-      Number.isFinite(duration) &&
-      duration > 0 &&
+    const group2Complete =
+      schedule?.contract_duration_days != null &&
+      Number.isFinite(schedule.contract_duration_days) &&
+      schedule.contract_duration_days > 0 &&
+      schedule?.total_installment_count != null &&
+      Number.isFinite(schedule.total_installment_count) &&
+      schedule.total_installment_count > 0 &&
       !!workStart;
+    auto.egp_and_schedule_form_recorded = group1Complete && group2Complete;
+    auto.gantt_plan_saved =
+      auto.egp_and_schedule_form_recorded &&
+      uploaded.some((t) => isStep9GanttDocType(t));
     return auto;
   }
 
   if (stepNumber === 10) {
-    auto.required_docs_uploaded = requiredDocsComplete(required, uploaded);
-    auto.responsible_officer_assigned = !!responsible;
+    const rows = ctx.step10InspectionRows ?? [];
+    const uploaded = ctx.uploadedDocTypes ?? [];
+    auto.daily_progress_logs_recorded = rows.some(hasStep10RowProgressRecorded);
+    auto.all_installments_closed =
+      rows.length > 0 &&
+      rows.every(isStep10RowInspectionPassed) &&
+      rows.every((row) => step10RowHasAllInstallmentDocs(row.installment_no, uploaded));
     return auto;
   }
 

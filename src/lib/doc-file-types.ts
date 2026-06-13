@@ -99,6 +99,7 @@ const DOC_TYPE_POLICY: Record<string, DocFilePolicyId> = {
 
   [STEP5_DOC.EGP_WINNER_ANNOUNCEMENT]: "screenshot_evidence",
   [STEP5_DOC.PHYSICAL_BOARD_ANNOUNCEMENT]: "image_only",
+  [STEP5_DOC.ALL_BIDDERS_RESULT_NOTICE]: "screenshot_evidence",
   "ประกาศผู้ชนะการเสนอราคา (e-GP)": "screenshot_evidence",
 
   [STEP6_DOC.NO_APPEAL_EGP_SCREENSHOT]: "screenshot_evidence",
@@ -108,7 +109,7 @@ const DOC_TYPE_POLICY: Record<string, DocFilePolicyId> = {
 
   [STEP7_DOC.CONTRACT_NOTICE_LETTER]: "pdf_only",
   [STEP7_DOC.CONTRACT_NOTICE_DELIVERY_PROOF]: "screenshot_evidence",
-  "ร่างสัญญาจ้างก่อสร้าง": "pdf_only",
+  [STEP7_DOC.DRAFT_CONTRACT]: "pdf_only",
 
   [STEP8_DOC.GUARANTEE_VERIFICATION]: "screenshot_evidence",
   [STEP8_DOC.SIGNED_CONTRACT]: "pdf_only",

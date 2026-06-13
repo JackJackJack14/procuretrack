@@ -5,6 +5,7 @@ import { Step6GuidelineBox } from "@/components/Step6GuidelineBox";
 import { Step7GuidelineBox } from "@/components/Step7GuidelineBox";
 import { Step8GuidelineBox } from "@/components/Step8GuidelineBox";
 import { Step9GuidelineBox } from "@/components/Step9GuidelineBox";
+import { Step10GuidelineBox } from "@/components/Step10GuidelineBox";
 import { STEP_GUIDELINES } from "@/lib/guidelines";
 import type { Step3SkipReason } from "@/lib/step3-hearing";
 import type { Step4Timeline } from "@/lib/step-form";
@@ -23,6 +24,8 @@ type Props = {
   winnerAnnouncementDate?: string | null;
   /** ขั้นตอนที่ 9 — วันลงนามสัญญาจริงจาก Step 8 */
   contractSignedDate?: string | null;
+  /** ขั้นตอนที่ 10 — วันสิ้นสุดสัญญาจริงจาก Step 9 */
+  contractEndDate?: string | null;
   /** ขั้นตอนที่ 3 — ข้ามการฟังคำวิจารณ์ */
   onSkipStep3?: (reason: Step3SkipReason) => void;
   onProceedStep3Hearing?: () => void;
@@ -40,6 +43,7 @@ export function GuidelineBox({
   step4Timeline,
   winnerAnnouncementDate,
   contractSignedDate,
+  contractEndDate,
   onSkipStep3,
   onProceedStep3Hearing,
   step3HearingProceed,
@@ -81,6 +85,10 @@ export function GuidelineBox({
 
   if (stepNumber === 9) {
     return <Step9GuidelineBox contractSignedDate={contractSignedDate} />;
+  }
+
+  if (stepNumber === 10) {
+    return <Step10GuidelineBox contractEndDate={contractEndDate} />;
   }
 
   const g = STEP_GUIDELINES[stepNumber - 1];

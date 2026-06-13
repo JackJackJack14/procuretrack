@@ -201,37 +201,23 @@ const STEP8_INLINE: ChecklistInlineEvidence[] = [
 
 const STEP9_INLINE: ChecklistInlineEvidence[] = [
   {
-    checklistKey: "contract_summary_verified",
-    documentType: "สรุปสาระสำคัญสัญญา (วงเงิน/ระยะเวลา/งวดงาน)",
-    uploadLabel: "แนบสรุปสาระสำคัญสัญญา",
-    filePolicyId: "pdf_only",
+    checklistKey: "egp_essential_publication_attached",
+    documentType: "ใบประกาศสาระสำคัญสัญญาจาก e-GP",
+    uploadLabel: "แนบใบประกาศสาระสำคัญ (.pdf/.png/.jpg)",
+    filePolicyId: "egp_screenshot",
     uploadDriven: true,
+    legacyDocumentTypes: ["สรุปสาระสำคัญสัญญา (วงเงิน/ระยะเวลา/งวดงาน)"],
   },
   {
-    checklistKey: "construction_plan_reviewed",
-    documentType: "แผนปฏิบัติการก่อสร้าง (Gantt)",
-    uploadLabel: "แนบแผน Gantt",
-    filePolicyId: "bg06",
+    checklistKey: "notice_to_proceed_attached",
+    documentType: "หนังสือแจ้งเริ่มงาน",
+    uploadLabel: "แนบหนังสือแจ้งเริ่มงาน (.pdf)",
+    filePolicyId: "pdf_only",
     uploadDriven: true,
   },
 ];
 
-const STEP10_INLINE: ChecklistInlineEvidence[] = [
-  {
-    checklistKey: "progress_reports_verified",
-    documentType: "รายงานความคืบหน้ารายสัปดาห์",
-    uploadLabel: "แนบรายงานความคืบหน้า",
-    filePolicyId: "pdf_only",
-    uploadDriven: true,
-  },
-  {
-    checklistKey: "delivery_inspection_complete",
-    documentType: "ใบแจ้งส่งมอบงาน/ใบตรวจรับ (บก.11)",
-    uploadLabel: "แนบใบตรวจรับ บก.11",
-    filePolicyId: "pdf_only",
-    uploadDriven: true,
-  },
-];
+const STEP10_INLINE: ChecklistInlineEvidence[] = [];
 
 const BY_STEP: Record<number, ChecklistInlineEvidence[]> = {
   1: STEP1_INLINE,

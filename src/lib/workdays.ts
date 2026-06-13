@@ -333,3 +333,14 @@ export function computeContractNotificationDeadlineFromAppealISO(
   if (!start || CONTRACT_NOTIFICATION_WORKDAYS < 1) return "";
   return toISODate(addWorkdays(start, CONTRACT_NOTIFICATION_WORKDAYS));
 }
+
+/** วันที่ออกหนังสือแจ้งเกินเดดไลน์ข้อ 161 */
+export function isStep7NotificationLetterTooLate(
+  letterDateISO: string,
+  notificationDeadlineISO: string,
+): boolean {
+  const letter = letterDateISO?.trim() ?? "";
+  const deadline = notificationDeadlineISO?.trim() ?? "";
+  if (!letter || !deadline) return false;
+  return letter > deadline;
+}

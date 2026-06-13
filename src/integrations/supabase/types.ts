@@ -624,6 +624,8 @@ export type Database = {
       }
       projects: {
         Row: {
+          activity_type: string | null
+          allocated_budget: number | null
           appeal_consideration_status: string | null
           appeal_report_approval_date: string | null
           appeal_report_letter_no: string | null
@@ -659,18 +661,31 @@ export type Database = {
           name: string
           organization_id: string
           procurement_agency: string | null
+          procurement_path: string
           procurement_request_approval_date: string | null
           procurement_request_letter_no: string | null
           project_code: string
           result_unit: string | null
+          site_district: string | null
+          site_engineer_name: string | null
+          site_moo: number | null
+          site_province: string | null
+          site_subdistrict: string | null
+          site_supervisor_affiliation: string | null
+          site_supervisor_name: string | null
+          site_village: string | null
           status: string
           updated_at: string
+          warranty_end_date: string | null
+          warranty_started_at: string | null
           winner_announcement_date: string | null
           winner_announcement_no: string | null
           winning_bid_amount: number | null
           winning_bidder_name: string | null
         }
         Insert: {
+          activity_type?: string | null
+          allocated_budget?: number | null
           appeal_consideration_status?: string | null
           appeal_report_approval_date?: string | null
           appeal_report_letter_no?: string | null
@@ -706,18 +721,31 @@ export type Database = {
           name: string
           organization_id: string
           procurement_agency?: string | null
+          procurement_path?: string
           procurement_request_approval_date?: string | null
           procurement_request_letter_no?: string | null
           project_code: string
           result_unit?: string | null
+          site_district?: string | null
+          site_engineer_name?: string | null
+          site_moo?: number | null
+          site_province?: string | null
+          site_subdistrict?: string | null
+          site_supervisor_affiliation?: string | null
+          site_supervisor_name?: string | null
+          site_village?: string | null
           status?: string
           updated_at?: string
+          warranty_end_date?: string | null
+          warranty_started_at?: string | null
           winner_announcement_date?: string | null
           winner_announcement_no?: string | null
           winning_bid_amount?: number | null
           winning_bidder_name?: string | null
         }
         Update: {
+          activity_type?: string | null
+          allocated_budget?: number | null
           appeal_consideration_status?: string | null
           appeal_report_approval_date?: string | null
           appeal_report_letter_no?: string | null
@@ -753,12 +781,23 @@ export type Database = {
           name?: string
           organization_id?: string
           procurement_agency?: string | null
+          procurement_path?: string
           procurement_request_approval_date?: string | null
           procurement_request_letter_no?: string | null
           project_code?: string
           result_unit?: string | null
+          site_district?: string | null
+          site_engineer_name?: string | null
+          site_moo?: number | null
+          site_province?: string | null
+          site_subdistrict?: string | null
+          site_supervisor_affiliation?: string | null
+          site_supervisor_name?: string | null
+          site_village?: string | null
           status?: string
           updated_at?: string
+          warranty_end_date?: string | null
+          warranty_started_at?: string | null
           winner_announcement_date?: string | null
           winner_announcement_no?: string | null
           winning_bid_amount?: number | null

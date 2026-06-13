@@ -1,4 +1,5 @@
 import { loadStep8FormFromNote } from "@/lib/step-form";
+import { formatThaiDateSlash } from "@/lib/utils";
 
 /** ระยะประกาศสาระสำคัญใน e-GP — ข้อ 162 (วันปฏิทิน รวมวันหยุดราชการ) */
 export const STEP9_EGP_DEADLINE_CALENDAR_DAYS = 15;
@@ -44,6 +45,23 @@ export function computeStep9EgpDeadlineISO(contractSignedISO: string): string | 
   const signed = contractSignedISO?.trim();
   if (!signed) return null;
   return addCalendarDaysISO(signed, STEP9_EGP_DEADLINE_CALENDAR_DAYS);
+}
+
+/** วันที่ประกาศสาระสำคัญเกินเดดไลน์ข้อ 162 */
+export function isStep9EgpPublicationTooLate(
+  publicationISO: string,
+  contractSignedISO: string,
+): boolean {
+  const pub = publicationISO?.trim() ?? "";
+  const signed = contractSignedISO?.trim() ?? "";
+  if (!pub || !signed) return false;
+  const deadline = computeStep9EgpDeadlineISO(signed);
+  if (!deadline) return false;
+  return pub > deadline;
+}
+
+export function getStep9EgpPublicationTooLateMsg(deadlineISO: string): string {
+  return `❌ วันที่ประกาศสาระสำคัญใน e-GP ต้องไม่เกิน ${STEP9_EGP_DEADLINE_CALENDAR_DAYS} วันปฏิทินนับจากวันลงนามในสัญญา (เดดไลน์: ${formatThaiDateSlash(deadlineISO)})`;
 }
 
 /** วันลงนามสัญญาจริง — จากคอลัมน์ projects หรือ note ขั้นตอนที่ 8 */

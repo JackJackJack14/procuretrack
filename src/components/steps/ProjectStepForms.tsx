@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Plus, Trash2, Download, ChevronDown, FileText, Loader2 } from "lucide-react";
 import { ThaiDatePicker } from "@/components/ThaiDatePicker";
 import { formatThaiDate, formatThaiDateSlash } from "@/lib/utils";
 import {
@@ -13,6 +13,7 @@ import {
 } from "@/lib/workdays";
 import { InlineDocUpload } from "@/components/steps/InlineDocUpload";
 import type { ProjectDocRef, StepDocRecord } from "@/lib/doc-upload";
+import { downloadStepDocument } from "@/lib/doc-upload";
 import {
   STEP3_DOC,
   STEP3_DRAFT_TOR_UPLOAD_LABEL,
@@ -27,7 +28,28 @@ import {
   STEP2_DOC,
   STEP2_APPOINTMENT_ORDER_UPLOAD_LABEL,
   STEP2_BG06_UPLOAD_LABEL,
+  STEP2_EVALUATION_INSPECTION_ORDER_UPLOAD_LABEL,
+  STEP2_MARKET_QUOTES_UPLOAD_LABEL,
+  STEP5_DOC,
+  STEP5_ALL_BIDDERS_RESULT_UPLOAD_LABEL,
+  STEP7_DOC,
+  STEP7_DRAFT_CONTRACT_UPLOAD_LABEL,
+  STEP9_DOC,
 } from "@/lib/step-doc-types";
+import {
+  STEP10_DAILY_REPORT_HINT,
+  STEP10_GUARANTEE_RETURN_DOC,
+  STEP10_INSTALLMENT_DOC,
+  STEP10_INSTALLMENT_STATUS_OPTIONS,
+  computeStep10InstallmentPenalty,
+  computeWarrantyEndDateISO,
+  countStep10PassedInstallments,
+  groupStep10DocsByInstallment,
+  isStep10InspectionBeforeDelivery,
+  PROJECT_STATUS_WARRANTY,
+  PROJECT_WARRANTY_STATUS_LABEL,
+  resolveLastInstallmentInspectionDate,
+} from "@/lib/step10-contract";
 import { FORM_AUDIT_TRAIL_STANDARD } from "@/lib/form-audit-trail";
 import {
   STEP1_METHOD_OPTIONS,
@@ -67,6 +89,7 @@ import {
   type Step2CommitteesState,
   type Step2CommitteeAppointmentMode,
   type Step2CommitteeListKey,
+  type Step2MarketQuote,
   shouldWarnEvenCommitteeCount,
   defaultStep4EvaluationApprovalDateISO,
   isStep4EvaluationApprovalBeforeBidEnd,
@@ -90,15 +113,36 @@ import {
   isISODateBefore,
   EMPTY_STEP9_CONTRACT_SCHEDULE,
   type Step9ContractSchedule,
+  buildStep10InspectionRows,
+  type Step10InspectionRow,
   isStep5WinnerAnnouncementBeforeEvaluation,
   getStep5WinnerAnnouncementBeforeEvaluationMsg,
   STEP4_EVALUATION_APPROVAL_BEFORE_BID_END_MSG,
   STEP4_EVALUATION_APPROVAL_OVERDUE_MSG,
+  STEP7_NOTIFICATION_DEADLINE_EXCEEDED_MSG,
 } from "@/lib/step-form";
+import {
+  computeStep9EgpDeadlineISO,
+  getStep9EgpPublicationTooLateMsg,
+  isStep9EgpPublicationTooLate,
+  STEP9_EGP_DEADLINE_CALENDAR_DAYS,
+} from "@/lib/step9-guideline";
 import { toast } from "sonner";
 import { formatBaht } from "@/lib/procurement";
 import { SmartChecklist, type SmartChecklistDocBinder } from "@/components/SmartChecklist";
-import { getSmartChecklistItems, getStep6ChecklistItems } from "@/lib/smart-checklist";
+import { getSmartChecklistItems, getStep6ChecklistItems, getStep10ChecklistItems } from "@/lib/smart-checklist";
+import {
+  DISTRICT_OFFICE_OPTIONS,
+  PROJECT_RESULT_UNIT_OPTIONS,
+  formatProgressWithUnit,
+  type Step1ProjectProfile,
+} from "@/lib/project-profile";
+import {
+  PROCUREMENT_PATH_OPTIONS,
+  type ProcurementPath,
+} from "@/lib/procurement-path";
+import { THAI_PROVINCES } from "@/lib/thai-provinces";
+import { downloadExecutiveReportPdf, type ExecutiveReportProject } from "@/lib/executive-report-pdf";
 import {
   computeAppealDeadlineISO,
   computeContractNotificationDeadlineISO,
@@ -207,6 +251,8 @@ type Step1FormProps = {
   checklist: Step1Checklist;
   onChecklistChange: (key: Step1ChecklistKey, checked: boolean) => void;
   autoCheckStates: Record<string, boolean>;
+  projectName: string;
+  onProjectNameChange: (v: string) => void;
   egpCode: string;
   onEgpCodeChange: (v: string) => void;
   budget: string;
@@ -215,6 +261,10 @@ type Step1FormProps = {
   onMethodChange: (v: string) => void;
   responsibleName: string;
   onResponsibleNameChange: (v: string) => void;
+  projectProfile: Step1ProjectProfile;
+  onProjectProfileChange: (patch: Partial<Step1ProjectProfile>) => void;
+  procurementPath: ProcurementPath;
+  onProcurementPathChange: (path: ProcurementPath) => void;
   readOnly?: boolean;
 };
 
@@ -223,6 +273,8 @@ export function Step1DetailForm({
   checklist,
   onChecklistChange,
   autoCheckStates,
+  projectName,
+  onProjectNameChange,
   egpCode,
   onEgpCodeChange,
   budget,
@@ -231,13 +283,55 @@ export function Step1DetailForm({
   onMethodChange,
   responsibleName,
   onResponsibleNameChange,
+  projectProfile,
+  onProjectProfileChange,
+  procurementPath,
+  onProcurementPathChange,
   readOnly,
   docBinder,
 }: Step1FormProps & { docBinder?: SmartChecklistDocBinder }) {
   const egpUnlocked = isStep1EgpCodeUnlocked(checklist, { egpCode });
+  const isExternalPath = procurementPath === "external";
 
   return (
     <div className="space-y-4 max-w-2xl">
+      <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 space-y-3">
+        <p className="text-sm font-semibold text-foreground">
+          รูปแบบการจัดซื้อจัดจ้าง (บังคับเลือก)
+        </p>
+        <div className="space-y-2">
+          {PROCUREMENT_PATH_OPTIONS.map((opt) => (
+            <label
+              key={opt.value}
+              className={`flex items-start gap-2.5 text-sm cursor-pointer rounded-md border p-3 transition-colors ${
+                procurementPath === opt.value
+                  ? "border-primary bg-primary/10"
+                  : "border-border hover:bg-muted/40"
+              }`}
+            >
+              <input
+                type="radio"
+                name="procurement-path"
+                className="mt-0.5 h-4 w-4 accent-primary"
+                checked={procurementPath === opt.value}
+                onChange={() => onProcurementPathChange(opt.value)}
+                disabled={readOnly}
+              />
+              <span>
+                <span className="font-medium block">{opt.label}</span>
+                <span className="text-xs text-muted-foreground">{opt.description}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+        {isExternalPath && (
+          <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 leading-relaxed">
+            ⚡ โหมดทางลัด: บันทึก Step 1 แล้วคลิก Tab ขั้นที่ 9 ได้ทันที — ระบบไม่บังคับ Checklist
+            และเอกสาร Step 1–7
+          </p>
+        )}
+      </div>
+
       <SmartChecklist
         stepNumber={1}
         stepLabel="ขั้นตอนที่ 1"
@@ -253,6 +347,15 @@ export function Step1DetailForm({
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
         <p className="text-sm font-medium text-foreground">ข้อมูลขั้นตอนที่ 1 — จัดทำแผนการจัดซื้อจัดจ้าง</p>
+        <FieldRow label="ชื่อโครงการ" tooltipKey="step1.project_name">
+          <input
+            value={projectName}
+            onChange={(e) => onProjectNameChange(e.target.value)}
+            placeholder="เช่น ซ่อมแซมแหล่งน้ำ..."
+            disabled={readOnly}
+            className={inputCls}
+          />
+        </FieldRow>
         <FieldRow label="รหัสแผนจัดซื้อจัดจ้าง e-GP" tooltipKey="step1.egp_plan_code">
           <input
             value={egpCode}
@@ -279,8 +382,13 @@ export function Step1DetailForm({
           ใช้คำนวณระยะเวลาขั้นตอนที่มีกำหนดวันขั้นต่ำ (เช่น ประกาศ e-bidding)
         </p>
       </FieldRow>
-      <FieldRow label="วิธีการจัดซื้อจัดจ้าง">
-        <select value={method} onChange={(e) => onMethodChange(e.target.value)} className={inputCls}>
+      <FieldRow label="ประเภทโครงการ (วิธีจัดซื้อจัดจ้าง)">
+        <select
+          value={method}
+          onChange={(e) => onMethodChange(e.target.value)}
+          disabled={readOnly}
+          className={inputCls}
+        >
           {STEP1_METHOD_OPTIONS.map((m) => (
             <option key={m.value} value={m.value}>
               {m.label}
@@ -296,6 +404,136 @@ export function Step1DetailForm({
         value={responsibleName}
         onChange={onResponsibleNameChange}
       />
+      </div>
+
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
+        <p className="text-sm font-medium text-foreground">กลุ่มข้อมูลหน่วยงาน</p>
+        <FieldRow label="สำนักงานพัฒนาที่ดินเขต (สพข.)">
+          <select
+            value={projectProfile.district_office}
+            onChange={(e) => onProjectProfileChange({ district_office: e.target.value })}
+            disabled={readOnly}
+            className={inputCls}
+          >
+            <option value="">— เลือก สพข. —</option>
+            {DISTRICT_OFFICE_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </FieldRow>
+        <FieldRow label="หน่วยงานที่อนุมัติเบิกจ่าย">
+          <input
+            value={projectProfile.approving_agency}
+            onChange={(e) => onProjectProfileChange({ approving_agency: e.target.value })}
+            placeholder="เช่น สพข.6 เชียงใหม่"
+            disabled={readOnly}
+            className={inputCls}
+          />
+        </FieldRow>
+        <FieldRow label="หน่วยงานที่ดำเนินการจัดซื้อจัดจ้าง">
+          <input
+            value={projectProfile.procurement_agency}
+            onChange={(e) => onProjectProfileChange({ procurement_agency: e.target.value })}
+            placeholder="เช่น สำนักงานพัฒนาที่ดินจังหวัดเชียงใหม่"
+            disabled={readOnly}
+            className={inputCls}
+          />
+        </FieldRow>
+      </div>
+
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
+        <p className="text-sm font-medium text-foreground">กลุ่มข้อมูลประเภทงานและหน่วยวัด</p>
+        <FieldRow label="ประเภทกิจกรรม/งาน">
+          <input
+            value={projectProfile.activity_type}
+            onChange={(e) => onProjectProfileChange({ activity_type: e.target.value })}
+            placeholder="เช่น การป้องกันและลดการชะล้างพังทลายของดิน..."
+            disabled={readOnly}
+            className={inputCls}
+          />
+        </FieldRow>
+        <FieldRow label="หน่วยวัดผลสัมฤทธิ์ของงาน">
+          <select
+            value={projectProfile.result_unit}
+            onChange={(e) => onProjectProfileChange({ result_unit: e.target.value })}
+            disabled={readOnly}
+            className={inputCls}
+          >
+            <option value="">— เลือกหน่วย —</option>
+            {PROJECT_RESULT_UNIT_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-muted-foreground mt-1">
+            ใช้แสดงต่อท้ายผลสะสมหน้างานจริงในขั้นตอนที่ 10 และรายงานสรุปผู้บริหาร
+          </p>
+        </FieldRow>
+      </div>
+
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
+        <p className="text-sm font-medium text-foreground">ที่อยู่/พิกัดสถานที่ดำเนินการ</p>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <FieldRow label="ชื่อบ้าน/หมู่บ้าน">
+            <input
+              value={projectProfile.site_village}
+              onChange={(e) => onProjectProfileChange({ site_village: e.target.value })}
+              placeholder="เช่น บ้านหนองปลามัน"
+              disabled={readOnly}
+              className={inputCls}
+            />
+          </FieldRow>
+          <FieldRow label="หมู่ที่">
+            <input
+              type="number"
+              min={1}
+              value={projectProfile.site_moo ?? ""}
+              onChange={(e) => {
+                const raw = e.target.value.replace(/[^\d]/g, "");
+                onProjectProfileChange({
+                  site_moo: raw ? Number(raw) : null,
+                });
+              }}
+              disabled={readOnly}
+              className={inputCls}
+              placeholder="เช่น 5"
+            />
+          </FieldRow>
+          <FieldRow label="ตำบล">
+            <input
+              value={projectProfile.site_subdistrict}
+              onChange={(e) => onProjectProfileChange({ site_subdistrict: e.target.value })}
+              disabled={readOnly}
+              className={inputCls}
+            />
+          </FieldRow>
+          <FieldRow label="อำเภอ">
+            <input
+              value={projectProfile.site_district}
+              onChange={(e) => onProjectProfileChange({ site_district: e.target.value })}
+              disabled={readOnly}
+              className={inputCls}
+            />
+          </FieldRow>
+          <FieldRow label="จังหวัด">
+            <select
+              value={projectProfile.site_province}
+              onChange={(e) => onProjectProfileChange({ site_province: e.target.value })}
+              disabled={readOnly}
+              className={inputCls}
+            >
+              <option value="">— เลือกจังหวัด —</option>
+              {THAI_PROVINCES.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+          </FieldRow>
+        </div>
       </div>
     </div>
   );
@@ -318,6 +556,7 @@ type Step2FormProps = {
   onCommitteeChange: (listKey: Step2CommitteeListKey, index: number, value: string) => void;
   onAddCommittee: (listKey: Step2CommitteeListKey) => void;
   onRemoveCommittee: (listKey: Step2CommitteeListKey, index: number) => void;
+  onMarketQuoteChange: (index: number, patch: Partial<Step2MarketQuote>) => void;
   committeeOrder: Step2CommitteeOrder;
   onCommitteeOrderChange: (patch: Partial<Step2CommitteeOrder>) => void;
   medianPrice: Step2MedianPrice;
@@ -404,6 +643,7 @@ export function Step2DetailForm({
   onCommitteeChange,
   onAddCommittee,
   onRemoveCommittee,
+  onMarketQuoteChange,
   committeeOrder,
   onCommitteeOrderChange,
   medianPrice,
@@ -419,6 +659,12 @@ export function Step2DetailForm({
     medianPrice.approved_median_price != null && medianPrice.approved_median_price > 0
       ? formatBudgetInput(String(medianPrice.approved_median_price))
       : "";
+  const allocatedBudgetDisplay =
+    medianPrice.allocated_budget != null && medianPrice.allocated_budget > 0
+      ? formatBudgetInput(String(medianPrice.allocated_budget))
+      : step1Budget > 0
+        ? formatBudgetInput(String(step1Budget))
+        : "";
 
   const medianOverBudget = isStep2MedianPriceOverBudget(
     medianPrice.approved_median_price,
@@ -548,6 +794,25 @@ export function Step2DetailForm({
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
         <SectionTitle>กลุ่มที่ 2: ข้อมูลราคากลาง</SectionTitle>
+        <FieldRow label="วงเงินงบประมาณที่ได้รับจัดสรร (บาท)">
+          <input
+            value={allocatedBudgetDisplay}
+            onChange={(e) => {
+              const raw = e.target.value.replace(/[^\d]/g, "");
+              onMedianPriceChange({
+                allocated_budget: raw ? Number(raw) : null,
+              });
+            }}
+            placeholder="0"
+            inputMode="numeric"
+            className={inputCls}
+          />
+          {step1Budget > 0 && !medianPrice.allocated_budget && (
+            <p className="text-xs text-muted-foreground mt-1">
+              ค่าเริ่มต้นดึงจากงบประมาณขั้นตอนที่ 1 — แก้ไขได้หากจัดสรรจริงต่างจากแผน
+            </p>
+          )}
+        </FieldRow>
         <FieldRow
           label="เลขที่หนังสืออนุมัติราคากลาง"
           tooltipKey="step2.median_approval_letter_no"
@@ -559,7 +824,7 @@ export function Step2DetailForm({
             className={inputCls}
           />
         </FieldRow>
-        <FieldRow label="ราคากลาง (บาท)">
+        <FieldRow label="มูลค่าราคากลางที่คณะกรรมการคำนวณ (บาท)">
           <input
             value={medianPriceDisplay}
             onChange={(e) => {
@@ -640,6 +905,91 @@ export function Step2DetailForm({
             stepNumber={docBinder.stepNumber}
             documentType={STEP2_DOC.MEDIAN_PRICE_BG06}
             label={STEP2_BG06_UPLOAD_LABEL}
+            existing={docBinder.docs}
+            onChange={docBinder.onDocsChange}
+          />
+        </FieldRow>
+      </div>
+
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-5">
+        <SectionTitle>กลุ่มที่ 3: คณะกรรมการพิจารณาผลและตรวจรับพัสดุ</SectionTitle>
+        <CommitteeMemberList
+          title="คณะกรรมการพิจารณาผล"
+          members={committees.evaluation_members}
+          listKey="evaluation_members"
+          onCommitteeChange={onCommitteeChange}
+          onAddCommittee={onAddCommittee}
+          onRemoveCommittee={onRemoveCommittee}
+        />
+        <div className="border-t border-border pt-4">
+          <CommitteeMemberList
+            title="คณะกรรมการตรวจรับพัสดุ"
+            members={committees.inspection_members}
+            listKey="inspection_members"
+            onCommitteeChange={onCommitteeChange}
+            onAddCommittee={onAddCommittee}
+            onRemoveCommittee={onRemoveCommittee}
+          />
+        </div>
+        <FieldRow label="ไฟล์คำสั่งแต่งตั้งคณะกรรมการพิจารณาผลและตรวจรับ">
+          <InlineDocUpload
+            project={docBinder.project}
+            stepNumber={docBinder.stepNumber}
+            documentType={STEP2_DOC.EVALUATION_INSPECTION_ORDER}
+            label={STEP2_EVALUATION_INSPECTION_ORDER_UPLOAD_LABEL}
+            existing={docBinder.docs}
+            onChange={docBinder.onDocsChange}
+          />
+        </FieldRow>
+      </div>
+
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
+        <SectionTitle>กลุ่มที่ 4: ใบเสนอราคาท้องตลาด (อย่างน้อย 3 ราย)</SectionTitle>
+        <div className="space-y-3">
+          {committees.market_quotes.map((quote, index) => (
+            <div
+              key={index}
+              className="grid grid-cols-1 sm:grid-cols-[1fr_12rem] gap-2 items-end"
+            >
+              <FieldRow label={`ซัพพลายเออร์รายที่ ${index + 1}`}>
+                <input
+                  value={quote.supplier_name}
+                  onChange={(e) =>
+                    onMarketQuoteChange(index, { supplier_name: e.target.value })
+                  }
+                  placeholder="ชื่อบริษัท/ร้านค้า"
+                  disabled={readOnly}
+                  className={inputCls}
+                />
+              </FieldRow>
+              <FieldRow label="ราคาเสนอ (บาท)">
+                <input
+                  value={
+                    quote.quoted_price != null && quote.quoted_price > 0
+                      ? formatBudgetInput(String(quote.quoted_price))
+                      : ""
+                  }
+                  onChange={(e) => {
+                    const raw = e.target.value.replace(/[^\d]/g, "");
+                    onMarketQuoteChange(index, {
+                      quoted_price: raw ? Number(raw) : null,
+                    });
+                  }}
+                  placeholder="0"
+                  inputMode="numeric"
+                  disabled={readOnly}
+                  className={inputCls}
+                />
+              </FieldRow>
+            </div>
+          ))}
+        </div>
+        <FieldRow label="ไฟล์ใบเสนอราคาท้องตลาด">
+          <InlineDocUpload
+            project={docBinder.project}
+            stepNumber={docBinder.stepNumber}
+            documentType={STEP2_DOC.MARKET_QUOTES}
+            label={STEP2_MARKET_QUOTES_UPLOAD_LABEL}
             existing={docBinder.docs}
             onChange={docBinder.onDocsChange}
           />
@@ -1617,6 +1967,39 @@ export function Step4DetailForm({
         </FieldRow>
       </div>
 
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
+        <SectionTitle>รายชื่อผู้ควบคุมงานหน้างาน (คำสั่งแต่งตั้งช่าง)</SectionTitle>
+        <FieldRow label="ชื่อ-นามสกุล ผู้ควบคุมงาน">
+          <input
+            value={bidResult.site_supervisor_name ?? ""}
+            onChange={(e) => onBidResultChange({ site_supervisor_name: e.target.value })}
+            placeholder="เช่น นายสมชาย ใจดี"
+            disabled={readOnly}
+            className={inputCls}
+          />
+        </FieldRow>
+        <FieldRow label="ตำแหน่ง/สังกัด">
+          <input
+            value={bidResult.site_supervisor_affiliation ?? ""}
+            onChange={(e) =>
+              onBidResultChange({ site_supervisor_affiliation: e.target.value })
+            }
+            placeholder="เช่น ช่างโยธา สังกัด สพข.6"
+            disabled={readOnly}
+            className={inputCls}
+          />
+        </FieldRow>
+        <FieldRow label="ชื่อ-นามสกุล วิศวกรผู้คำนวณ/คุมแบบ (ถ้ามี)">
+          <input
+            value={bidResult.site_engineer_name ?? ""}
+            onChange={(e) => onBidResultChange({ site_engineer_name: e.target.value })}
+            placeholder="เช่น นายวิศวกร ตัวอย่าง"
+            disabled={readOnly}
+            className={inputCls}
+          />
+        </FieldRow>
+      </div>
+
       <div className="rounded-lg border border-border bg-muted/20 p-4">
         <ResponsibleOfficerField
           stepNumber={4}
@@ -1819,6 +2202,9 @@ type Step5FormProps = {
   onAnnouncementChange: (patch: Partial<Step5Announcement>) => void;
   /** วันที่หัวหน้าหน่วยงานลงนามอนุมัติผล — จากขั้นตอนที่ 4 (ใช้เป็น minDate) */
   evaluationApprovalDate: string;
+  responsibleName: string;
+  onResponsibleNameChange: (value: string) => void;
+  step1ResponsibleDefault?: string;
   docBinder: Step5DocBinder;
 };
 
@@ -1831,6 +2217,9 @@ export function Step5DetailForm({
   announcement,
   onAnnouncementChange,
   evaluationApprovalDate,
+  responsibleName,
+  onResponsibleNameChange,
+  step1ResponsibleDefault = "",
   docBinder,
 }: Step5FormProps) {
   const [announcementDateRejected, setAnnouncementDateRejected] = useState(false);
@@ -1934,6 +2323,31 @@ export function Step5DetailForm({
           </div>
         </FieldRow>
       </div>
+
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
+        <p className="text-sm font-medium text-foreground">
+          กลุ่มที่ 2: หลักฐานแจ้งผลผู้เสนอราคาทุกราย
+        </p>
+        <FieldRow label="หลักฐานแจ้งผลผู้เสนอราคาทุกราย">
+          <InlineDocUpload
+            project={docBinder.project}
+            stepNumber={docBinder.stepNumber}
+            documentType={STEP5_DOC.ALL_BIDDERS_RESULT_NOTICE}
+            label={STEP5_ALL_BIDDERS_RESULT_UPLOAD_LABEL}
+            existing={docBinder.docs}
+            onChange={docBinder.onDocsChange}
+          />
+          <p className="text-xs text-muted-foreground mt-1">
+            แนบหลักฐานอีเมลจากระบบ e-GP หรือเอกสารยืนยันการแจ้งผลให้ผู้เสนอราคาทุกรายทราบ
+          </p>
+        </FieldRow>
+        <ResponsibleOfficerField
+          stepNumber={5}
+          value={responsibleName}
+          onChange={onResponsibleNameChange}
+          step1Default={step1ResponsibleDefault}
+        />
+      </div>
     </div>
   );
 }
@@ -1960,6 +2374,40 @@ function GenericStepChecklistPanel({
     <SmartChecklist
       stepNumber={stepNumber}
       stepLabel={`ขั้นตอนที่ ${stepNumber}`}
+      items={items}
+      manualChecklist={manualChecklist}
+      autoStates={autoCheckStates}
+      onManualChange={onManualChange}
+      readOnly={readOnly}
+      docBinder={docBinder}
+    />
+  );
+}
+
+/** Smart Checklist ขั้นตอนที่ 10 — label งวด (X / Y) แบบ dynamic */
+function Step10ChecklistPanel({
+  inspectionRows,
+  totalInstallmentCount,
+  manualChecklist,
+  onManualChange,
+  autoCheckStates,
+  readOnly,
+  docBinder,
+}: {
+  inspectionRows: Step10InspectionRow[];
+  totalInstallmentCount: number;
+  manualChecklist: Record<string, boolean>;
+  onManualChange: (key: string, checked: boolean) => void;
+  autoCheckStates: Record<string, boolean>;
+  readOnly?: boolean;
+  docBinder: SmartChecklistDocBinder;
+}) {
+  const passed = countStep10PassedInstallments(inspectionRows);
+  const items = getStep10ChecklistItems(passed, totalInstallmentCount);
+  return (
+    <SmartChecklist
+      stepNumber={10}
+      stepLabel="ขั้นตอนที่ 10"
       items={items}
       manualChecklist={manualChecklist}
       autoStates={autoCheckStates}
@@ -2095,9 +2543,8 @@ export function Step7ContractNoticeForm({
                 </p>
               )}
               {letterDateTooLate && notificationDeadlineISO && (
-                <p className="text-xs" style={{ color: "#EA580C" }}>
-                  ⚠️ วันที่ออกหนังสือเกิน {CONTRACT_NOTIFICATION_WORKDAYS} วันทำการตามที่ระเบียบกำหนด
-                  (เดดไลน์ข้อ 161: {formatThaiDateSlash(notificationDeadlineISO)})
+                <p className="text-xs text-destructive font-medium mt-1">
+                  {STEP7_NOTIFICATION_DEADLINE_EXCEEDED_MSG(notificationDeadlineISO)}
                 </p>
               )}
             </div>
@@ -2106,7 +2553,26 @@ export function Step7ContractNoticeForm({
 
         <div className="space-y-4 pt-1 border-t border-border/60">
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-            กลุ่มที่ 2: ข้อมูลผู้ดูแลและบันทึกเพิ่มเติม
+            กลุ่มที่ 2: ร่างสัญญาและหลักฐาน
+          </p>
+          <FieldRow label="ไฟล์ร่างสัญญาจ้างก่อสร้าง">
+            <InlineDocUpload
+              project={docBinder.project}
+              stepNumber={docBinder.stepNumber}
+              documentType={STEP7_DOC.DRAFT_CONTRACT}
+              label={STEP7_DRAFT_CONTRACT_UPLOAD_LABEL}
+              existing={docBinder.docs}
+              onChange={docBinder.onDocsChange}
+            />
+            <p className="text-xs text-muted-foreground mt-1">
+              แนบร่างสัญญาขั้นสุดท้ายที่ตรวจทานแล้ว พร้อมนัดหมายผู้ชนะมาลงนาม
+            </p>
+          </FieldRow>
+        </div>
+
+        <div className="space-y-4 pt-1 border-t border-border/60">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+            กลุ่มที่ 3: ข้อมูลผู้ดูแลและบันทึกเพิ่มเติม
           </p>
           <ResponsibleOfficerField
             stepNumber={7}
@@ -2444,6 +2910,17 @@ export function Step9DetailForm({
     schedule.contract_duration_days != null && schedule.contract_duration_days > 0
       ? String(schedule.contract_duration_days)
       : "";
+  const installmentDisplay =
+    schedule.total_installment_count != null && schedule.total_installment_count > 0
+      ? String(schedule.total_installment_count)
+      : "";
+  const egpPublication = schedule.egp_essential_publication_date?.trim() || "";
+  const egpDeadlineISO = signedISO ? computeStep9EgpDeadlineISO(signedISO) : null;
+  const egpPublicationTooLate =
+    !!signedISO &&
+    !!egpPublication &&
+    isStep9EgpPublicationTooLate(egpPublication, signedISO);
+  const [egpPublicationRejected, setEgpPublicationRejected] = useState(false);
 
   useEffect(() => {
     if (!signedISO || readOnly) return;
@@ -2485,6 +2962,83 @@ export function Step9DetailForm({
 
         <div className="space-y-4">
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+            กลุ่มที่ 1: ข้อมูลเชื่อมโยงระบบ e-GP
+          </p>
+          <FieldRow
+            label="วันที่ประกาศสาระสำคัญสัญญาใน e-GP"
+            tooltipKey="step9.egp_essential_publication_date"
+          >
+            <div className="space-y-1">
+              <ThaiDatePicker
+                value={egpPublication}
+                onChange={(v) => {
+                  if (
+                    signedISO &&
+                    v &&
+                    isStep9EgpPublicationTooLate(v, signedISO)
+                  ) {
+                    setEgpPublicationRejected(true);
+                    if (egpDeadlineISO) {
+                      toast.error(getStep9EgpPublicationTooLateMsg(egpDeadlineISO));
+                    }
+                    return;
+                  }
+                  setEgpPublicationRejected(false);
+                  onContractScheduleChange({ egp_essential_publication_date: v });
+                }}
+                minDate={signedISO || undefined}
+                maxDate={egpDeadlineISO || undefined}
+                disabled={readOnly || !signedISO}
+                onInvalidDate={() => {
+                  setEgpPublicationRejected(true);
+                  if (egpDeadlineISO) {
+                    toast.error(getStep9EgpPublicationTooLateMsg(egpDeadlineISO));
+                  }
+                }}
+              />
+              {!signedISO && (
+                <p className="text-xs text-destructive">
+                  กรุณาบันทึกวันที่ลงนามในสัญญาในขั้นตอนที่ 8 ก่อน
+                </p>
+              )}
+              {signedISO && egpDeadlineISO && (
+                <p className="text-xs text-muted-foreground">
+                  เลือกได้ตั้งแต่ {formatThaiDateSlash(signedISO)} ถึง{" "}
+                  {formatThaiDateSlash(egpDeadlineISO)} ({STEP9_EGP_DEADLINE_CALENDAR_DAYS}{" "}
+                  วันปฏิทินนับจากวันลงนาม)
+                </p>
+              )}
+              {egpPublication && !egpPublicationTooLate && !egpPublicationRejected && (
+                <p className="text-xs text-muted-foreground">
+                  📅 {formatThaiDate(egpPublication)}
+                </p>
+              )}
+              {(egpPublicationTooLate || egpPublicationRejected) && egpDeadlineISO && (
+                <p className="text-xs text-destructive font-medium">
+                  {getStep9EgpPublicationTooLateMsg(egpDeadlineISO)}
+                </p>
+              )}
+            </div>
+          </FieldRow>
+          <FieldRow
+            label="เลขคุมสัญญาจากระบบ e-GP"
+            tooltipKey="step9.egp_contract_control_no"
+          >
+            <input
+              type="text"
+              value={schedule.egp_contract_control_no ?? ""}
+              onChange={(e) =>
+                onContractScheduleChange({ egp_contract_control_no: e.target.value })
+              }
+              disabled={readOnly}
+              className={inputCls}
+              placeholder="เช่น C6805001234"
+            />
+          </FieldRow>
+        </div>
+
+        <div className="space-y-4 pt-1 border-t border-border/60">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
             กลุ่มที่ 2: ข้อมูลระยะเวลาและงวดงาน
           </p>
           <FieldRow
@@ -2505,6 +3059,26 @@ export function Step9DetailForm({
               disabled={readOnly}
               className={inputCls}
               placeholder="เช่น 120"
+            />
+          </FieldRow>
+          <FieldRow
+            label="จำนวนงวดงานทั้งหมด"
+            tooltipKey="step9.total_installment_count"
+          >
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={installmentDisplay}
+              onChange={(e) => {
+                const raw = e.target.value.replace(/[^\d]/g, "");
+                onContractScheduleChange({
+                  total_installment_count: raw ? Number(raw) : null,
+                });
+              }}
+              disabled={readOnly}
+              className={inputCls}
+              placeholder="เช่น 3, 5, 10"
             />
           </FieldRow>
           <FieldRow label="วันที่เริ่มปฏิบัติงานหน้างาน">
@@ -2537,6 +3111,22 @@ export function Step9DetailForm({
               )}
             </div>
           </FieldRow>
+          <FieldRow label="แผนปฏิบัติการก่อสร้าง (Gantt)">
+            <div className="space-y-1">
+              <InlineDocUpload
+                project={project}
+                stepNumber={9}
+                documentType={STEP9_DOC.GANTT_CHART}
+                label="📎 แนบแผน Gantt (.pdf/.xls/.xlsx)"
+                existing={docsForStep}
+                onChange={onDocsChange}
+                filePolicyId="bg06"
+              />
+              <p className="text-xs text-muted-foreground">
+                บันทึก Gantt แล้วระบบจะติ๊ก Checklist ข้อที่ 2 อัตโนมัติ
+              </p>
+            </div>
+          </FieldRow>
           <FieldRow label="วันครบกำหนดสิ้นสุดสัญญา (กำหนดเสร็จ)">
             <div className="space-y-1">
               <input
@@ -2566,28 +3156,42 @@ export function Step9DetailForm({
 
         <div className="space-y-4 pt-1 border-t border-border/60">
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-            กลุ่มที่ 3: หนังสือแจ้งเริ่มงานและผู้บันทึก
+            กลุ่มที่ 3: การสั่งเริ่มงานหน้างาน
           </p>
+          <FieldRow
+            label="เลขที่หนังสือแจ้งให้เริ่มปฏิบัติงาน"
+            tooltipKey="step9.notice_to_proceed_letter_no"
+          >
+            <input
+              type="text"
+              value={schedule.notice_to_proceed_letter_no ?? ""}
+              onChange={(e) =>
+                onContractScheduleChange({ notice_to_proceed_letter_no: e.target.value })
+              }
+              disabled={readOnly}
+              className={inputCls}
+              placeholder="เช่น ที่ กษ ๐๖๐๒ / ๔๕๖"
+            />
+          </FieldRow>
           <FieldRow label="วันที่เริ่มปฏิบัติงานตามหนังสือแจ้ง">
             <div className="space-y-1">
-              <ThaiDatePicker
-                value={workStartInvalid ? "" : workStart}
-                onChange={patchWorkStart}
-                minDate={signedISO || undefined}
-                disabled={readOnly || !signedISO}
-                onInvalidDate={() =>
-                  toast.error(
-                    signedISO
-                      ? `ห้ามเริ่มปฏิบัติงานก่อนวันลงนามสัญญา — เลือกได้ตั้งแต่ ${formatThaiDateSlash(signedISO)} เป็นต้นไป`
-                      : "กรุณาบันทึกวันที่ลงนามในสัญญา (ขั้นตอนที่ 8) ก่อน",
-                  )
+              <input
+                type="text"
+                readOnly
+                aria-readonly
+                value={
+                  workStartInvalid || !workStart
+                    ? "— ระบุวันเริ่มปฏิบัติงานหน้างาน (กลุ่มที่ 2) ก่อน —"
+                    : formatThaiDateSlash(workStart)
                 }
+                className={`${inputCls} bg-muted/50 cursor-not-allowed text-foreground`}
+                tabIndex={-1}
               />
-              {signedISO && (
-                <p className="text-xs text-muted-foreground">
-                  Sync กับวันที่เริ่มปฏิบัติงานหน้างาน (กลุ่มที่ 2) — เลือกได้ตั้งแต่{" "}
-                  {formatThaiDateSlash(signedISO)} เป็นต้นไป
-                </p>
+              <p className="text-xs text-muted-foreground">
+                Sync อัตโนมัติจากวันที่เริ่มปฏิบัติงานหน้างาน (กลุ่มที่ 2) — แก้ไขได้ที่ช่องนั้นเท่านั้น
+              </p>
+              {workStart && !workStartInvalid && (
+                <p className="text-xs text-muted-foreground">📅 {formatThaiDate(workStart)}</p>
               )}
             </div>
           </FieldRow>
@@ -2609,20 +3213,572 @@ export function Step9DetailForm({
           </FieldRow>
         </div>
       </div>
+    </div>
+  );
+}
 
-      <StepInlineDocList
-        project={project}
-        stepNumber={9}
-        docList={docList}
-        existing={docsForStep}
-        onChange={onDocsChange}
+function step10InstallmentStatusBadgeClass(status: string): string {
+  switch (status) {
+    case "inspection_passed":
+      return "bg-success/15 text-success border-success/30";
+    case "delayed":
+      return "bg-orange-100 text-orange-800 border-orange-200 dark:bg-orange-950/40 dark:text-orange-200 dark:border-orange-800";
+    case "delivered":
+      return "bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-950/40 dark:text-blue-200 dark:border-blue-800";
+    case "under_construction":
+      return "bg-muted text-muted-foreground border-border";
+    default:
+      return "bg-muted/50 text-muted-foreground border-border";
+  }
+}
+
+function step10InstallmentStatusLabel(status: string): string {
+  return (
+    STEP10_INSTALLMENT_STATUS_OPTIONS.find((o) => o.value === status)?.label ??
+    "ยังไม่ระบุ"
+  );
+}
+
+function step10DocsCountBadgeClass(count: number): string {
+  if (count >= 3) return "bg-success/10 text-success border-success/25";
+  if (count > 0) return "bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-950/40 dark:text-amber-200";
+  return "bg-muted/50 text-muted-foreground border-border";
+}
+
+type Step10DetailFormProps = Omit<
+  GenericStepDetailFormProps,
+  "dueDate" | "onDueDateChange" | "dueTooEarly" | "dueTooLateContract" | "minDeadline" | "docList"
+> & {
+  totalInstallmentCount: number;
+  inspectionRows: Step10InspectionRow[];
+  onInspectionRowsChange: (rows: Step10InspectionRow[]) => void;
+  contractAmount: number | null;
+  projectStatus: string;
+  resultUnit?: string | null;
+  executiveReportSource: ExecutiveReportProject;
+  warrantyEndDate?: string | null;
+  warrantyStartedAt?: string | null;
+};
+
+/** ขั้นตอนที่ 10 — ตารางตรวจรับงวดงาน + แฟ้มหลักฐาน สตง. + ระยะค้ำประกัน */
+export function Step10DetailForm({
+  totalInstallmentCount,
+  inspectionRows,
+  onInspectionRowsChange,
+  contractAmount,
+  projectStatus,
+  resultUnit = null,
+  executiveReportSource,
+  warrantyEndDate = null,
+  warrantyStartedAt = null,
+  ...genericProps
+}: Step10DetailFormProps) {
+  const patchRow = (installmentNo: number, patch: Partial<Step10InspectionRow>) => {
+    onInspectionRowsChange(
+      inspectionRows.map((row) =>
+        row.installment_no === installmentNo ? { ...row, ...patch } : row,
+      ),
+    );
+  };
+
+  const patchDeliveryDate = (installmentNo: number, iso: string) => {
+    const row = inspectionRows.find((r) => r.installment_no === installmentNo);
+    const next: Partial<Step10InspectionRow> = { delivery_date: iso };
+    if (row && iso && row.inspection_date && isStep10InspectionBeforeDelivery(iso, row.inspection_date)) {
+      next.inspection_date = "";
+    }
+    patchRow(installmentNo, next);
+  };
+
+  const installmentDocMap = useMemo(
+    () =>
+      groupStep10DocsByInstallment(
+        genericProps.docsForStep.filter((d) => d.document_type !== STEP10_GUARANTEE_RETURN_DOC),
+      ),
+    [genericProps.docsForStep],
+  );
+
+  const isWarrantyPhase = projectStatus === PROJECT_STATUS_WARRANTY;
+  const previewWarrantyEnd =
+    warrantyEndDate?.trim() ||
+    computeWarrantyEndDateISO(resolveLastInstallmentInspectionDate(inspectionRows)) ||
+    "";
+  const previewWarrantyStart =
+    warrantyStartedAt?.trim() || resolveLastInstallmentInspectionDate(inspectionRows) || "";
+
+  const [expandedInstallment, setExpandedInstallment] = useState<number | null>(null);
+  const [reportGenerating, setReportGenerating] = useState(false);
+
+  const toggleInstallmentAccordion = (installmentNo: number) => {
+    setExpandedInstallment((prev) => (prev === installmentNo ? null : installmentNo));
+  };
+
+  const handlePrintExecutiveReport = async () => {
+    setReportGenerating(true);
+    try {
+      await downloadExecutiveReportPdf({
+        project: executiveReportSource,
+        inspectionRows,
+        contractAmount,
+      });
+      toast.success("สร้างรายงานสรุป PDF เรียบร้อย");
+    } catch (err) {
+      console.error(err);
+      toast.error("สร้างรายงาน PDF ไม่สำเร็จ — กรุณาลองใหม่");
+    } finally {
+      setReportGenerating(false);
+    }
+  };
+
+  const unitLabel = resultUnit?.trim() || "";
+
+  return (
+    <div className="space-y-4 max-w-6xl">
+      <Step10ChecklistPanel
+        inspectionRows={inspectionRows}
+        totalInstallmentCount={totalInstallmentCount}
+        manualChecklist={genericProps.manualChecklist}
+        onManualChange={genericProps.onManualChange}
+        autoCheckStates={genericProps.autoCheckStates}
+        readOnly={genericProps.readOnly || isWarrantyPhase}
+        docBinder={genericProps.docBinder}
       />
-      <StepDocumentHub
-        stepNumber={9}
-        docList={docList}
-        docs={docsForStep}
-        projectName={projectName}
-      />
+
+      <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium text-foreground">
+            พิมพ์รายงานสรุปเสนอผู้บริหาร (PDF)
+          </p>
+          <p className="text-xs text-muted-foreground mt-1">
+            ดึงข้อมูลอัตโนมัติจากขั้นตอนที่ 1, 2, 4, 8 และตารางตรวจรับงวด — กรอกงวดล่าสุดแล้วกดพิมพ์ได้ทันที
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void handlePrintExecutiveReport()}
+          disabled={reportGenerating}
+          className="h-10 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-60 flex items-center gap-2 shrink-0"
+        >
+          {reportGenerating ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <FileText className="h-4 w-4" />
+          )}
+          {reportGenerating ? "กำลังสร้าง PDF..." : "พิมพ์รายงานสรุป PDF"}
+        </button>
+      </div>
+
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-3">
+        <div>
+          <p className="text-sm font-medium text-foreground">ตารางตรวจรับงานตามงวด</p>
+          <p className="text-xs text-muted-foreground mt-1">
+            ระบบสร้าง {totalInstallmentCount > 0 ? totalInstallmentCount : "—"} งวดจากขั้นตอนที่ 9
+            · คลิกแถบงวดงานเพื่อกางฟอร์มกรอกข้อมูล (เปิดได้ทีละ 1 งวด)
+          </p>
+        </div>
+        {totalInstallmentCount <= 0 ? (
+          <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+            กรุณาบันทึกจำนวนงวดงานทั้งหมดในขั้นตอนที่ 9 ก่อน — ระบบจะดีดตารางตรวจรับให้อัตโนมัติ
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {inspectionRows.map((row) => {
+              const n = row.installment_no;
+              const isOpen = expandedInstallment === n;
+              const docCount = (installmentDocMap.get(n) ?? []).length;
+              const penalty = computeStep10InstallmentPenalty(
+                contractAmount,
+                row.planned_completion_date,
+                row.delivery_date,
+              );
+              const statusLabel = step10InstallmentStatusLabel(row.installment_status);
+              const fieldsDisabled = genericProps.readOnly || isWarrantyPhase;
+
+              return (
+                <div
+                  key={n}
+                  className={`rounded-lg border bg-background overflow-hidden transition-shadow ${
+                    isOpen
+                      ? "border-primary/40 shadow-sm ring-1 ring-primary/10"
+                      : "border-border hover:border-primary/25"
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => toggleInstallmentAccordion(n)}
+                    aria-expanded={isOpen}
+                    className="w-full flex flex-wrap items-center gap-2 sm:gap-3 px-3 py-3 sm:px-4 text-left hover:bg-muted/30 transition-colors"
+                  >
+                    <ChevronDown
+                      className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${
+                        isOpen ? "rotate-180" : ""
+                      }`}
+                    />
+                    <span className="font-semibold text-sm text-foreground shrink-0">
+                      งวดที่ {n}
+                    </span>
+                    <span className="text-xs text-muted-foreground hidden sm:inline">·</span>
+                    <span className="text-xs text-muted-foreground shrink-0">
+                      กำหนดเสร็จ{" "}
+                      {row.planned_completion_date
+                        ? formatThaiDateSlash(row.planned_completion_date)
+                        : "—"}
+                    </span>
+                    <span
+                      className={`text-xs px-2 py-0.5 rounded-full border font-medium shrink-0 ${step10InstallmentStatusBadgeClass(row.installment_status)}`}
+                    >
+                      {statusLabel}
+                    </span>
+                    <span
+                      className={`text-xs px-2 py-0.5 rounded-full border font-medium shrink-0 ml-auto ${step10DocsCountBadgeClass(docCount)}`}
+                    >
+                      Docs: {docCount}/3
+                    </span>
+                  </button>
+
+                  {/* คง DOM ไว้เสมอ — ซ่อนด้วย CSS เพื่อ retain state ฟอร์ม/อัปโหลด */}
+                  <div
+                    className={isOpen ? "block border-t border-border" : "hidden"}
+                    aria-hidden={!isOpen}
+                  >
+                    <div className="p-4 space-y-4 bg-muted/5">
+                      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                        <FieldRow label="วันที่ผู้รับจ้างส่งมอบงานจริง">
+                          <ThaiDatePicker
+                            value={row.delivery_date}
+                            onChange={(iso) => patchDeliveryDate(n, iso)}
+                            disabled={fieldsDisabled}
+                          />
+                        </FieldRow>
+                        <FieldRow label="วันที่คณะกรรมการตรวจรับเสร็จสิ้น">
+                          <ThaiDatePicker
+                            value={row.inspection_date}
+                            onChange={(iso) => patchRow(n, { inspection_date: iso })}
+                            minDate={row.delivery_date?.trim() || undefined}
+                            disabled={fieldsDisabled || !row.delivery_date?.trim()}
+                            onInvalidDate={() =>
+                              toast.error(
+                                "วันตรวจรับต้องไม่ก่อนวันที่ผู้รับจ้างส่งมอบงานจริงของงวดนี้",
+                              )
+                            }
+                          />
+                        </FieldRow>
+                        <FieldRow label="ความก้าวหน้าหน้างานจริง (%)">
+                          <input
+                            type="number"
+                            min={0}
+                            max={100}
+                            step={1}
+                            value={row.progress_pct ?? ""}
+                            onChange={(e) => {
+                              const raw = e.target.value.replace(/[^\d]/g, "");
+                              patchRow(n, {
+                                progress_pct: raw ? Number(raw) : null,
+                              });
+                            }}
+                            disabled={fieldsDisabled}
+                            className={inputCls}
+                            placeholder="0–100"
+                          />
+                        </FieldRow>
+                        <FieldRow
+                          label={
+                            unitLabel
+                              ? `ผลสะสมหน้างานจริง (จำนวนหน่วย — ${unitLabel})`
+                              : "ผลสะสมหน้างานจริง (จำนวนหน่วย)"
+                          }
+                        >
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="number"
+                              min={0}
+                              step="any"
+                              value={row.progress_cumulative_units ?? ""}
+                              onChange={(e) => {
+                                const raw = e.target.value.replace(/[^\d.]/g, "");
+                                patchRow(n, {
+                                  progress_cumulative_units: raw ? Number(raw) : null,
+                                });
+                              }}
+                              disabled={fieldsDisabled}
+                              className={inputCls}
+                              placeholder={unitLabel ? `เช่น 50` : "0"}
+                            />
+                            {unitLabel && (
+                              <span className="text-sm font-semibold text-primary shrink-0 px-2 py-1 rounded-md bg-primary/10">
+                                {unitLabel}
+                              </span>
+                            )}
+                          </div>
+                          {unitLabel &&
+                            row.progress_cumulative_units != null &&
+                            Number.isFinite(row.progress_cumulative_units) && (
+                              <p className="text-xs text-muted-foreground mt-1">
+                                แสดงผล:{" "}
+                                {formatProgressWithUnit(
+                                  row.progress_cumulative_units,
+                                  unitLabel,
+                                )}
+                              </p>
+                            )}
+                          {!unitLabel && (
+                            <p className="text-xs text-amber-700 mt-1">
+                              กรุณาเลือกหน่วยวัดผลใน Step 1 เพื่อแสดงหน่วยต่อท้ายอัตโนมัติ
+                            </p>
+                          )}
+                        </FieldRow>
+                        <FieldRow label="สถานะงวดงาน">
+                          <select
+                            value={row.installment_status}
+                            onChange={(e) =>
+                              patchRow(n, { installment_status: e.target.value })
+                            }
+                            disabled={fieldsDisabled}
+                            className={inputCls}
+                          >
+                            <option value="">— เลือกสถานะ —</option>
+                            {STEP10_INSTALLMENT_STATUS_OPTIONS.map((opt) => (
+                              <option key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </option>
+                            ))}
+                          </select>
+                        </FieldRow>
+                        <FieldRow label="ค่าปรับสะสมงวดนี้ (บาท)">
+                          <input
+                            type="text"
+                            readOnly
+                            value={penalty > 0 ? `${formatBaht(penalty)} บาท` : "—"}
+                            className={`${inputCls} bg-muted/50 cursor-not-allowed`}
+                            tabIndex={-1}
+                          />
+                        </FieldRow>
+                        <FieldRow label="วันกำหนดเสร็จตามแผน (อ้างอิง)">
+                          <input
+                            type="text"
+                            readOnly
+                            value={
+                              row.planned_completion_date
+                                ? formatThaiDateSlash(row.planned_completion_date)
+                                : "—"
+                            }
+                            className={`${inputCls} bg-muted/50 cursor-not-allowed`}
+                            tabIndex={-1}
+                          />
+                        </FieldRow>
+                      </div>
+
+                      <FieldRow label="หมายเหตุผู้ตรวจ">
+                        <input
+                          type="text"
+                          value={row.inspector_note}
+                          onChange={(e) =>
+                            patchRow(n, { inspector_note: e.target.value })
+                          }
+                          disabled={fieldsDisabled}
+                          className={inputCls}
+                          placeholder="บันทึกผลตรวจรับ"
+                        />
+                      </FieldRow>
+
+                      <div className="pt-2 border-t border-border/60 space-y-3">
+                        <p className="text-xs font-medium text-muted-foreground">
+                          หลักฐานงวดที่ {n} (บังคับ 3 ไฟล์)
+                        </p>
+                        <div className="grid gap-3 lg:grid-cols-3">
+                          <div className="space-y-1">
+                            <InlineDocUpload
+                              project={genericProps.project}
+                              stepNumber={10}
+                              documentType={STEP10_INSTALLMENT_DOC.dailyReport(n)}
+                              label="1. รายงานประจำวันของผู้ควบคุมงาน (.pdf)"
+                              existing={genericProps.docsForStep}
+                              onChange={genericProps.onDocsChange}
+                              filePolicyId="pdf_only"
+                              compact
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              {STEP10_DAILY_REPORT_HINT}
+                            </p>
+                          </div>
+                          <InlineDocUpload
+                            project={genericProps.project}
+                            stepNumber={10}
+                            documentType={STEP10_INSTALLMENT_DOC.sitePhoto(n)}
+                            label="2. รูปถ่ายหน้างานประกอบรายงาน (.pdf/.jpg/.png)"
+                            existing={genericProps.docsForStep}
+                            onChange={genericProps.onDocsChange}
+                            filePolicyId="screenshot_evidence"
+                            compact
+                          />
+                          <InlineDocUpload
+                            project={genericProps.project}
+                            stepNumber={10}
+                            documentType={STEP10_INSTALLMENT_DOC.bg11(n)}
+                            label="3. ใบแจ้งส่งมอบงาน/ใบตรวจรับ บก.11 (.pdf)"
+                            existing={genericProps.docsForStep}
+                            onChange={genericProps.onDocsChange}
+                            filePolicyId="pdf_only"
+                            compact
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
+        <div>
+          <p className="text-sm font-medium text-foreground">คลังเอกสารแนบสำหรับ สตง.</p>
+          <p className="text-xs text-muted-foreground mt-1">
+            ระบบจัดหมวดหมู่ไฟล์หลักฐานรายงวดอัตโนมัติจากตารางด้านบน — กดดาวน์โหลดเพื่อตรวจสอบ
+          </p>
+        </div>
+        {totalInstallmentCount <= 0 ? (
+          <p className="text-sm text-muted-foreground">ยังไม่มีงวดงาน — รอข้อมูลจากขั้นตอนที่ 9</p>
+        ) : (
+          <div className="space-y-2">
+            {Array.from({ length: totalInstallmentCount }, (_, i) => i + 1).map((n) => {
+              const files = installmentDocMap.get(n) ?? [];
+              return (
+                <details
+                  key={n}
+                  className="rounded-md border border-border bg-background px-3 py-2"
+                  open={files.length > 0}
+                >
+                  <summary className="cursor-pointer text-sm font-medium select-none">
+                    📂 งวดที่ {n}
+                    <span className="ml-2 text-xs font-normal text-muted-foreground">
+                      ({files.length}/3 ไฟล์)
+                    </span>
+                  </summary>
+                  {files.length === 0 ? (
+                    <p className="text-xs text-muted-foreground mt-2 pl-1">
+                      ยังไม่มีไฟล์ — อัปโหลดในตารางด้านบน
+                    </p>
+                  ) : (
+                    <ul className="mt-2 space-y-1.5 pl-1">
+                      {files.map((f) => (
+                        <li
+                          key={f.id}
+                          className="flex items-center justify-between gap-2 text-xs text-foreground"
+                        >
+                          <span className="truncate">
+                            📄 {f.document_type} — {f.file_name}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => void downloadStepDocument(f)}
+                            className="shrink-0 inline-flex items-center gap-1 rounded border border-input px-2 py-0.5 hover:bg-accent"
+                          >
+                            <Download className="h-3 w-3" />
+                            ดาวน์โหลด
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </details>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {(isWarrantyPhase || previewWarrantyEnd) && (
+        <div className="rounded-lg border border-amber-300/60 bg-amber-50/40 dark:bg-amber-950/20 p-4 space-y-4">
+          <div>
+            <p className="text-sm font-semibold text-foreground">
+              ระยะค้ำประกันความชำรุดบกพร่อง 2 ปี
+            </p>
+            {isWarrantyPhase && (
+              <p className="text-xs text-amber-900 dark:text-amber-200 mt-1 font-medium">
+                สถานะโครงการ: {PROJECT_WARRANTY_STATUS_LABEL}
+              </p>
+            )}
+            <p className="text-xs text-muted-foreground mt-1">
+              ระบบคำนวณจากวันที่คณะกรรมการตรวจรับเสร็จสิ้นของงวดสุดท้าย + 2 ปีปฏิทิน
+              — การคืนหลักประกันสัญญาไม่บล็อกการปิดโครงการหลัก
+            </p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 max-w-2xl">
+            <FieldRow label="วันเริ่มนับค้ำประกัน (งวดสุดท้าย)">
+              <input
+                type="text"
+                readOnly
+                value={
+                  previewWarrantyStart
+                    ? formatThaiDateSlash(previewWarrantyStart)
+                    : "— บันทึกวันตรวจรับงวดสุดท้ายก่อน —"
+                }
+                className={`${inputCls} bg-muted/50 cursor-not-allowed`}
+                tabIndex={-1}
+              />
+            </FieldRow>
+            <FieldRow label="วันสิ้นสุดค้ำประกันผลงาน (Read-only)">
+              <input
+                type="text"
+                readOnly
+                value={
+                  previewWarrantyEnd
+                    ? formatThaiDateSlash(previewWarrantyEnd)
+                    : "— คำนวณอัตโนมัติเมื่อมีวันตรวจรับงวดสุดท้าย —"
+                }
+                className={`${inputCls} bg-muted/50 cursor-not-allowed`}
+                tabIndex={-1}
+              />
+            </FieldRow>
+          </div>
+          <FieldRow label="บันทึกคืนหลักประกันสัญญา (อัปโหลดเมื่อครบ 2 ปี)">
+            <div className="space-y-1">
+              <InlineDocUpload
+                project={genericProps.project}
+                stepNumber={10}
+                documentType={STEP10_GUARANTEE_RETURN_DOC}
+                label="📎 แนบบันทึกคืนหลักประกันสัญญา (.pdf/.png/.jpg)"
+                existing={genericProps.docsForStep}
+                onChange={genericProps.onDocsChange}
+                filePolicyId="egp_screenshot"
+              />
+              <p className="text-xs text-muted-foreground">
+                ช่องนี้เปิดให้อัปโหลดเก็บประวัติหลังครบระยะค้ำประกัน — ไม่บังคับก่อนกดปิดโครงการ
+              </p>
+            </div>
+          </FieldRow>
+        </div>
+      )}
+
+      {!isWarrantyPhase && !previewWarrantyEnd && (
+        <div className="rounded-lg border border-dashed border-border bg-muted/10 p-4 space-y-2">
+          <p className="text-sm font-medium text-muted-foreground">
+            หลังปิดโครงการ — ระบบจะเปิดส่วนค้ำประกัน 2 ปี และช่องอัปโหลดคืนหลักประกันสัญญา
+          </p>
+        </div>
+      )}
+
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4 max-w-2xl">
+        <p className="text-sm font-medium text-foreground">ข้อมูลงานขั้นตอนนี้</p>
+        <ResponsibleOfficerField
+          stepNumber={10}
+          value={genericProps.responsibleName}
+          onChange={genericProps.onResponsibleNameChange}
+          step1Default={genericProps.step1ResponsibleDefault ?? ""}
+        />
+        <FieldRow label="หมายเหตุ">
+          <textarea
+            value={genericProps.note}
+            onChange={(e) => genericProps.onNoteChange(e.target.value)}
+            rows={4}
+            disabled={genericProps.readOnly}
+            className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
+          />
+        </FieldRow>
+      </div>
     </div>
   );
 }

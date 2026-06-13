@@ -2,6 +2,8 @@
 export const STEP2_DOC = {
   APPOINTMENT_ORDER: "คำสั่งแต่งตั้งคณะกรรมการจัดทำ TOR และราคากลาง",
   MEDIAN_PRICE_BG06: "แบบรายงานผลการกำหนดราคากลาง (บก.06)",
+  EVALUATION_INSPECTION_ORDER: "คำสั่งแต่งตั้งคณะกรรมการพิจารณาผลและตรวจรับ",
+  MARKET_QUOTES: "ใบเสนอราคาท้องตลาดอย่างน้อย 3 ราย",
 } as const;
 
 export const STEP2_APPOINTMENT_ORDER_UPLOAD_LABEL =
@@ -9,6 +11,12 @@ export const STEP2_APPOINTMENT_ORDER_UPLOAD_LABEL =
 
 export const STEP2_BG06_UPLOAD_LABEL =
   "📎 แนบไฟล์ตารางแสดงวงเงินราคากลาง (แบบ บก.06) (PDF)";
+
+export const STEP2_EVALUATION_INSPECTION_ORDER_UPLOAD_LABEL =
+  "📎 แนบไฟล์คำสั่งแต่งตั้งคณะกรรมการพิจารณาผลและตรวจรับ (PDF)";
+
+export const STEP2_MARKET_QUOTES_UPLOAD_LABEL =
+  "📎 แนบไฟล์ใบเสนอราคาท้องตลาดอย่างน้อย 3 ราย (PDF/ZIP)";
 
 /** ประเภทเอกสารขั้นตอนที่ 3 — ผูกกับฟิลด์ฟอร์ม (Single Page Workflow) */
 export const STEP3_DOC = {
@@ -68,7 +76,12 @@ export const STEP5_DOC = {
   EGP_WINNER_ANNOUNCEMENT: "หลักฐานประกาศผลผู้ชนะในระบบ e-GP",
   /** หลักฐานข้อที่ 3 — ปิดประกาศ ณ ที่ทำการหน่วยงาน */
   PHYSICAL_BOARD_ANNOUNCEMENT: "ภาพถ่ายบอร์ดประชาสัมพันธ์ปิดประกาศผลผู้ชนะ",
+  /** หลักฐานแจ้งผลให้ผู้เสนอราคาทุกรายทราบ */
+  ALL_BIDDERS_RESULT_NOTICE: "หลักฐานแจ้งผลผู้เสนอราคาทุกราย",
 } as const;
+
+export const STEP5_ALL_BIDDERS_RESULT_UPLOAD_LABEL =
+  "📎 แนบหลักฐานแจ้งผลผู้เสนอราคาทุกราย (อีเมล e-GP / ใบตอบรับ)";
 
 /** @deprecated ชื่อเอกสารเก่าใน DB — รองรับ Audit Hub */
 export const STEP5_DOC_LEGACY = {
@@ -86,6 +99,10 @@ export function isStep5EgpWinnerDocType(documentType: string): boolean {
 
 export function isStep5PhysicalBoardDocType(documentType: string): boolean {
   return documentType === STEP5_DOC.PHYSICAL_BOARD_ANNOUNCEMENT;
+}
+
+export function isStep5AllBiddersResultDocType(documentType: string): boolean {
+  return documentType === STEP5_DOC.ALL_BIDDERS_RESULT_NOTICE;
 }
 
 /** ประเภทเอกสารขั้นตอนที่ 6 — หลักฐานตามเคสอุทธรณ์ */
@@ -122,13 +139,23 @@ export const STEP7_DOC = {
   CONTRACT_NOTICE_LETTER: "หนังสือแจ้งให้ผู้ชนะมาลงนามในสัญญา (ลงนามหัวหน้าหน่วยงาน)",
   /** หลักฐานข้อที่ 3 — ใบตอบรับ/หลักฐานนำส่ง */
   CONTRACT_NOTICE_DELIVERY_PROOF: "หลักฐานการนำส่งหรือตอบรับหนังสือแจ้งทำสัญญา",
+  /** ร่างสัญญาจ้างก่อสร้าง — เตรียมก่อนลงนาม */
+  DRAFT_CONTRACT: "ร่างสัญญาจ้างก่อสร้าง",
 } as const;
+
+export const STEP7_DRAFT_CONTRACT_UPLOAD_LABEL =
+  "📎 แนบไฟล์ร่างสัญญาจ้างก่อสร้าง (PDF)";
 
 /** @deprecated ชื่อเอกสารเก่าใน DB */
 export const STEP7_DOC_LEGACY = {
-  DRAFT_CONTRACT: "ร่างสัญญาจ้างก่อสร้าง",
+  /** @deprecated ใช้ STEP7_DOC.DRAFT_CONTRACT */
+  DRAFT_CONTRACT: STEP7_DOC.DRAFT_CONTRACT,
   CORRESPONDENCE: "หนังสือโต้ตอบก่อนลงนาม (ถ้ามี)",
 } as const;
+
+export function isStep7DraftContractDocType(documentType: string): boolean {
+  return documentType === STEP7_DOC.DRAFT_CONTRACT;
+}
 
 /** ประเภทเอกสารขั้นตอนที่ 8 — ตรวจหลักประกันและลงนามสัญญา */
 export const STEP8_DOC = {
@@ -144,6 +171,31 @@ export const STEP8_DOC_LEGACY = {
   SIGNED: "สัญญาจ้างก่อสร้าง (ต้นฉบับ ติดอากรแสตมป์)",
   COMPANY_REG: "สำเนาทะเบียนบริษัทผู้รับจ้าง",
   POWER_OF_ATTORNEY: "หนังสือมอบอำนาจ (ถ้ามี)",
+} as const;
+
+/** ประเภทเอกสารขั้นตอนที่ 9 — สาระสำคัญสัญญา */
+export const STEP9_DOC = {
+  GANTT_CHART: "แผนปฏิบัติการก่อสร้าง (Gantt)",
+  EGP_ESSENTIAL_PUBLICATION: "ใบประกาศสาระสำคัญสัญญาจาก e-GP",
+  NOTICE_TO_PROCEED: "หนังสือแจ้งเริ่มงาน",
+} as const;
+
+/** @deprecated ชื่อเอกสารเก่าใน DB */
+export const STEP9_DOC_LEGACY = {
+  CONTRACT_SUMMARY: "สรุปสาระสำคัญสัญญา (วงเงิน/ระยะเวลา/งวดงาน)",
+  GANTT: STEP9_DOC.GANTT_CHART,
+} as const;
+
+export function isStep9GanttDocType(documentType: string): boolean {
+  return (
+    documentType === STEP9_DOC.GANTT_CHART ||
+    documentType === STEP9_DOC_LEGACY.GANTT
+  );
+}
+
+/** ประเภทเอกสารขั้นตอนที่ 10 — บริหารสัญญา (คืนหลักประกัน) */
+export const STEP10_DOC = {
+  GUARANTEE_RETURN: "บันทึกคืนหลักประกันสัญญา",
 } as const;
 
 /** @deprecated */

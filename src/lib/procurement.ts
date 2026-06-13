@@ -51,6 +51,7 @@ export const STEP_DOCS_DETAILED: DocItem[][] = [
   [
     { name: STEP5_DOC.EGP_WINNER_ANNOUNCEMENT, required: true },
     { name: STEP5_DOC.PHYSICAL_BOARD_ANNOUNCEMENT, required: true },
+    { name: STEP5_DOC.ALL_BIDDERS_RESULT_NOTICE, required: true },
   ],
   [
     { name: STEP6_DOC.NO_APPEAL_EGP_SCREENSHOT, required: false },
@@ -60,21 +61,18 @@ export const STEP_DOCS_DETAILED: DocItem[][] = [
   [
     { name: STEP7_DOC.CONTRACT_NOTICE_LETTER, required: true },
     { name: STEP7_DOC.CONTRACT_NOTICE_DELIVERY_PROOF, required: true },
+    { name: STEP7_DOC.DRAFT_CONTRACT, required: true },
   ],
   [
     { name: STEP8_DOC.GUARANTEE_VERIFICATION, required: true },
     { name: STEP8_DOC.SIGNED_CONTRACT, required: true },
   ],
   [
-    { name: "สรุปสาระสำคัญสัญญา (วงเงิน/ระยะเวลา/งวดงาน)", required: true },
-    { name: "แผนปฏิบัติการก่อสร้าง (Gantt)", required: true },
+    { name: "ใบประกาศสาระสำคัญสัญญาจาก e-GP", required: false },
+    { name: "หนังสือแจ้งเริ่มงาน", required: false },
+    { name: "แผนปฏิบัติการก่อสร้าง (Gantt)", required: false },
   ],
-  [
-    { name: "รายงานความคืบหน้ารายสัปดาห์", required: true },
-    { name: "รูปถ่ายหน้างานประกอบรายงาน", required: true },
-    { name: "ใบแจ้งส่งมอบงาน/ใบตรวจรับ (บก.11)", required: true },
-    { name: "บันทึกคืนหลักประกันสัญญา", required: false },
-  ],
+  [],
 ];
 
 export const STEP_DOCS: string[][] = STEP_DOCS_DETAILED.map((items) =>
@@ -95,6 +93,7 @@ export const METHOD_LABEL: Record<string, string> = Object.fromEntries(
 export const STATUS_LABEL: Record<string, string> = {
   active: "กำลังดำเนินการ",
   completed: "เสร็จสิ้น",
+  warranty: "ปิดงานจ้างสำเร็จ (อยู่ระหว่างค้ำประกันความชำรุด 2 ปี)",
   cancelled: "ยกเลิก",
   on_hold: "พักการดำเนินการ",
 };
