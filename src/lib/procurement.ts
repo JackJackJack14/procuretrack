@@ -15,15 +15,14 @@ import {
   STEP7_DOC,
   STEP8_DOC,
 } from "@/lib/step-doc-types";
+import { STEP1_ANNUAL_PLAN_DOCUMENT_TYPE } from "@/lib/checklist-inline-evidence";
 
 export type DocItem = { name: string; required: boolean };
 
 /** เอกสารอ้างอิงต่อ Milestone e-GP (10 ขั้น) — สำหรับตรวจครบก่อนปิดขั้น */
 export const STEP_DOCS_DETAILED: DocItem[][] = [
   [
-    { name: "คำสั่งแต่งตั้งผู้รับผิดชอบงาน e-GP", required: true },
-    { name: "แบบรูปรายการงานก่อสร้าง (BOQ)", required: true },
-    { name: "เอกสารอนุมัติโครงการ/จัดสรรงบประมาณ", required: true },
+    { name: STEP1_ANNUAL_PLAN_DOCUMENT_TYPE, required: true },
     { name: "ประมาณการราคาเบื้องต้น", required: false },
   ],
   [

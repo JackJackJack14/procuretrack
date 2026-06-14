@@ -149,7 +149,7 @@ function buildReportHtml(input: ExecutiveReportInput): string {
         ${formRow("ชื่อโครงการ", `<strong>${displayText(input.project.name)}</strong>`)}
         ${formRow("รหัส e-GP / โครงการ", displayText(input.project.project_code))}
         ${formRow("ปีงบประมาณ", input.project.fiscal_year ? String(input.project.fiscal_year) : "—")}
-        ${formRow("สำนักงานพัฒนาที่ดินเขต (สพข.)", displayText(profile.district_office))}
+        ${formRow("หน่วยงานส่วนภูมิภาค / เขตที่รับผิดชอบ", displayText(profile.district_office))}
         ${formRow("หน่วยงานที่อนุมัติเบิกจ่าย", displayText(profile.approving_agency))}
         ${formRow("หน่วยงานที่ดำเนินการจัดซื้อจัดจ้าง", displayText(profile.procurement_agency))}
         ${formRow("ประเภทกิจกรรม/งาน", displayText(profile.activity_type))}

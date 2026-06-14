@@ -35,6 +35,7 @@ import {
   Step7ContractNoticeForm,
   Step8ContractGuaranteeForm,
   Step9DetailForm,
+  Step9ExternalContractCapturePanel,
   Step10DetailForm,
   GenericStepDetailForm,
 } from "@/components/steps/ProjectStepForms";
@@ -148,6 +149,8 @@ import {
   mergeStep9ScheduleFromSources,
   computeStep9ContractEndDateISO,
   getStep9ComplianceIssues,
+  buildProjectStep9ExternalCaptureFields,
+  type Step9ExternalCaptureInput,
   isStep9ReadyForNext,
   getStep10ComplianceIssues,
   isStep10ReadyForNext,
@@ -182,13 +185,11 @@ import {
   type Step1ProjectProfile,
 } from "@/lib/project-profile";
 import type { ExecutiveReportProject } from "@/lib/executive-report-pdf";
-import { syncExternalProcurementBypass } from "@/lib/external-procurement-sync";
 import {
   EXTERNAL_PROCUREMENT_ENTRY_STEP,
   isExternalProcurement,
   isProcurementStepBypassed,
   normalizeProcurementPath,
-  type ProcurementPath,
 } from "@/lib/procurement-path";
 import { resolveProjectContractSignedDate } from "@/lib/step9-guideline";
 import { resolveProjectContractEndDate } from "@/lib/step10-guideline";
@@ -345,7 +346,6 @@ function ProjectDetailPage() {
   const [step1Profile, setStep1Profile] = useState<Step1ProjectProfile>({
     ...EMPTY_STEP1_PROJECT_PROFILE,
   });
-  const [procurementPath, setProcurementPath] = useState<ProcurementPath>("self");
   const patchStep1Profile = (patch: Partial<Step1ProjectProfile>) =>
     setStep1Profile((prev) => ({ ...prev, ...patch }));
   // ขั้นตอนที่ 2
@@ -435,16 +435,17 @@ function ProjectDetailPage() {
   const committees = data?.committees ?? [];
 
   const workflowStep = project?.current_step ?? 1;
-  const isExternalProcurementMode = isExternalProcurement(project?.procurement_path);
+  const effectiveProcurementPath = normalizeProcurementPath(project?.procurement_path);
+  const isExternalProcurementMode = isExternalProcurement(effectiveProcurementPath);
   const workflowMode = useMemo(
     () =>
       getStepWorkflowMode(
         activeStep,
         workflowStep,
         historicalEditUnlocked,
-        project?.procurement_path,
+        effectiveProcurementPath,
       ),
-    [activeStep, workflowStep, historicalEditUnlocked, project?.procurement_path],
+    [activeStep, workflowStep, historicalEditUnlocked, effectiveProcurementPath],
   );
   const workflowReadOnly = isWorkflowReadOnly(workflowMode);
 
@@ -454,7 +455,7 @@ function ProjectDetailPage() {
 
   const handleStepNavigation = (stepNumber: number) => {
     if (!project) return;
-    if (!canNavigateToStep(stepNumber, project.current_step, project.procurement_path)) {
+    if (!canNavigateToStep(stepNumber, workflowStep, effectiveProcurementPath)) {
       toast.message(
         "ไม่สามารถข้ามไปขั้นตอนถัดไปได้ — กรุณาดำเนินการตามลำดับและกด «บันทึกและไปขั้นตอนถัดไป»",
       );
@@ -649,6 +650,13 @@ function ProjectDetailPage() {
 
   const step10ContractAmount = useMemo(() => {
     if (!project) return null;
+    if (isExternalProcurement(project.procurement_path)) {
+      const extAmount =
+        step4BidResult.final_agreed_amount != null && step4BidResult.final_agreed_amount > 0
+          ? step4BidResult.final_agreed_amount
+          : project.final_agreed_amount;
+      return extAmount != null && Number.isFinite(extAmount) ? extAmount : null;
+    }
     const step8Form = loadStep8FormFromNote(step8Record?.note ?? null);
     const exec = mergeStep8FromProject(
       step8Form.contractExecution ?? { ...EMPTY_STEP8_CONTRACT_EXECUTION },
@@ -657,44 +665,70 @@ function ProjectDetailPage() {
     );
     const amount = exec.contract_amount;
     return amount != null && Number.isFinite(amount) ? amount : null;
-  }, [step8Record?.note, project, mergedStep4BidResult]);
+  }, [step8Record?.note, project, mergedStep4BidResult, step4BidResult]);
 
   const executiveReportSource = useMemo((): ExecutiveReportProject | null => {
     if (!project) return null;
+    const profile = step1Profile;
+    const median = step2MedianPrice;
+    const bid = step4BidResult;
     return {
       name: project.name,
       project_code: project.project_code,
       budget: Number(project.budget ?? 0),
       fiscal_year: project.fiscal_year,
       procurement_path: project.procurement_path,
-      district_office: project.district_office,
-      approving_agency: project.approving_agency,
-      procurement_agency: project.procurement_agency,
-      activity_type: project.activity_type,
-      result_unit: project.result_unit,
-      site_village: project.site_village,
-      site_moo: project.site_moo,
-      site_subdistrict: project.site_subdistrict,
-      site_district: project.site_district,
-      site_province: project.site_province,
-      allocated_budget: project.allocated_budget,
-      approved_median_price: project.approved_median_price,
+      district_office: profile.district_office || project.district_office,
+      approving_agency: profile.approving_agency || project.approving_agency,
+      procurement_agency: profile.procurement_agency || project.procurement_agency,
+      activity_type: profile.activity_type || project.activity_type,
+      result_unit: profile.result_unit || project.result_unit,
+      site_village: profile.site_village || project.site_village,
+      site_moo: profile.site_moo ?? project.site_moo,
+      site_subdistrict: profile.site_subdistrict || project.site_subdistrict,
+      site_district: profile.site_district || project.site_district,
+      site_province: profile.site_province || project.site_province,
+      allocated_budget:
+        median.allocated_budget != null && median.allocated_budget > 0
+          ? median.allocated_budget
+          : project.allocated_budget,
+      approved_median_price:
+        median.approved_median_price != null && median.approved_median_price > 0
+          ? median.approved_median_price
+          : project.approved_median_price,
       winning_bidder_name:
         mergedStep4BidResult.winning_bidder_name || project.winning_bidder_name,
       site_supervisor_name:
-        step4BidResult.site_supervisor_name?.trim() || project.site_supervisor_name,
+        bid.site_supervisor_name?.trim() || project.site_supervisor_name,
       site_supervisor_affiliation:
-        step4BidResult.site_supervisor_affiliation?.trim() ||
-        project.site_supervisor_affiliation,
-      site_engineer_name:
-        step4BidResult.site_engineer_name?.trim() || project.site_engineer_name,
+        bid.site_supervisor_affiliation?.trim() || project.site_supervisor_affiliation,
+      site_engineer_name: bid.site_engineer_name?.trim() || project.site_engineer_name,
       contract_no: project.contract_no,
       contract_signed_date: project.contract_signed_date,
-      final_agreed_amount: project.final_agreed_amount,
+      final_agreed_amount:
+        bid.final_agreed_amount != null && bid.final_agreed_amount > 0
+          ? bid.final_agreed_amount
+          : project.final_agreed_amount,
       winning_bid_amount: project.winning_bid_amount,
       total_installment_count: totalInstallmentCount,
     };
-  }, [project, mergedStep4BidResult, step4BidResult, totalInstallmentCount]);
+  }, [
+    project,
+    step1Profile,
+    step2MedianPrice,
+    mergedStep4BidResult,
+    step4BidResult,
+    totalInstallmentCount,
+  ]);
+
+  const step9ExternalCapture = useMemo((): Step9ExternalCaptureInput | undefined => {
+    if (!isExternalProcurement(effectiveProcurementPath)) return undefined;
+    return {
+      profile: step1Profile,
+      medianPrice: step2MedianPrice,
+      bidResult: step4BidResult,
+    };
+  }, [effectiveProcurementPath, step1Profile, step2MedianPrice, step4BidResult]);
 
   const step4ApprovalFromNote = useMemo(
     () => mergedStep4BidResult.evaluation_report_approval_date?.trim() || "",
@@ -719,7 +753,6 @@ function ProjectDetailPage() {
       const step1Form = loadStep1FormFromStep(current as { note: string | null; step1_checklist?: unknown });
       setStep1Checklist(step1Form.checklist ?? { ...EMPTY_STEP1_CHECKLIST });
       setStep1Profile(mergeStep1ProfileFromProject(project));
-      setProcurementPath(normalizeProcurementPath(project.procurement_path));
       setNote(draft1.userNote);
       setDueDate(draft1.dueDate);
       return;
@@ -864,6 +897,16 @@ function ProjectDetailPage() {
           },
         ),
       );
+      if (isExternalProcurement(effectiveProcurementPath)) {
+        setStep1Profile(mergeStep1ProfileFromProject(project));
+        setStep2MedianPrice({
+          ...EMPTY_STEP2_MEDIAN_PRICE,
+          ...mergeStep2FormFromProject({}, project).medianPrice,
+        });
+        setStep4BidResult(
+          mergeStep4BidResultFromProject({ ...EMPTY_STEP4_BID_RESULT }, project),
+        );
+      }
       setNote(draft.userNote);
       setDueDate(draft.dueDate);
       return;
@@ -881,6 +924,16 @@ function ProjectDetailPage() {
           step10PlannedDates,
         ),
       );
+      if (isExternalProcurement(effectiveProcurementPath)) {
+        setStep1Profile(mergeStep1ProfileFromProject(project));
+        setStep2MedianPrice({
+          ...EMPTY_STEP2_MEDIAN_PRICE,
+          ...mergeStep2FormFromProject({}, project).medianPrice,
+        });
+        setStep4BidResult(
+          mergeStep4BidResultFromProject({ ...EMPTY_STEP4_BID_RESULT }, project),
+        );
+      }
       setNote(draft.userNote);
       setDueDate(draft.dueDate);
       return;
@@ -1141,7 +1194,6 @@ function ProjectDetailPage() {
     if (current.step_number === 1) {
       const budgetVal = parseBudgetInput(step1Budget);
       const formNote = serializeStepNote(note, { checklist: step1Checklist });
-      const wasExternal = isExternalProcurement(project.procurement_path);
       const { error: pe } = await supabase
         .from("projects")
         .update({
@@ -1149,7 +1201,6 @@ function ProjectDetailPage() {
           project_code: egpCode.trim() || project.project_code,
           budget: budgetVal,
           method: step1Method,
-          procurement_path: procurementPath,
           ...buildProjectStep1ProfileFields(step1Profile),
         })
         .eq("id", project.id);
@@ -1165,20 +1216,6 @@ function ProjectDetailPage() {
       if (se?.error) {
         setError(se.error.message);
         return;
-      }
-      if (procurementPath === "external" && (!wasExternal || project.current_step < EXTERNAL_PROCUREMENT_ENTRY_STEP)) {
-        const { data: u } = await supabase.auth.getUser();
-        const { error: bypassErr } = await syncExternalProcurementBypass(
-          supabase,
-          project.id,
-          u.user?.id ?? null,
-        );
-        if (bypassErr) {
-          toast.warning(`บันทึกโหมดทางลัดไม่สมบูรณ์: ${bypassErr}`);
-        } else {
-          toast.message("เปิดโหมดทางลัดแล้ว — คลิก Tab ขั้นที่ 9 เพื่อบันทึกสัญญา/งวดงาน");
-          setActiveStep(EXTERNAL_PROCUREMENT_ENTRY_STEP);
-        }
       }
       draftSavedToast("ขั้นตอนที่ 1 ");
       await propagateResponsibleToStep1(effectiveResponsibleName);
@@ -1452,6 +1489,15 @@ function ProjectDetailPage() {
           if (contractErr) {
             console.warn("[Step9] contracts schedule sync failed", contractErr);
           }
+        }
+      }
+      if (isExternalProcurement(effectiveProcurementPath) && step9ExternalCapture) {
+        const { error: projErr } = await supabase
+          .from("projects")
+          .update(buildProjectStep9ExternalCaptureFields(step9ExternalCapture))
+          .eq("id", project.id);
+        if (projErr) {
+          console.warn("[Step9] external capture sync failed", projErr);
         }
       }
       draftSavedToast("ขั้นตอนที่ 9 ");
@@ -1781,6 +1827,8 @@ function ProjectDetailPage() {
           responsibleName: effectiveResponsibleName,
           stepDocs: step9Docs,
           contractSignedDate,
+          procurementPath: effectiveProcurementPath,
+          externalCapture: step9ExternalCapture,
         },
         computeAutoChecklistState({
           stepNumber: 9,
@@ -1958,11 +2006,13 @@ function ProjectDetailPage() {
                 })()}
                 <Info label="วิธีจัดซื้อ" value={METHOD_LABEL[project.method] ?? project.method} />
                 <Info label="ปีงบประมาณ" value={String(project.fiscal_year)} />
-                {project.district_office && <Info label="สพข./เขต" value={project.district_office} />}
+                {project.district_office && <Info label="หน่วยงานส่วนภูมิภาค / เขตที่รับผิดชอบ" value={project.district_office} />}
                 {project.design_code && <Info label="รหัสแบบ/รหัสโครงการ" value={project.design_code} />}
                 {project.approving_agency && <Info label="หน่วยงานที่อนุมัติเบิกจ่าย" value={project.approving_agency} />}
                 {project.procurement_agency && <Info label="หน่วยงานที่ดำเนินการจัดซื้อจัดจ้าง" value={project.procurement_agency} />}
-                {project.result_unit && <Info label="ผลสะสม (หน่วย)" value={project.result_unit} />}
+                {project.result_unit && (
+                  <Info label="หน่วยวัดผลสัมฤทธิ์ของงาน" value={project.result_unit} />
+                )}
               </div>
             </div>
             <div className="flex flex-col items-end gap-2">
@@ -2006,12 +2056,12 @@ function ProjectDetailPage() {
               const isLocked = isStepForwardLocked(
                 s.step_number,
                 workflowStep,
-                project.procurement_path,
+                effectiveProcurementPath,
               );
               const canNav = canNavigateToStep(
                 s.step_number,
                 workflowStep,
-                project.procurement_path,
+                effectiveProcurementPath,
               );
               return (
                 <button
@@ -2264,10 +2314,24 @@ function ProjectDetailPage() {
                 <ContractForm project={project} onSaved={invalidateAll} />
               ) : (
                 <>
-                {isProcurementStepBypassed(current.step_number, project.procurement_path) && (
+                {isProcurementStepBypassed(current.step_number, effectiveProcurementPath) && (
                   <div className="mb-4 rounded-lg border border-amber-300/70 bg-amber-50/80 dark:bg-amber-950/30 px-4 py-3 text-sm text-amber-900 dark:text-amber-100">
                     <strong>โหมดทางลัด (สัญญาจากส่วนกลาง/สพข.):</strong> ขั้นตอน {current.step_number}{" "}
                     ไม่บังคับ Checklist/เอกสาร — กรอกเฉพาะข้อมูลที่จำเป็นสำหรับรายงาน แล้วไป Step 9–10
+                  </div>
+                )}
+                {current.step_number === 9 && isExternalProcurementMode && (
+                  <div className="mb-6 w-full max-w-3xl">
+                    <Step9ExternalContractCapturePanel
+                      readOnly={workflowReadOnly || isStepCompletedView}
+                      projectProfile={step1Profile}
+                      onProjectProfileChange={patchStep1Profile}
+                      medianPrice={step2MedianPrice}
+                      onMedianPriceChange={patchStep2MedianPrice}
+                      bidResult={step4BidResult}
+                      onBidResultChange={patchStep4BidResult}
+                      step1Budget={calcBudget}
+                    />
                   </div>
                 )}
                 <fieldset
@@ -2322,8 +2386,6 @@ function ProjectDetailPage() {
                       onResponsibleNameChange={setResponsibleName}
                       projectProfile={step1Profile}
                       onProjectProfileChange={patchStep1Profile}
-                      procurementPath={procurementPath}
-                      onProcurementPathChange={setProcurementPath}
                       docBinder={{
                         project,
                         stepNumber: 1,
@@ -2540,6 +2602,14 @@ function ProjectDetailPage() {
                       onDocsChange={invalidateAll}
                       projectName={project.name}
                       contractSignedDate={contractSignedDate}
+                      procurementPath={effectiveProcurementPath}
+                      projectProfile={step1Profile}
+                      onProjectProfileChange={patchStep1Profile}
+                      medianPrice={step2MedianPrice}
+                      onMedianPriceChange={patchStep2MedianPrice}
+                      bidResult={step4BidResult}
+                      onBidResultChange={patchStep4BidResult}
+                      step1Budget={calcBudget}
                     />
                   )}
                   {current.step_number === 10 && (
@@ -2569,7 +2639,7 @@ function ProjectDetailPage() {
                       onInspectionRowsChange={setStep10InspectionRows}
                       contractAmount={step10ContractAmount}
                       projectStatus={project.status}
-                      resultUnit={project.result_unit}
+                      resultUnit={step1Profile.result_unit || project.result_unit}
                       executiveReportSource={
                         executiveReportSource ?? {
                           name: project.name,
@@ -2912,6 +2982,8 @@ function ProjectDetailPage() {
                           responsibleName: effectiveResponsibleName,
                           stepDocs: docsForStep,
                           contractSignedDate,
+                          procurementPath: effectiveProcurementPath,
+                          externalCapture: step9ExternalCapture,
                         },
                         autoCheckStates,
                       )
@@ -2925,6 +2997,8 @@ function ProjectDetailPage() {
                       responsibleName: effectiveResponsibleName,
                       stepDocs: docsForStep,
                       contractSignedDate,
+                      procurementPath: effectiveProcurementPath,
+                      externalCapture: step9ExternalCapture,
                     },
                     autoCheckStates,
                   );

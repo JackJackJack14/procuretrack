@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { AppShell } from "@/components/AppShell";
 import { supabase } from "@/integrations/supabase/client";
+import { ProvinceSearchSelect } from "@/components/ProvinceSearchSelect";
 import { THAI_PROVINCES } from "@/lib/thai-provinces";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -235,10 +236,11 @@ function SettingsPage() {
                 </div>
                 <div className="space-y-1.5">
                   <Label>จังหวัด</Label>
-                  <select className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
-                    value={province} onChange={(e) => setProvince(e.target.value)}>
-                    {THAI_PROVINCES.map((p) => <option key={p} value={p}>{p}</option>)}
-                  </select>
+                  <ProvinceSearchSelect
+                    value={province}
+                    onChange={setProvince}
+                    allowClear={false}
+                  />
                 </div>
               </div>
               <div className="flex justify-end">

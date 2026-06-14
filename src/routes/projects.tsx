@@ -13,6 +13,7 @@ import {
 } from "@/lib/procurement";
 import { EGP_MILESTONES, getMilestoneLabel, milestoneProgressPercent } from "@/lib/egp-milestones";
 import { APPEAL_STATUS_LABELS } from "@/lib/step-form";
+import { ResultUnitSelect } from "@/components/ResultUnitSelect";
 
 export const Route = createFileRoute("/projects")({
   head: () => ({ meta: [{ title: "โครงการทั้งหมด — ProcureTrack" }] }),
@@ -335,8 +336,8 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
             </Field>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="สพข./เขต">
-              <input value={districtOffice} onChange={(e) => setDistrictOffice(e.target.value)} placeholder="เช่น สพข.2" className={inputCls} />
+            <Field label="หน่วยงานส่วนภูมิภาค / เขตที่รับผิดชอบ">
+              <input value={districtOffice} onChange={(e) => setDistrictOffice(e.target.value)} placeholder="เช่น สพข.6 เชียงใหม่" className={inputCls} />
             </Field>
             <Field label="รหัสแบบ/รหัสโครงการ">
               <input value={designCode} onChange={(e) => setDesignCode(e.target.value)} placeholder="เช่น ฝ. ฉช.0168 / 01268" className={inputCls} />
@@ -348,8 +349,12 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
           <Field label="หน่วยงานที่ดำเนินการจัดซื้อจัดจ้าง">
             <input value={procurementAgency} onChange={(e) => setProcurementAgency(e.target.value)} className={inputCls} />
           </Field>
-          <Field label="ผลสะสม (หน่วย)">
-            <input value={resultUnit} onChange={(e) => setResultUnit(e.target.value)} placeholder="เช่น ไร่, บ่อ, กม." className={inputCls} />
+          <Field label="หน่วยวัดผลสัมฤทธิ์ของงาน">
+            <ResultUnitSelect
+              value={resultUnit}
+              onChange={setResultUnit}
+              inputClassName={inputCls}
+            />
           </Field>
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>

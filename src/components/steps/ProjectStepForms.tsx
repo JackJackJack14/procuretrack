@@ -132,16 +132,16 @@ import { formatBaht } from "@/lib/procurement";
 import { SmartChecklist, type SmartChecklistDocBinder } from "@/components/SmartChecklist";
 import { getSmartChecklistItems, getStep6ChecklistItems, getStep10ChecklistItems } from "@/lib/smart-checklist";
 import {
-  DISTRICT_OFFICE_OPTIONS,
-  PROJECT_RESULT_UNIT_OPTIONS,
   formatProgressWithUnit,
   type Step1ProjectProfile,
 } from "@/lib/project-profile";
+import { ResultUnitSelect } from "@/components/ResultUnitSelect";
 import {
-  PROCUREMENT_PATH_OPTIONS,
   type ProcurementPath,
+  isExternalProcurement,
 } from "@/lib/procurement-path";
-import { THAI_PROVINCES } from "@/lib/thai-provinces";
+import { ProvinceSearchSelect } from "@/components/ProvinceSearchSelect";
+import { STEP1_ANNUAL_PLAN_DOCUMENT_TYPE } from "@/lib/checklist-inline-evidence";
 import { downloadExecutiveReportPdf, type ExecutiveReportProject } from "@/lib/executive-report-pdf";
 import {
   computeAppealDeadlineISO,
@@ -263,8 +263,6 @@ type Step1FormProps = {
   onResponsibleNameChange: (v: string) => void;
   projectProfile: Step1ProjectProfile;
   onProjectProfileChange: (patch: Partial<Step1ProjectProfile>) => void;
-  procurementPath: ProcurementPath;
-  onProcurementPathChange: (path: ProcurementPath) => void;
   readOnly?: boolean;
 };
 
@@ -285,53 +283,20 @@ export function Step1DetailForm({
   onResponsibleNameChange,
   projectProfile,
   onProjectProfileChange,
-  procurementPath,
-  onProcurementPathChange,
   readOnly,
   docBinder,
 }: Step1FormProps & { docBinder?: SmartChecklistDocBinder }) {
-  const egpUnlocked = isStep1EgpCodeUnlocked(checklist, { egpCode });
-  const isExternalPath = procurementPath === "external";
+  const hasAnnualPlanDoc =
+    docBinder?.docs.some(
+      (d) => d.document_type === STEP1_ANNUAL_PLAN_DOCUMENT_TYPE,
+    ) ?? false;
+  const egpUnlocked = isStep1EgpCodeUnlocked(checklist, {
+    hasAnnualPlanDoc,
+    stepDocs: docBinder?.docs,
+  });
 
   return (
     <div className="space-y-4 max-w-2xl">
-      <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 space-y-3">
-        <p className="text-sm font-semibold text-foreground">
-          รูปแบบการจัดซื้อจัดจ้าง (บังคับเลือก)
-        </p>
-        <div className="space-y-2">
-          {PROCUREMENT_PATH_OPTIONS.map((opt) => (
-            <label
-              key={opt.value}
-              className={`flex items-start gap-2.5 text-sm cursor-pointer rounded-md border p-3 transition-colors ${
-                procurementPath === opt.value
-                  ? "border-primary bg-primary/10"
-                  : "border-border hover:bg-muted/40"
-              }`}
-            >
-              <input
-                type="radio"
-                name="procurement-path"
-                className="mt-0.5 h-4 w-4 accent-primary"
-                checked={procurementPath === opt.value}
-                onChange={() => onProcurementPathChange(opt.value)}
-                disabled={readOnly}
-              />
-              <span>
-                <span className="font-medium block">{opt.label}</span>
-                <span className="text-xs text-muted-foreground">{opt.description}</span>
-              </span>
-            </label>
-          ))}
-        </div>
-        {isExternalPath && (
-          <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 leading-relaxed">
-            ⚡ โหมดทางลัด: บันทึก Step 1 แล้วคลิก Tab ขั้นที่ 9 ได้ทันที — ระบบไม่บังคับ Checklist
-            และเอกสาร Step 1–7
-          </p>
-        )}
-      </div>
-
       <SmartChecklist
         stepNumber={1}
         stepLabel="ขั้นตอนที่ 1"
@@ -366,7 +331,7 @@ export function Step1DetailForm({
           />
           {!egpUnlocked && (
             <p className="text-xs text-warning mt-1">
-              ปลดล็อกเมื่อติ๊ก Manual-Check «เผยแพร่แผนจัดซื้อจัดจ้าง» และกรอกรหัส e-GP แล้ว
+              ปลดล็อกเมื่อแนบหลักฐานแผนจัดซื้อจัดจ้างใน Smart Checklist ข้อที่ 2
             </p>
           )}
         </FieldRow>
@@ -408,20 +373,14 @@ export function Step1DetailForm({
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
         <p className="text-sm font-medium text-foreground">กลุ่มข้อมูลหน่วยงาน</p>
-        <FieldRow label="สำนักงานพัฒนาที่ดินเขต (สพข.)">
-          <select
+        <FieldRow label="หน่วยงานส่วนภูมิภาค / เขตที่รับผิดชอบ">
+          <input
             value={projectProfile.district_office}
             onChange={(e) => onProjectProfileChange({ district_office: e.target.value })}
+            placeholder="เช่น สพข.6 เชียงใหม่"
             disabled={readOnly}
             className={inputCls}
-          >
-            <option value="">— เลือก สพข. —</option>
-            {DISTRICT_OFFICE_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
+          />
         </FieldRow>
         <FieldRow label="หน่วยงานที่อนุมัติเบิกจ่าย">
           <input
@@ -455,22 +414,13 @@ export function Step1DetailForm({
           />
         </FieldRow>
         <FieldRow label="หน่วยวัดผลสัมฤทธิ์ของงาน">
-          <select
+          <ResultUnitSelect
             value={projectProfile.result_unit}
-            onChange={(e) => onProjectProfileChange({ result_unit: e.target.value })}
+            onChange={(result_unit) => onProjectProfileChange({ result_unit })}
             disabled={readOnly}
-            className={inputCls}
-          >
-            <option value="">— เลือกหน่วย —</option>
-            {PROJECT_RESULT_UNIT_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
-          <p className="text-xs text-muted-foreground mt-1">
-            ใช้แสดงต่อท้ายผลสะสมหน้างานจริงในขั้นตอนที่ 10 และรายงานสรุปผู้บริหาร
-          </p>
+            inputClassName={inputCls}
+            hint="ใช้แสดงต่อท้ายผลสะสมหน้างานจริงในขั้นตอนที่ 10 และรายงานสรุปผู้บริหาร"
+          />
         </FieldRow>
       </div>
 
@@ -519,19 +469,11 @@ export function Step1DetailForm({
             />
           </FieldRow>
           <FieldRow label="จังหวัด">
-            <select
+            <ProvinceSearchSelect
               value={projectProfile.site_province}
-              onChange={(e) => onProjectProfileChange({ site_province: e.target.value })}
+              onChange={(v) => onProjectProfileChange({ site_province: v })}
               disabled={readOnly}
-              className={inputCls}
-            >
-              <option value="">— เลือกจังหวัด —</option>
-              {THAI_PROVINCES.map((p) => (
-                <option key={p} value={p}>
-                  {p}
-                </option>
-              ))}
-            </select>
+            />
           </FieldRow>
         </div>
       </div>
@@ -2874,7 +2816,238 @@ type Step9DetailFormProps = {
   projectName: string;
   /** วันที่ลงนามในสัญญา (ขั้น 8) — ใช้เป็น minDate ของวันเริ่มปฏิบัติงาน */
   contractSignedDate?: string;
+  /** รูปแบบจัดซื้อจาก Step 1 — ใช้แสดงกล่องพิเศษเมื่อ external */
+  procurementPath?: ProcurementPath | string | null;
+  projectProfile: Step1ProjectProfile;
+  onProjectProfileChange: (patch: Partial<Step1ProjectProfile>) => void;
+  medianPrice: Step2MedianPrice;
+  onMedianPriceChange: (patch: Partial<Step2MedianPrice>) => void;
+  bidResult: Step4BidResult;
+  onBidResultChange: (patch: Partial<Step4BidResult>) => void;
+  step1Budget?: number;
 };
+
+export function Step9ExternalContractCapturePanel({
+  readOnly,
+  projectProfile,
+  onProjectProfileChange,
+  medianPrice,
+  onMedianPriceChange,
+  bidResult,
+  onBidResultChange,
+  step1Budget = 0,
+}: {
+  readOnly?: boolean;
+  projectProfile: Step1ProjectProfile;
+  onProjectProfileChange: (patch: Partial<Step1ProjectProfile>) => void;
+  medianPrice: Step2MedianPrice;
+  onMedianPriceChange: (patch: Partial<Step2MedianPrice>) => void;
+  bidResult: Step4BidResult;
+  onBidResultChange: (patch: Partial<Step4BidResult>) => void;
+  step1Budget?: number;
+}) {
+  const allocatedBudgetDisplay =
+    medianPrice.allocated_budget != null && medianPrice.allocated_budget > 0
+      ? formatBudgetInput(String(medianPrice.allocated_budget))
+      : step1Budget > 0
+        ? formatBudgetInput(String(step1Budget))
+        : "";
+  const medianPriceDisplay =
+    medianPrice.approved_median_price != null && medianPrice.approved_median_price > 0
+      ? formatBudgetInput(String(medianPrice.approved_median_price))
+      : "";
+  const contractAmountDisplay =
+    bidResult.final_agreed_amount != null && bidResult.final_agreed_amount > 0
+      ? formatBudgetInput(String(bidResult.final_agreed_amount))
+      : "";
+
+  return (
+    <div className="rounded-xl border-4 border-amber-500 bg-gradient-to-br from-amber-50 via-orange-50 to-yellow-50 dark:from-amber-950 dark:via-orange-950 dark:to-amber-900 shadow-xl ring-4 ring-amber-300/50 dark:ring-amber-700/40 p-6 space-y-6">
+      <div className="flex items-start gap-3 rounded-lg bg-amber-500 px-4 py-3.5 text-white shadow-md">
+        <span className="text-2xl leading-none shrink-0" aria-hidden>
+          📝
+        </span>
+        <div className="min-w-0">
+          <p className="text-lg font-bold leading-snug">
+            บันทึกข้อมูลสัญญาจัดจ้างจากส่วนกลาง/สพข.
+          </p>
+          <p className="text-sm font-medium text-amber-50 mt-1">
+            สำหรับกรณีหน่วยงานอื่นจัดซื้อจ้างให้ — กรอกครบทุกช่องด้านล่างก่อนไป Step 10
+          </p>
+        </div>
+      </div>
+
+      <div className="space-y-4 rounded-lg border-2 border-amber-400/70 bg-white/90 dark:bg-background/80 p-4">
+        <p className="text-sm font-bold text-amber-800 dark:text-amber-200 flex items-center gap-2">
+          <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-amber-500 text-xs font-bold text-white">
+            1
+          </span>
+          กลุ่มพิกัดและที่อยู่
+        </p>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <FieldRow label="ชื่อบ้าน/หมู่บ้าน">
+            <input
+              value={projectProfile.site_village}
+              onChange={(e) => onProjectProfileChange({ site_village: e.target.value })}
+              placeholder="เช่น บ้านหนองปลามัน"
+              disabled={readOnly}
+              className={inputCls}
+            />
+          </FieldRow>
+          <FieldRow label="หมู่ที่">
+            <input
+              type="number"
+              min={1}
+              value={projectProfile.site_moo ?? ""}
+              onChange={(e) => {
+                const raw = e.target.value.replace(/[^\d]/g, "");
+                onProjectProfileChange({ site_moo: raw ? Number(raw) : null });
+              }}
+              disabled={readOnly}
+              className={inputCls}
+              placeholder="เช่น 5"
+            />
+          </FieldRow>
+          <FieldRow label="ตำบล">
+            <input
+              value={projectProfile.site_subdistrict}
+              onChange={(e) => onProjectProfileChange({ site_subdistrict: e.target.value })}
+              disabled={readOnly}
+              className={inputCls}
+            />
+          </FieldRow>
+          <FieldRow label="อำเภอ">
+            <input
+              value={projectProfile.site_district}
+              onChange={(e) => onProjectProfileChange({ site_district: e.target.value })}
+              disabled={readOnly}
+              className={inputCls}
+            />
+          </FieldRow>
+          <FieldRow label="จังหวัด">
+            <ProvinceSearchSelect
+              value={projectProfile.site_province}
+              onChange={(v) => onProjectProfileChange({ site_province: v })}
+              disabled={readOnly}
+            />
+          </FieldRow>
+        </div>
+      </div>
+
+      <div className="space-y-4 rounded-lg border-2 border-amber-400/70 bg-white/90 dark:bg-background/80 p-4">
+        <p className="text-sm font-bold text-amber-800 dark:text-amber-200 flex items-center gap-2">
+          <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-amber-500 text-xs font-bold text-white">
+            2
+          </span>
+          กลุ่มประเภทงานและหน่วยวัด
+        </p>
+        <FieldRow label="ประเภทกิจกรรม/งาน">
+          <input
+            value={projectProfile.activity_type}
+            onChange={(e) => onProjectProfileChange({ activity_type: e.target.value })}
+            placeholder="เช่น การป้องกันและลดการชะล้างพังทลายของดิน..."
+            disabled={readOnly}
+            className={inputCls}
+          />
+        </FieldRow>
+        <FieldRow label="หน่วยวัดผลสัมฤทธิ์ของงาน">
+          <ResultUnitSelect
+            value={projectProfile.result_unit}
+            onChange={(result_unit) => onProjectProfileChange({ result_unit })}
+            disabled={readOnly}
+            inputClassName={inputCls}
+          />
+        </FieldRow>
+      </div>
+
+      <div className="space-y-4 rounded-lg border-2 border-amber-400/70 bg-white/90 dark:bg-background/80 p-4">
+        <p className="text-sm font-bold text-amber-800 dark:text-amber-200 flex items-center gap-2">
+          <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-amber-500 text-xs font-bold text-white">
+            3
+          </span>
+          กลุ่มข้อมูลการเงิน
+        </p>
+        <FieldRow label="วงเงินงบประมาณที่ได้รับจัดสรร (บาท)">
+          <input
+            value={allocatedBudgetDisplay}
+            onChange={(e) => {
+              const raw = e.target.value.replace(/[^\d]/g, "");
+              onMedianPriceChange({ allocated_budget: raw ? Number(raw) : null });
+            }}
+            placeholder="0"
+            inputMode="numeric"
+            disabled={readOnly}
+            className={inputCls}
+          />
+        </FieldRow>
+        <FieldRow label="มูลค่าราคากลาง (บาท)">
+          <input
+            value={medianPriceDisplay}
+            onChange={(e) => {
+              const raw = e.target.value.replace(/[^\d]/g, "");
+              onMedianPriceChange({ approved_median_price: raw ? Number(raw) : null });
+            }}
+            placeholder="0"
+            inputMode="numeric"
+            disabled={readOnly}
+            className={inputCls}
+          />
+        </FieldRow>
+        <FieldRow label="ราคาประมูลตามสัญญาจ้างจริง (บาท)">
+          <input
+            value={contractAmountDisplay}
+            onChange={(e) => {
+              const raw = e.target.value.replace(/[^\d]/g, "");
+              onBidResultChange({ final_agreed_amount: raw ? Number(raw) : null });
+            }}
+            placeholder="0"
+            inputMode="numeric"
+            disabled={readOnly}
+            className={inputCls}
+          />
+        </FieldRow>
+      </div>
+
+      <div className="space-y-4 rounded-lg border-2 border-amber-400/70 bg-white/90 dark:bg-background/80 p-4">
+        <p className="text-sm font-bold text-amber-800 dark:text-amber-200 flex items-center gap-2">
+          <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-amber-500 text-xs font-bold text-white">
+            4
+          </span>
+          กลุ่มข้อมูลคำสั่งแต่งตั้ง
+        </p>
+        <FieldRow label="ชื่อ-นามสกุล ผู้ควบคุมงาน">
+          <input
+            value={bidResult.site_supervisor_name ?? ""}
+            onChange={(e) => onBidResultChange({ site_supervisor_name: e.target.value })}
+            placeholder="เช่น นายสมชาย ใจดี"
+            disabled={readOnly}
+            className={inputCls}
+          />
+        </FieldRow>
+        <FieldRow label="ตำแหน่ง/สังกัด">
+          <input
+            value={bidResult.site_supervisor_affiliation ?? ""}
+            onChange={(e) =>
+              onBidResultChange({ site_supervisor_affiliation: e.target.value })
+            }
+            placeholder="เช่น ช่างโยธา สังกัด สพข.6"
+            disabled={readOnly}
+            className={inputCls}
+          />
+        </FieldRow>
+        <FieldRow label="ชื่อวิศวกรผู้รับผิดชอบ">
+          <input
+            value={bidResult.site_engineer_name ?? ""}
+            onChange={(e) => onBidResultChange({ site_engineer_name: e.target.value })}
+            placeholder="เช่น นายวิศวกร รับผิดชอบ"
+            disabled={readOnly}
+            className={inputCls}
+          />
+        </FieldRow>
+      </div>
+    </div>
+  );
+}
 
 /** ขั้นตอนที่ 9 — บันทึกสาระสำคัญสัญญา (Smart ระยะเวลา/งวดงาน) */
 export function Step9DetailForm({
@@ -2896,6 +3069,14 @@ export function Step9DetailForm({
   onDocsChange,
   projectName,
   contractSignedDate = "",
+  procurementPath,
+  projectProfile,
+  onProjectProfileChange,
+  medianPrice,
+  onMedianPriceChange,
+  bidResult,
+  onBidResultChange,
+  step1Budget = 0,
 }: Step9DetailFormProps) {
   const schedule = contractSchedule ?? { ...EMPTY_STEP9_CONTRACT_SCHEDULE };
   const signedISO = contractSignedDate?.trim() || "";
@@ -3429,6 +3610,16 @@ export function Step10DetailForm({
                     >
                       {statusLabel}
                     </span>
+                    {row.progress_cumulative_units != null &&
+                      Number.isFinite(row.progress_cumulative_units) && (
+                        <span className="text-xs font-medium text-primary shrink-0 hidden md:inline">
+                          ผลสะสม{" "}
+                          {formatProgressWithUnit(
+                            row.progress_cumulative_units,
+                            unitLabel,
+                          )}
+                        </span>
+                      )}
                     <span
                       className={`text-xs px-2 py-0.5 rounded-full border font-medium shrink-0 ml-auto ${step10DocsCountBadgeClass(docCount)}`}
                     >

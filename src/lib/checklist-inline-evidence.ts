@@ -25,10 +25,14 @@ export type ChecklistInlineEvidence = {
   legacyDocumentTypes?: string[];
 };
 
+/** เอกสารแผนจัดซื้อจัดจ้าง — ขั้นตอนที่ 1 เท่านั้น */
+export const STEP1_ANNUAL_PLAN_DOCUMENT_TYPE =
+  "เอกสารอนุมัติโครงการ/จัดสรรงบประมาณ";
+
 const STEP1_INLINE: ChecklistInlineEvidence[] = [
   {
     checklistKey: "annual_plan_published",
-    documentType: "เอกสารอนุมัติโครงการ/จัดสรรงบประมาณ",
+    documentType: STEP1_ANNUAL_PLAN_DOCUMENT_TYPE,
     uploadLabel: "แนบเอกสารอนุมัติโครงการ/จัดสรรงบ",
     filePolicyId: "pdf_only",
     uploadDriven: true,

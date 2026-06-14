@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as RegisterRouteImport } from './routes/register'
 import { Route as ProjectsRouteImport } from './routes/projects'
+import { Route as ProcurementRouteImport } from './routes/procurement'
 import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as ExecutiveRouteImport } from './routes/executive'
@@ -35,6 +36,11 @@ const RegisterRoute = RegisterRouteImport.update({
 const ProjectsRoute = ProjectsRouteImport.update({
   id: '/projects',
   path: '/projects',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProcurementRoute = ProcurementRouteImport.update({
+  id: '/procurement',
+  path: '/procurement',
   getParentRoute: () => rootRouteImport,
 } as any)
 const OnboardingRoute = OnboardingRouteImport.update({
@@ -91,6 +97,7 @@ export interface FileRoutesByFullPath {
   '/executive': typeof ExecutiveRoute
   '/login': typeof LoginRoute
   '/onboarding': typeof OnboardingRoute
+  '/procurement': typeof ProcurementRoute
   '/projects': typeof ProjectsRoute
   '/register': typeof RegisterRoute
   '/settings': typeof SettingsRoute
@@ -105,6 +112,7 @@ export interface FileRoutesByTo {
   '/executive': typeof ExecutiveRoute
   '/login': typeof LoginRoute
   '/onboarding': typeof OnboardingRoute
+  '/procurement': typeof ProcurementRoute
   '/projects': typeof ProjectsRoute
   '/register': typeof RegisterRoute
   '/settings': typeof SettingsRoute
@@ -120,6 +128,7 @@ export interface FileRoutesById {
   '/executive': typeof ExecutiveRoute
   '/login': typeof LoginRoute
   '/onboarding': typeof OnboardingRoute
+  '/procurement': typeof ProcurementRoute
   '/projects': typeof ProjectsRoute
   '/register': typeof RegisterRoute
   '/settings': typeof SettingsRoute
@@ -136,6 +145,7 @@ export interface FileRouteTypes {
     | '/executive'
     | '/login'
     | '/onboarding'
+    | '/procurement'
     | '/projects'
     | '/register'
     | '/settings'
@@ -150,6 +160,7 @@ export interface FileRouteTypes {
     | '/executive'
     | '/login'
     | '/onboarding'
+    | '/procurement'
     | '/projects'
     | '/register'
     | '/settings'
@@ -164,6 +175,7 @@ export interface FileRouteTypes {
     | '/executive'
     | '/login'
     | '/onboarding'
+    | '/procurement'
     | '/projects'
     | '/register'
     | '/settings'
@@ -179,6 +191,7 @@ export interface RootRouteChildren {
   ExecutiveRoute: typeof ExecutiveRoute
   LoginRoute: typeof LoginRoute
   OnboardingRoute: typeof OnboardingRoute
+  ProcurementRoute: typeof ProcurementRoute
   ProjectsRoute: typeof ProjectsRoute
   RegisterRoute: typeof RegisterRoute
   SettingsRoute: typeof SettingsRoute
@@ -208,6 +221,13 @@ declare module '@tanstack/react-router' {
       path: '/projects'
       fullPath: '/projects'
       preLoaderRoute: typeof ProjectsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/procurement': {
+      id: '/procurement'
+      path: '/procurement'
+      fullPath: '/procurement'
+      preLoaderRoute: typeof ProcurementRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/onboarding': {
@@ -283,6 +303,7 @@ const rootRouteChildren: RootRouteChildren = {
   ExecutiveRoute: ExecutiveRoute,
   LoginRoute: LoginRoute,
   OnboardingRoute: OnboardingRoute,
+  ProcurementRoute: ProcurementRoute,
   ProjectsRoute: ProjectsRoute,
   RegisterRoute: RegisterRoute,
   SettingsRoute: SettingsRoute,

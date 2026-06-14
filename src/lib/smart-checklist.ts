@@ -35,6 +35,7 @@ import {
   getChecklistEvidenceIssues,
   type EvidenceValidationContext,
 } from "@/lib/form-audit-trail";
+import { STEP1_ANNUAL_PLAN_DOCUMENT_TYPE } from "@/lib/checklist-inline-evidence";
 
 export type StepDocRef = { document_type: string };
 
@@ -51,9 +52,9 @@ export type SmartChecklistItem<K extends string = string> = {
 const STEP_CHECKLIST_MODES: Record<number, Record<string, ChecklistMode>> = {
   1: {
     budget_allocated_confirmed: "auto",
-    annual_plan_published: "manual",
+    annual_plan_published: "auto",
     egp_plan_code_verified: "auto",
-    project_name_and_type_verified: "manual",
+    project_name_and_type_verified: "auto",
     responsible_officer_confirmed: "auto",
   },
   2: {
@@ -395,9 +396,12 @@ export function computeAutoChecklistState(ctx: SmartChecklistAutoContext): Recor
   if (stepNumber === 1) {
     const budgetVal = parseBudgetInput(ctx.budget ?? "");
     auto.budget_allocated_confirmed = !!budgetVal && budgetVal > 0;
+    auto.annual_plan_published = uploaded.includes(STEP1_ANNUAL_PLAN_DOCUMENT_TYPE);
     auto.egp_plan_code_verified = !!ctx.egpCode?.trim();
     auto.project_name_and_type_verified =
-      !!ctx.projectName?.trim() && !!ctx.method?.trim();
+      !!ctx.projectName?.trim() &&
+      !!ctx.method?.trim() &&
+      !!ctx.egpCode?.trim();
     auto.responsible_officer_confirmed = !!responsible;
     return auto;
   }

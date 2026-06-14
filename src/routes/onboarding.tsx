@@ -2,6 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Check, Loader2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { ProvinceSearchSelect } from "@/components/ProvinceSearchSelect";
 import { THAI_PROVINCES } from "@/lib/thai-provinces";
 
 export const Route = createFileRoute("/onboarding")({
@@ -121,7 +122,14 @@ function OnboardingPage() {
                 <TextInput label="ชื่อหน่วยงาน" value={orgName} onChange={setOrgName} />
                 <TextInput label="รหัสหน่วยงาน (ถ้ามี)" value={orgCode} onChange={setOrgCode} />
                 <SelectInput label="ประเภท" value={deptType} onChange={setDeptType} options={DEPT_TYPES} />
-                <SelectInput label="จังหวัด" value={province} onChange={setProvince} options={THAI_PROVINCES} />
+                <div>
+                  <label className="block text-sm font-medium mb-1.5">จังหวัด</label>
+                  <ProvinceSearchSelect
+                    value={province}
+                    onChange={setProvince}
+                    allowClear={false}
+                  />
+                </div>
               </div>
               {error && <p className="text-sm text-destructive mt-3">{error}</p>}
               <div className="flex gap-3 mt-6">

@@ -1,8 +1,6 @@
 /** ตัวเลือกวิธีจัดซื้อในฟอร์มขั้นตอนที่ 1 (3 วิธีหลัก) */
-import {
-  buildStep4EvidenceFieldValues,
-  getChecklistEvidenceIssues,
-} from "@/lib/form-audit-trail";
+import { buildStep4EvidenceFieldValues, getChecklistEvidenceIssues } from "@/lib/form-audit-trail";
+import { STEP1_ANNUAL_PLAN_DOCUMENT_TYPE } from "@/lib/checklist-inline-evidence";
 import { STEP3_DOC, STEP4_DOC, STEP5_DOC, STEP6_DOC, STEP7_DOC } from "@/lib/step-doc-types";
 import {
   buildEffectiveChecklist,
@@ -35,6 +33,11 @@ import {
   isStep9EgpPublicationTooLate,
 } from "@/lib/step9-guideline";
 import { formatThaiDateSlash } from "@/lib/utils";
+import {
+  buildProjectStep1ProfileFields,
+  type Step1ProjectProfile,
+} from "@/lib/project-profile";
+import { isExternalProcurement } from "@/lib/procurement-path";
 
 export const STEP1_METHOD_OPTIONS = [
   { value: "e_bidding", label: "วิธีประกวดราคาอิเล็กทรอนิกส์ (e-bidding)" },
@@ -1313,22 +1316,15 @@ export function countStep1ChecklistDone(checklist: Step1Checklist): number {
   return STEP1_CHECKLIST_ITEMS.filter((item) => checklist[item.key]).length;
 }
 
-/** ปลดล็อกช่องรหัส e-GP — Manual ข้อ 2 + Auto/Manual รหัส e-GP พร้อม */
+/** ปลดล็อกช่องรหัส e-GP — เมื่อแนบหลักฐานแผนจัดซื้อจัดจ้าง (ข้อ 2) แล้ว */
 export function isStep1EgpCodeUnlocked(
-  checklist: Step1Checklist,
-  opts?: { egpCode?: string },
+  _checklist: Step1Checklist,
+  opts?: { hasAnnualPlanDoc?: boolean; stepDocs?: Array<{ document_type: string }> },
 ): boolean {
-  const egpReady = !!opts?.egpCode?.trim() || checklist.egp_plan_code_verified;
-  return checklist.annual_plan_published && egpReady;
+  return !!(opts?.hasAnnualPlanDoc || hasStep1AnnualPlanDoc(opts?.stepDocs));
 }
 
 export type Step1ComplianceIssue = { id: string; message: string };
-
-/** เอกสารบังคับขั้นตอนที่ 1 — ใช้ใน Compliance Gate */
-export const STEP1_REQUIRED_DOCS = {
-  BOQ: "แบบรูปรายการงานก่อสร้าง (BOQ)",
-  OFFICER_APPOINTMENT: "คำสั่งแต่งตั้งผู้รับผิดชอบงาน e-GP",
-} as const;
 
 /** เอกสารบังคับขั้นตอนที่ 2 — ใช้ใน Compliance Gate */
 export const STEP2_REQUIRED_DOCS = {
@@ -1336,6 +1332,16 @@ export const STEP2_REQUIRED_DOCS = {
   MARKET_QUOTES: "ใบเสนอราคาท้องตลาดอย่างน้อย 3 ราย",
 } as const;
 
+export function hasStep1AnnualPlanDoc(
+  stepDocs?: Array<{ document_type: string }>,
+): boolean {
+  return (
+    stepDocs?.some((d) => d.document_type === STEP1_ANNUAL_PLAN_DOCUMENT_TYPE) ??
+    false
+  );
+}
+
+/** Compliance Gate ขั้นตอนที่ 1 — อิง Smart Checklist effective เท่านั้น (ไม่บังคับ BOQ/คำสั่งแต่งตั้ง e-GP) */
 export function getStep1ComplianceIssues(
   checklist: Step1Checklist,
   opts: {
@@ -1348,94 +1354,39 @@ export function getStep1ComplianceIssues(
   },
   autoStates?: Record<string, boolean>,
 ): Step1ComplianceIssue[] {
-  const issues: Step1ComplianceIssue[] = [];
-  const auto =
-    autoStates ??
-    computeAutoChecklistState({
-      stepNumber: 1,
-      egpCode: opts.egpCode,
-      budget: opts.budget,
-      responsibleName: opts.responsibleName,
-      projectName: opts.projectName,
-      method: opts.method,
-    });
+  const uploaded = opts.stepDocs?.map((d) => d.document_type) ?? [];
+  const auto = computeAutoChecklistState({
+    stepNumber: 1,
+    egpCode: opts.egpCode,
+    budget: opts.budget,
+    responsibleName: opts.responsibleName,
+    projectName: opts.projectName,
+    method: opts.method,
+    uploadedDocTypes: uploaded,
+  });
+  // รวม autoStates จาก UI (ถ้ามี) แต่บังคับ sync เอกสารแผนจาก stepDocs เสมอ
+  const mergedAuto = {
+    ...(autoStates ?? {}),
+    ...auto,
+    annual_plan_published:
+      hasStep1AnnualPlanDoc(opts.stepDocs) || !!auto.annual_plan_published,
+  };
   const effective = buildEffectiveChecklist(
     1,
     checklist as Record<string, boolean>,
-    auto,
+    mergedAuto,
     opts.stepDocs,
   );
 
+  const issues: Step1ComplianceIssue[] = [];
   STEP1_CHECKLIST_ITEMS.forEach((item, index) => {
     if (!effective[item.key]) {
-      const prefix =
-        auto[item.key] !== undefined && !auto[item.key]
-          ? "ระบบตรวจพบยังไม่ครบ"
-          : "ยังไม่ได้ติ๊กยืนยัน";
       issues.push({
         id: `checklist-${item.key}`,
-        message: `${prefix} ข้อที่ ${index + 1}: ${item.label}`,
+        message: `ยังไม่ครบ ข้อที่ ${index + 1}: ${item.label}`,
       });
     }
   });
-
-  if (!opts.projectName.trim()) {
-    issues.push({
-      id: "project_name",
-      message: 'กรุณาระบุ "ชื่อโครงการ"',
-    });
-  }
-  if (!opts.method.trim()) {
-    issues.push({
-      id: "method",
-      message: 'กรุณาเลือก "ประเภทโครงการ (วิธีจัดซื้อจัดจ้าง)"',
-    });
-  }
-
-  const uploaded =
-    opts.stepDocs?.map((d) => d.document_type) ?? [];
-  issues.push(
-    ...getChecklistEvidenceIssues(1, checklist as Record<string, boolean>, {
-      fieldValues: {
-        project_name: opts.projectName,
-        method: opts.method,
-      },
-      uploadedDocTypes: uploaded,
-    }),
-  );
-
-  if (!uploaded.includes(STEP1_REQUIRED_DOCS.BOQ)) {
-    issues.push({
-      id: "boq_doc",
-      message: `กรุณาแนบเอกสาร "${STEP1_REQUIRED_DOCS.BOQ}" ใน Document Hub`,
-    });
-  }
-  if (!uploaded.includes(STEP1_REQUIRED_DOCS.OFFICER_APPOINTMENT)) {
-    issues.push({
-      id: "officer_appointment_doc",
-      message: `กรุณาแนบเอกสาร "${STEP1_REQUIRED_DOCS.OFFICER_APPOINTMENT}" ใน Document Hub`,
-    });
-  }
-
-  if (!opts.egpCode.trim()) {
-    issues.push({
-      id: "egp_code",
-      message: 'กรุณาระบุ "รหัสแผนจัดซื้อจัดจ้าง e-GP"',
-    });
-  }
-  const budgetVal = parseBudgetInput(opts.budget);
-  if (!budgetVal || budgetVal <= 0) {
-    issues.push({
-      id: "budget",
-      message: "กรุณาระบุวงเงินงบประมาณ (บาท)",
-    });
-  }
-  if (!opts.responsibleName.trim()) {
-    issues.push({
-      id: "responsible_officer",
-      message: "กรุณาระบุเจ้าหน้าที่ผู้รับผิดชอบโครงการ",
-    });
-  }
 
   return issues;
 }
@@ -3146,6 +3097,118 @@ export function loadStep9FormFromNote(note: string | null): Step9FormData {
 
 export type Step9ComplianceIssue = { id: string; message: string };
 
+/** ข้อมูลจากกล่องพิเศษ Step 9 — ซิงค์เทียบเท่า Step 1 / 2 / 4 (โหมด external) */
+export type Step9ExternalCaptureInput = {
+  profile: Step1ProjectProfile;
+  medianPrice: Step2MedianPrice;
+  bidResult: Pick<
+    Step4BidResult,
+    | "site_supervisor_name"
+    | "site_supervisor_affiliation"
+    | "site_engineer_name"
+    | "final_agreed_amount"
+  >;
+};
+
+export function getStep9ExternalCaptureComplianceIssues(
+  capture: Step9ExternalCaptureInput,
+): Step9ComplianceIssue[] {
+  const issues: Step9ComplianceIssue[] = [];
+  const { profile, medianPrice, bidResult } = capture;
+
+  if (!profile.site_village.trim()) {
+    issues.push({ id: "ext_site_village", message: "กรุณาระบุชื่อบ้าน/หมู่บ้าน (กล่องบันทึกสัญญาส่วนกลาง)" });
+  }
+  if (profile.site_moo == null || !Number.isFinite(profile.site_moo) || profile.site_moo <= 0) {
+    issues.push({ id: "ext_site_moo", message: "กรุณาระบุหมู่ที่ (กล่องบันทึกสัญญาส่วนกลาง)" });
+  }
+  if (!profile.site_subdistrict.trim()) {
+    issues.push({ id: "ext_site_subdistrict", message: "กรุณาระบุตำบล (กล่องบันทึกสัญญาส่วนกลาง)" });
+  }
+  if (!profile.site_district.trim()) {
+    issues.push({ id: "ext_site_district", message: "กรุณาระบุอำเภอ (กล่องบันทึกสัญญาส่วนกลาง)" });
+  }
+  if (!profile.site_province.trim()) {
+    issues.push({ id: "ext_site_province", message: "กรุณาระบุจังหวัด (กล่องบันทึกสัญญาส่วนกลาง)" });
+  }
+  if (!profile.activity_type.trim()) {
+    issues.push({ id: "ext_activity_type", message: "กรุณาระบุประเภทกิจกรรม/งาน (กล่องบันทึกสัญญาส่วนกลาง)" });
+  }
+  if (!profile.result_unit.trim()) {
+    issues.push({ id: "ext_result_unit", message: "กรุณาเลือกหน่วยวัดผลสัมฤทธิ์ (กล่องบันทึกสัญญาส่วนกลาง)" });
+  }
+
+  const allocated = medianPrice.allocated_budget;
+  if (allocated == null || !Number.isFinite(allocated) || allocated <= 0) {
+    issues.push({
+      id: "ext_allocated_budget",
+      message: "กรุณาระบุวงเงินงบประมาณที่ได้รับจัดสรร (กล่องบันทึกสัญญาส่วนกลาง)",
+    });
+  }
+  const median = medianPrice.approved_median_price;
+  if (median == null || !Number.isFinite(median) || median <= 0) {
+    issues.push({
+      id: "ext_approved_median_price",
+      message: "กรุณาระบุมูลค่าราคากลาง (กล่องบันทึกสัญญาส่วนกลาง)",
+    });
+  }
+  const contractAmount = bidResult.final_agreed_amount;
+  if (contractAmount == null || !Number.isFinite(contractAmount) || contractAmount <= 0) {
+    issues.push({
+      id: "ext_contract_amount",
+      message: "กรุณาระบุราคาประมูลตามสัญญาจ้างจริง (กล่องบันทึกสัญญาส่วนกลาง)",
+    });
+  }
+
+  if (!bidResult.site_supervisor_name?.trim()) {
+    issues.push({
+      id: "ext_site_supervisor_name",
+      message: "กรุณาระบุชื่อ-นามสกุล ผู้ควบคุมงาน (กล่องบันทึกสัญญาส่วนกลาง)",
+    });
+  }
+  if (!bidResult.site_supervisor_affiliation?.trim()) {
+    issues.push({
+      id: "ext_site_supervisor_affiliation",
+      message: "กรุณาระบุตำแหน่ง/สังกัด ผู้ควบคุมงาน (กล่องบันทึกสัญญาส่วนกลาง)",
+    });
+  }
+  if (!bidResult.site_engineer_name?.trim()) {
+    issues.push({
+      id: "ext_site_engineer_name",
+      message: "กรุณาระบุชื่อวิศวกรผู้รับผิดชอบ (กล่องบันทึกสัญญาส่วนกลาง)",
+    });
+  }
+
+  return issues;
+}
+
+/** บันทึกลง projects — ข้อมูลกล่องพิเศษ Step 9 (โหมด external) */
+export function buildProjectStep9ExternalCaptureFields(capture: Step9ExternalCaptureInput) {
+  const { profile, medianPrice, bidResult } = capture;
+  const allocated = medianPrice.allocated_budget;
+  const normalizedAllocated =
+    allocated != null && Number.isFinite(allocated) && allocated > 0 ? allocated : null;
+  const price = medianPrice.approved_median_price;
+  const normalizedPrice =
+    price != null && Number.isFinite(price) && price > 0 ? price : null;
+  const finalAmount = bidResult.final_agreed_amount;
+  const normalizedFinal =
+    finalAmount != null && Number.isFinite(finalAmount) && finalAmount > 0
+      ? finalAmount
+      : null;
+
+  return {
+    ...buildProjectStep1ProfileFields(profile),
+    allocated_budget: normalizedAllocated,
+    approved_median_price: normalizedPrice,
+    estimated_price: normalizedPrice,
+    site_supervisor_name: bidResult.site_supervisor_name?.trim() || null,
+    site_supervisor_affiliation: bidResult.site_supervisor_affiliation?.trim() || null,
+    site_engineer_name: bidResult.site_engineer_name?.trim() || null,
+    final_agreed_amount: normalizedFinal,
+  };
+}
+
 export function getStep9ComplianceIssues(
   schedule: Step9ContractSchedule,
   manualChecklist: Record<string, boolean> | null | undefined,
@@ -3153,6 +3216,8 @@ export function getStep9ComplianceIssues(
     responsibleName: string;
     stepDocs?: Array<{ document_type: string }>;
     contractSignedDate?: string | null;
+    procurementPath?: string | null;
+    externalCapture?: Step9ExternalCaptureInput;
   },
   autoStates?: Record<string, boolean>,
 ): Step9ComplianceIssue[] {
@@ -3253,6 +3318,10 @@ export function getStep9ComplianceIssues(
       id: "responsible_officer",
       message: "กรุณาระบุเจ้าหน้าที่ผู้รับผิดชอบโครงการ",
     });
+  }
+
+  if (isExternalProcurement(opts.procurementPath) && opts.externalCapture) {
+    issues.push(...getStep9ExternalCaptureComplianceIssues(opts.externalCapture));
   }
 
   return issues;

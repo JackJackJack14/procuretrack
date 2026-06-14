@@ -56,29 +56,6 @@ export type EvidenceComplianceIssue = { id: string; message: string };
 
 /** ผูก Checklist ↔ หลักฐาน — ขั้น 1–10 */
 export const CHECKLIST_EVIDENCE_RULES: ChecklistEvidenceRule[] = [
-  // Step 1
-  {
-    stepNumber: 1,
-    checklistKey: "annual_plan_published",
-    checklistIndex: 2,
-    enforce: "when_checked",
-    binding: {
-      kind: "document",
-      documentTypes: ["เอกสารอนุมัติโครงการ/จัดสรรงบประมาณ"],
-      message: "ข้อที่ 2: กรุณาแนบเอกสารอนุมัติโครงการ/จัดสรรงบประมาณใน Document Hub",
-    },
-  },
-  {
-    stepNumber: 1,
-    checklistKey: "project_name_and_type_verified",
-    checklistIndex: 3,
-    enforce: "when_checked",
-    binding: {
-      kind: "fields",
-      fieldKeys: ["project_name", "method"],
-      message: "ข้อที่ 3: กรุณาระบุชื่อโครงการและวิธีการจัดซื้อจัดจ้างในฟอร์ม",
-    },
-  },
   // Step 2
   {
     stepNumber: 2,

@@ -1,9 +1,4 @@
-/** ตัวเลือก สพข. 1–12 และหน่วยวัดผลสัมฤทธิ์ — ใช้ร่วม Step 1 / รายงานสรุป */
-export const DISTRICT_OFFICE_OPTIONS = Array.from({ length: 12 }, (_, i) => {
-  const n = i + 1;
-  return { value: `สพข.${n}`, label: `สพข.${n}` };
-});
-
+/** ตัวเลือกหน่วยวัดผลสัมฤทธิ์ — ใช้ร่วม Step 1 / รายงานสรุป */
 export const PROJECT_RESULT_UNIT_OPTIONS = [
   { value: "ไร่", label: "ไร่" },
   { value: "บ่อ", label: "บ่อ" },
@@ -12,6 +7,31 @@ export const PROJECT_RESULT_UNIT_OPTIONS = [
 ] as const;
 
 export type ProjectResultUnit = (typeof PROJECT_RESULT_UNIT_OPTIONS)[number]["value"];
+
+/** ค่าใน dropdown เมื่อเลือก «อื่น ๆ (พิมพ์ระบุเอง)» */
+export const PROJECT_RESULT_UNIT_OTHER = "__other__";
+
+const PRESET_RESULT_UNITS = new Set<string>(
+  PROJECT_RESULT_UNIT_OPTIONS.map((o) => o.value),
+);
+
+export function isPresetResultUnit(unit: string | null | undefined): boolean {
+  const u = unit?.trim();
+  return !!u && PRESET_RESULT_UNITS.has(u);
+}
+
+/** แปลงค่าที่เก็บใน DB → ค่าใน `<select>` */
+export function getResultUnitDropdownValue(unit: string | null | undefined): string {
+  const u = unit?.trim() ?? "";
+  if (!u) return "";
+  if (isPresetResultUnit(u)) return u;
+  return PROJECT_RESULT_UNIT_OTHER;
+}
+
+/** หน่วยที่ใช้แสดงผล (preset หรือข้อความที่พิมพ์เอง) */
+export function resolveResultUnitLabel(unit: string | null | undefined): string {
+  return unit?.trim() ?? "";
+}
 
 /** ข้อมูลโปรไฟล์โครงการ — กรอกในขั้นตอนที่ 1 บันทึกลง projects */
 export type Step1ProjectProfile = {
