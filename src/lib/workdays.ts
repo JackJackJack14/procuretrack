@@ -301,17 +301,38 @@ export function computeAppealDeadlineISO(winnerAnnouncementISO: string): string 
   return toISODate(addWorkdays(start, APPEAL_PERIOD_WORKDAYS));
 }
 
-/** วันเริ่มลงนามสัญญาได้ — วันทำการถัดจากวันสิ้นสุดอุทธรณ์ */
-export function computeContractEarliestISO(winnerAnnouncementISO: string): string {
-  const deadlineISO = computeAppealDeadlineISO(winnerAnnouncementISO);
-  if (!deadlineISO) return "";
-  const d = parseISODateLocal(deadlineISO);
+/** วันทำการแรกหลังพ้นระยะอุทธรณ์ — จากวันสิ้นสุดอุทธรณ์ (yyyy-mm-dd) */
+export function computeContractEarliestFromAppealDeadlineISO(
+  appealDeadlineISO: string,
+): string {
+  const d = parseISODateLocal(appealDeadlineISO?.trim() ?? "");
   if (!d) return "";
   d.setDate(d.getDate() + 1);
   while (!isWorkday(d)) {
     d.setDate(d.getDate() + 1);
   }
   return toISODate(d);
+}
+
+/** วันเริ่มลงนามสัญญาได้ — วันทำการถัดจากวันสิ้นสุดอุทธรณ์ */
+export function computeContractEarliestISO(winnerAnnouncementISO: string): string {
+  const deadlineISO = computeAppealDeadlineISO(winnerAnnouncementISO);
+  if (!deadlineISO) return "";
+  return computeContractEarliestFromAppealDeadlineISO(deadlineISO);
+}
+
+/**
+ * วันลงนาม/ออกหนังสือก่อนพ้นระยะอุทธรณ์ (7 วันทำการจากวันประกาศผล)
+ * — ใช้กับขั้นตอนที่ 7 และ 8
+ */
+export function isContractActionBeforeAppealPeriodEnds(
+  actionDateISO: string,
+  appealDeadlineISO: string,
+): boolean {
+  const action = actionDateISO?.trim() ?? "";
+  const earliest = computeContractEarliestFromAppealDeadlineISO(appealDeadlineISO);
+  if (!action || !earliest) return false;
+  return action < earliest;
 }
 
 /**

@@ -658,6 +658,7 @@ export type Database = {
           id: string
           method: string
           median_price_approval_date: string | null
+          median_approval_letter_no: string | null
           name: string
           organization_id: string
           procurement_agency: string | null
@@ -718,6 +719,7 @@ export type Database = {
           id?: string
           method?: string
           median_price_approval_date?: string | null
+          median_approval_letter_no?: string | null
           name: string
           organization_id: string
           procurement_agency?: string | null
@@ -778,6 +780,7 @@ export type Database = {
           id?: string
           method?: string
           median_price_approval_date?: string | null
+          median_approval_letter_no?: string | null
           name?: string
           organization_id?: string
           procurement_agency?: string | null

@@ -1,7 +1,9 @@
 /** ประเภทเอกสารขั้นตอนที่ 2 — ผูกกับฟิลด์ฟอร์ม */
 export const STEP2_DOC = {
   APPOINTMENT_ORDER: "คำสั่งแต่งตั้งคณะกรรมการจัดทำ TOR และราคากลาง",
+  BOQ: "แบบรูปรายการงานก่อสร้าง (BOQ)",
   MEDIAN_PRICE_BG06: "แบบรายงานผลการกำหนดราคากลาง (บก.06)",
+  INTEGRITY_LETTER: "หนังสือแสดงความบริสุทธิ์ใจของกรรมการ",
   EVALUATION_INSPECTION_ORDER: "คำสั่งแต่งตั้งคณะกรรมการพิจารณาผลและตรวจรับ",
   MARKET_QUOTES: "ใบเสนอราคาท้องตลาดอย่างน้อย 3 ราย",
 } as const;
@@ -9,14 +11,83 @@ export const STEP2_DOC = {
 export const STEP2_APPOINTMENT_ORDER_UPLOAD_LABEL =
   "📎 แนบไฟล์เอกสารคำสั่งแต่งตั้ง (PDF)";
 
+export const STEP2_BOQ_UPLOAD_LABEL =
+  "📎 แนบไฟล์แบบรูปรายการงานก่อสร้าง (BOQ) (PDF)";
+
 export const STEP2_BG06_UPLOAD_LABEL =
   "📎 แนบไฟล์ตารางแสดงวงเงินราคากลาง (แบบ บก.06) (PDF)";
+
+export const STEP2_INTEGRITY_LETTER_UPLOAD_LABEL =
+  "📎 แนบไฟล์หนังสือแสดงความบริสุทธิ์ใจของกรรมการ (PDF)";
 
 export const STEP2_EVALUATION_INSPECTION_ORDER_UPLOAD_LABEL =
   "📎 แนบไฟล์คำสั่งแต่งตั้งคณะกรรมการพิจารณาผลและตรวจรับ (PDF)";
 
 export const STEP2_MARKET_QUOTES_UPLOAD_LABEL =
   "📎 แนบไฟล์ใบเสนอราคาท้องตลาดอย่างน้อย 3 ราย (PDF/ZIP)";
+
+const STEP2_MARKET_QUOTE_DOC_PREFIX = `${STEP2_DOC.MARKET_QUOTES} (รายที่ `;
+
+/** ประเภทเอกสารใบเสนอราคาท้องตลาด — แยกตามลำดับซัพพลายเออร์ (1-based) */
+export function step2MarketQuoteDocType(index: number): string {
+  return `${STEP2_DOC.MARKET_QUOTES} (รายที่ ${index + 1})`;
+}
+
+export function isStep2MarketQuoteDocType(documentType: string): boolean {
+  return (
+    documentType === STEP2_DOC.MARKET_QUOTES ||
+    documentType.startsWith(STEP2_MARKET_QUOTE_DOC_PREFIX)
+  );
+}
+
+/** คืนค่า index 0-based จาก document_type — null ถ้าเป็นไฟล์รวมแบบเก่า */
+export function parseStep2MarketQuoteIndexFromDocType(documentType: string): number | null {
+  if (documentType === STEP2_DOC.MARKET_QUOTES) return null;
+  const m = /รายที่\s*(\d+)/.exec(documentType);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) && n > 0 ? n - 1 : null;
+}
+
+export function step2MarketQuoteUploadLabel(index: number, supplierName?: string): string {
+  const name = supplierName?.trim();
+  if (name) {
+    return `📎 แนบใบเสนอราคา — ${name} (PDF)`;
+  }
+  return `📎 แนบใบเสนอราคารายที่ ${index + 1} (PDF)`;
+}
+
+export const STEP2_MARKET_QUOTE_REQUIRED_COUNT = 3;
+
+/** นับไฟล์ใบเสนอราคาที่แนบแยกรายซัพพลายเออร์ */
+export function countStep2MarketQuoteDocsUploaded(
+  stepDocs?: Array<{ document_type: string }>,
+  quoteCount = STEP2_MARKET_QUOTE_REQUIRED_COUNT,
+): number {
+  if (!stepDocs?.length) return 0;
+  let count = 0;
+  for (let i = 0; i < quoteCount; i++) {
+    if (stepDocs.some((d) => d.document_type === step2MarketQuoteDocType(i))) {
+      count++;
+    }
+  }
+  return count;
+}
+
+/** ตรวจว่าแนบใบเสนอราคาครบ — รองรับไฟล์รวมแบบเก่า (ก่อนแยกราย) */
+export function hasStep2MarketQuotesDoc(
+  stepDocs?: Array<{ document_type: string }>,
+  quoteCount = STEP2_MARKET_QUOTE_REQUIRED_COUNT,
+): boolean {
+  if (countStep2MarketQuoteDocsUploaded(stepDocs, quoteCount) >= quoteCount) {
+    return true;
+  }
+  return (
+    quoteCount >= 3 &&
+    countStep2MarketQuoteDocsUploaded(stepDocs, quoteCount) === 0 &&
+    (stepDocs?.some((d) => d.document_type === STEP2_DOC.MARKET_QUOTES) ?? false)
+  );
+}
 
 /** ประเภทเอกสารขั้นตอนที่ 3 — ผูกกับฟิลด์ฟอร์ม (Single Page Workflow) */
 export const STEP3_DOC = {

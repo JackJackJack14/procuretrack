@@ -35,7 +35,7 @@ import {
   getChecklistEvidenceIssues,
   type EvidenceValidationContext,
 } from "@/lib/form-audit-trail";
-import { STEP1_ANNUAL_PLAN_DOCUMENT_TYPE } from "@/lib/checklist-inline-evidence";
+import { hasStep1PlanPublicationDoc } from "@/lib/checklist-inline-evidence";
 
 export type StepDocRef = { document_type: string };
 
@@ -58,12 +58,11 @@ const STEP_CHECKLIST_MODES: Record<number, Record<string, ChecklistMode>> = {
     responsible_officer_confirmed: "auto",
   },
   2: {
-    committee_composition_verified: "auto",
-    committee_qualifications_verified: "manual",
-    appointment_order_signed: "auto",
-    median_price_calculated: "auto",
-    median_price_director_signed: "auto",
-    bg06_table_prepared: "auto",
+    tor_median_committee_appointed: "auto",
+    integrity_letter_signed: "auto",
+    median_price_calculated_signed: "auto",
+    median_price_director_approved: "auto",
+    bg06_table_verified: "auto",
   },
   3: {
     draft_announcement_standard_compliant: "manual",
@@ -342,6 +341,7 @@ export type SmartChecklistAutoContext = {
   medianPriceApprovalDate?: string | null;
   hasAppointmentOrderDoc?: boolean;
   hasBg06Doc?: boolean;
+  hasIntegrityLetterDoc?: boolean;
   hasMemoDoc?: boolean;
   hasDraftTorDoc?: boolean;
   hasDraftAnnouncementDoc?: boolean;
@@ -396,7 +396,9 @@ export function computeAutoChecklistState(ctx: SmartChecklistAutoContext): Recor
   if (stepNumber === 1) {
     const budgetVal = parseBudgetInput(ctx.budget ?? "");
     auto.budget_allocated_confirmed = !!budgetVal && budgetVal > 0;
-    auto.annual_plan_published = uploaded.includes(STEP1_ANNUAL_PLAN_DOCUMENT_TYPE);
+    auto.annual_plan_published = hasStep1PlanPublicationDoc(
+      (ctx.uploadedDocTypes ?? []).map((t) => ({ document_type: t })),
+    );
     auto.egp_plan_code_verified = !!ctx.egpCode?.trim();
     auto.project_name_and_type_verified =
       !!ctx.projectName?.trim() &&
@@ -410,25 +412,23 @@ export function computeAutoChecklistState(ctx: SmartChecklistAutoContext): Recor
     const committees = ctx.committees;
     const order = ctx.committeeOrder;
     const median = ctx.medianPrice;
-    if (committees) {
-      if (committees.appointment_mode === "combined") {
-        auto.committee_composition_verified =
-          countFilledCommitteeMembers(committees.combined_members) >= 3;
-      } else {
-        auto.committee_composition_verified =
-          countFilledCommitteeMembers(committees.tor_members) >= 3 &&
-          countFilledCommitteeMembers(committees.median_price_members) >= 3;
-      }
-    }
-    auto.appointment_order_signed =
+    const torMedianMembersOk = committees
+      ? committees.appointment_mode === "combined"
+        ? countFilledCommitteeMembers(committees.combined_members) >= 3
+        : countFilledCommitteeMembers(committees.tor_members) >= 3 &&
+          countFilledCommitteeMembers(committees.median_price_members) >= 3
+      : false;
+    auto.tor_median_committee_appointed =
+      torMedianMembersOk &&
       !!order?.appointment_order_no?.trim() &&
       !!order?.appointment_order_date?.trim() &&
       !!ctx.hasAppointmentOrderDoc;
+    auto.integrity_letter_signed = !!ctx.hasIntegrityLetterDoc;
     const price = median?.approved_median_price;
-    auto.median_price_calculated =
+    auto.median_price_calculated_signed =
       price != null && Number.isFinite(price) && price > 0;
-    auto.median_price_director_signed = !!median?.median_price_approval_date?.trim();
-    auto.bg06_table_prepared = !!ctx.hasBg06Doc;
+    auto.median_price_director_approved = !!median?.median_approval_letter_no?.trim();
+    auto.bg06_table_verified = !!ctx.hasBg06Doc;
     return auto;
   }
 

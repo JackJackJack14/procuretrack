@@ -69,3 +69,12 @@ export function shouldShowStep3HearingForm(
   if (tier === "discretionary") return hearingProceed;
   return false;
 }
+
+export const STEP3_MANDATORY_HEARING_BLOCK_MSG =
+  "โครงการวงเงินเกิน 10 ล้านบาท ต้องจัดรับฟังความคิดเห็นและกรอกรายงานผลการรับฟังความคิดเห็นให้ครบถ้วนก่อนผ่านด่าน";
+
+export const STEP3_DISCRETIONARY_HEARING_WARNING_MSG =
+  "โครงการวงเงินไม่เกิน 10 ล้านบาท — การจัดรับฟังความคิดเห็นอยู่ในดุลยพินิจของหัวหน้าหน่วยงาน";
+
+export const STEP3_FEEDBACK_SOFT_WARNING_MSG =
+  "ยังไม่ได้กรอก/แนบรายงานผลการรับฟังความคิดเห็น — โครงการวงเงินไม่เกิน 10 ล้านบาท อยู่ในดุลยพินิจของหัวหน้าหน่วยงาน";

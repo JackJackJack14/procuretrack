@@ -25,37 +25,56 @@ export type ChecklistInlineEvidence = {
   legacyDocumentTypes?: string[];
 };
 
-/** เอกสารแผนจัดซื้อจัดจ้าง — ขั้นตอนที่ 1 เท่านั้น */
-export const STEP1_ANNUAL_PLAN_DOCUMENT_TYPE =
-  "เอกสารอนุมัติโครงการ/จัดสรรงบประมาณ";
+/** เอกสารประกาศแผนจัดซื้อจัดจ้าง — ขั้นตอนที่ 1 */
+export const STEP1_EGP_PLAN_PUBLICATION_DOCUMENT_TYPE =
+  "เอกสารประกาศแผนจัดซื้อจัดจ้างจากระบบ e-GP";
+
+/** ชื่อประเภทเอกสารเก่าใน DB — รองรับโปรเจกต์ก่อนอัปเกรด */
+export const STEP1_LEGACY_PLAN_DOC_TYPES = [
+  "เอกสารอนุมัติโครงการ/จัดสรรงบประมาณ",
+] as const;
+
+/** @deprecated ใช้ STEP1_EGP_PLAN_PUBLICATION_DOCUMENT_TYPE */
+export const STEP1_ANNUAL_PLAN_DOCUMENT_TYPE = STEP1_EGP_PLAN_PUBLICATION_DOCUMENT_TYPE;
+
+export function hasStep1PlanPublicationDoc(
+  stepDocs?: Array<{ document_type: string }>,
+): boolean {
+  const types = new Set<string>([
+    STEP1_EGP_PLAN_PUBLICATION_DOCUMENT_TYPE,
+    ...STEP1_LEGACY_PLAN_DOC_TYPES,
+  ]);
+  return stepDocs?.some((d) => types.has(d.document_type)) ?? false;
+}
 
 const STEP1_INLINE: ChecklistInlineEvidence[] = [
   {
     checklistKey: "annual_plan_published",
-    documentType: STEP1_ANNUAL_PLAN_DOCUMENT_TYPE,
-    uploadLabel: "แนบเอกสารอนุมัติโครงการ/จัดสรรงบ",
-    filePolicyId: "pdf_only",
+    documentType: STEP1_EGP_PLAN_PUBLICATION_DOCUMENT_TYPE,
+    uploadLabel: "แนบเอกสารประกาศแผนจัดซื้อจัดจ้างจากระบบ e-GP",
+    filePolicyId: "egp_screenshot",
     uploadDriven: true,
+    legacyDocumentTypes: [...STEP1_LEGACY_PLAN_DOC_TYPES],
   },
 ];
 
 const STEP2_INLINE: ChecklistInlineEvidence[] = [
   {
-    checklistKey: "committee_qualifications_verified",
-    documentType: "หนังสือแสดงความบริสุทธิ์ใจของกรรมการ",
+    checklistKey: "integrity_letter_signed",
+    documentType: STEP2_DOC.INTEGRITY_LETTER,
     uploadLabel: "แนบหนังสือแสดงความบริสุทธิ์ใจกรรมการ",
     filePolicyId: "pdf_only",
     uploadDriven: true,
   },
   {
-    checklistKey: "appointment_order_signed",
+    checklistKey: "tor_median_committee_appointed",
     documentType: STEP2_DOC.APPOINTMENT_ORDER,
     uploadLabel: "แนบคำสั่งแต่งตั้ง (PDF)",
     filePolicyId: "pdf_only",
     uploadDriven: true,
   },
   {
-    checklistKey: "bg06_table_prepared",
+    checklistKey: "bg06_table_verified",
     documentType: STEP2_DOC.MEDIAN_PRICE_BG06,
     uploadLabel: "แนบตารางราคากลาง บก.06",
     filePolicyId: "bg06",

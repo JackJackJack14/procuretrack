@@ -3,6 +3,10 @@
  * กฎเหล็ก: รายการ Manual-Check ที่เกี่ยวกับเอกสารทางกายภาพหรือระบบภายนอก
  * ต้องมีช่อง Upload/Input เป็นหลักฐานรองรับ — ห้ามติ๊กลอยโดยไม่มีหลักฐาน
  */
+import {
+  STEP1_EGP_PLAN_PUBLICATION_DOCUMENT_TYPE,
+  hasStep1PlanPublicationDoc,
+} from "@/lib/checklist-inline-evidence";
 import type { Step4BidResult } from "@/lib/step-form";
 import {
   STEP2_DOC,
@@ -13,6 +17,7 @@ import {
   STEP7_DOC,
   STEP8_DOC,
   STEP8_DOC_LEGACY,
+  hasStep2MarketQuotesDoc,
   isStep4CommitteeReportDocType,
   isStep5EgpWinnerDocType,
   isStep5PhysicalBoardDocType,
@@ -59,7 +64,7 @@ export const CHECKLIST_EVIDENCE_RULES: ChecklistEvidenceRule[] = [
   // Step 2
   {
     stepNumber: 2,
-    checklistKey: "committee_qualifications_verified",
+    checklistKey: "integrity_letter_signed",
     checklistIndex: 2,
     enforce: "when_checked",
     binding: {
@@ -454,6 +459,22 @@ export function hasStep6AppealEvidenceDoc(uploadedDocTypes: string[]): boolean {
   return hasStep6NoAppealEgpDoc(uploadedDocTypes);
 }
 
+/** ตรวจเอกสารบังคับขั้น 1 — สอดคล้อง Smart Checklist (รองรับชื่อเอกสารเก่าใน DB) */
+export function isStep1RequiredDocSatisfied(
+  requiredName: string,
+  uploadedTypes: string[],
+): boolean {
+  if (
+    requiredName === STEP1_EGP_PLAN_PUBLICATION_DOCUMENT_TYPE ||
+    requiredName === "เอกสารอนุมัติโครงการ/จัดสรรงบประมาณ"
+  ) {
+    return hasStep1PlanPublicationDoc(
+      uploadedTypes.map((document_type) => ({ document_type })),
+    );
+  }
+  return uploadedTypes.includes(requiredName);
+}
+
 /** ตรวจเอกสารบังคับขั้น 5 — รองรับชื่อเอกสารเก่าใน DB */
 export function isStep5RequiredDocSatisfied(
   requiredName: string,
@@ -511,10 +532,11 @@ export function getStep4RequiredAuditDocuments(): { name: string; required: bool
   ];
 }
 
-/** ตรวจเอกสารบังคับขั้น 4 — รองรับไฟล์เก่า (PDF รายงานผลการพิจารณา) */
+/** ตรวจเอกสารบังคับขั้น 4 — รองรับไฟล์เก่า (PDF รายงานผลการพิจารณา) และคำสั่งจากด่าน 2 */
 export function isStep4RequiredDocSatisfied(
   requiredName: string,
   uploadedTypes: string[],
+  step2UploadedTypes?: string[],
 ): boolean {
   if (requiredName === STEP4_DOC.EGP_BID_SUMMARY) {
     return hasStep4EgpBidSummaryDoc(uploadedTypes);
@@ -527,6 +549,25 @@ export function isStep4RequiredDocSatisfied(
   }
   if (requiredName === STEP4_DOC.COMMITTEE_EVALUATION_REPORT) {
     return hasStep4CommitteeReportDoc(uploadedTypes);
+  }
+  if (requiredName === STEP2_DOC.EVALUATION_INSPECTION_ORDER) {
+    return (
+      uploadedTypes.includes(requiredName) ||
+      (step2UploadedTypes?.includes(requiredName) ?? false)
+    );
+  }
+  return uploadedTypes.includes(requiredName);
+}
+
+/** ตรวจเอกสารบังคับขั้น 2 — รองรับใบเสนอราคาแยกรายซัพพลายเออร์ */
+export function isStep2RequiredDocSatisfied(
+  requiredName: string,
+  uploadedTypes: string[],
+): boolean {
+  if (requiredName === STEP2_DOC.MARKET_QUOTES) {
+    return hasStep2MarketQuotesDoc(
+      uploadedTypes.map((document_type) => ({ document_type })),
+    );
   }
   return uploadedTypes.includes(requiredName);
 }

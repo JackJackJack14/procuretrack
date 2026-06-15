@@ -32,6 +32,7 @@ export function getStepRollbackProjectWipe(
         approved_median_price: null,
         estimated_price: null,
         median_price_approval_date: null,
+        median_approval_letter_no: null,
       };
     case 3:
       return {

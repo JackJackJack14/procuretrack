@@ -9,7 +9,9 @@
     "build:dev": "vite build --mode development",
     "preview": "vite preview",
     "lint": "eslint .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "db:verify-executive-report": "node scripts/verify-executive-report-columns.mjs",
+    "db:apply-executive-report": "node scripts/apply-executive-report-columns.mjs"
   },
   "dependencies": {
     "@cloudflare/vite-plugin": "^1.25.5",

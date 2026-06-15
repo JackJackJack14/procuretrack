@@ -1,5 +1,6 @@
 /**
  * ไทม์ไลน์โครงการ — ใช้วันที่มีผลทางระเบียบ (Effective Date) ไม่ใช้ created_at / completed_at
+ * คำนวณแบบ pure function ต่อ projectId — ไม่เก็บ cache ระดับโมดูล
  */
 import { loadStep3FormFromNote } from "@/lib/step-form";
 import {
@@ -11,9 +12,11 @@ import {
 } from "@/lib/workdays";
 
 export type ProjectTimelineProject = {
+  id?: string;
   method: string;
   budget: number;
   current_step: number;
+  created_at?: string | null;
   committee_appointment_order_date?: string | null;
   median_price_approval_date?: string | null;
   evaluation_report_approval_date?: string | null;
@@ -34,6 +37,92 @@ export type ProjectTimelineItem = {
   isDone: boolean;
   isCurrent: boolean;
 };
+
+/** อินพุตสำหรับคำนวณไทม์ไลน์ — ผูกกับ projectId เพื่อกัน stale data ข้ามโครงการ */
+export type ProjectTimelineInput = {
+  projectId: string;
+  project: ProjectTimelineProject;
+  steps: ProjectTimelineStep[];
+  step3Note: string | null;
+};
+
+function isoDatePart(value: string | null | undefined): string {
+  const trimmed = value?.trim() ?? "";
+  if (!trimmed) return "";
+  return trimmed.slice(0, 10);
+}
+
+/** สnapshot ฟิลด์ที่เกี่ยวกับไทม์ไลน์เท่านั้น — ป้องกัน reference เก่าจาก object ใหญ่ */
+export function snapshotTimelineProject(
+  project: ProjectTimelineProject,
+): ProjectTimelineProject {
+  return {
+    id: project.id,
+    method: project.method ?? "e_bidding",
+    budget: Number(project.budget) || 0,
+    current_step: project.current_step ?? 1,
+    created_at: project.created_at ?? null,
+    committee_appointment_order_date: project.committee_appointment_order_date ?? null,
+    median_price_approval_date: project.median_price_approval_date ?? null,
+    evaluation_report_approval_date: project.evaluation_report_approval_date ?? null,
+    winner_announcement_date: project.winner_announcement_date ?? null,
+  };
+}
+
+export function snapshotTimelineSteps(steps: ProjectTimelineStep[]): ProjectTimelineStep[] {
+  return [...steps]
+    .sort((a, b) => a.step_number - b.step_number)
+    .map((s) => ({
+      step_number: s.step_number,
+      completed_at: s.completed_at,
+      due_date: s.due_date ?? null,
+    }));
+}
+
+/** สร้างอินพุตคำนวณไทม์ไลน์จากข้อมูลโครงการปัจจุบัน */
+export function buildProjectTimelineInput(
+  projectId: string,
+  project: ProjectTimelineProject,
+  steps: ProjectTimelineStep[],
+  step3Note?: string | null,
+): ProjectTimelineInput {
+  return {
+    projectId,
+    project: snapshotTimelineProject(project),
+    steps: snapshotTimelineSteps(steps),
+    step3Note: step3Note ?? null,
+  };
+}
+
+/** คีย์สำหรับ useMemo — เปลี่ยนเมื่อข้อมูลโครงการที่เกี่ยวกับไทม์ไลน์เปลี่ยน */
+export function getProjectTimelineInputKey(input: ProjectTimelineInput): string {
+  const p = input.project;
+  const stepSig = input.steps
+    .map((s) => `${s.step_number}:${isoDatePart(s.completed_at)}:${isoDatePart(s.due_date ?? null)}`)
+    .join("|");
+  return [
+    input.projectId,
+    p.id ?? "",
+    p.method,
+    p.budget,
+    p.current_step,
+    isoDatePart(p.created_at),
+    isoDatePart(p.committee_appointment_order_date),
+    isoDatePart(p.median_price_approval_date),
+    isoDatePart(p.evaluation_report_approval_date),
+    isoDatePart(p.winner_announcement_date),
+    input.step3Note ?? "",
+    stepSig,
+  ].join("::");
+}
+
+/** คำนวณไทม์ไลน์ใหม่ทุกครั้งจากอินพุต — ไม่ใช้ global state */
+export function recalculateProjectTimeline(input: ProjectTimelineInput): ProjectTimelineItem[] {
+  if (input.project.id && input.project.id !== input.projectId) {
+    return [];
+  }
+  return buildProjectTimelineItemsFromInput(input);
+}
 
 /** วันที่มีผลทางระเบียบต่อขั้น (ISO yyyy-mm-dd) — ขั้น 1–6 จากฟิลด์จริง, ขั้น 7 จากกฎหมาย */
 export function resolveStepEffectiveDateISO(
@@ -67,6 +156,11 @@ export function resolveStepEffectiveDateISO(
   }
 }
 
+function parseProjectCreatedDate(project: ProjectTimelineProject): Date | null {
+  const createdISO = isoDatePart(project.created_at);
+  return createdISO ? parseISODateLocal(createdISO) : null;
+}
+
 function seedEstimateCursor(
   project: ProjectTimelineProject,
   step3Note?: string | null,
@@ -81,21 +175,19 @@ function seedEstimateCursor(
     if (d) cursor = d;
   }
 
-  if (!cursor) return today;
+  if (!cursor) {
+    const created = parseProjectCreatedDate(project);
+    if (created) return created < today ? today : created;
+    return today;
+  }
   return cursor < today ? today : cursor;
 }
 
-/**
- * สร้างรายการไทม์ไลน์ 10 ขั้น
- * - ขั้น 1–6: แสดงวันที่ระเบียบจริงเมื่อมี (ไม่ใส่ ~)
- * - ขั้น 7+: ประมาณการล่วงหน้า (~) จนกว่าจะบันทึก due_date หรือเสร็จขั้น
- */
-export function buildProjectTimelineItems(
-  steps: ProjectTimelineStep[],
-  project: ProjectTimelineProject,
-  step3Note?: string | null,
+function buildProjectTimelineItemsFromInput(
+  input: ProjectTimelineInput,
 ): ProjectTimelineItem[] {
-  const sorted = [...steps].sort((a, b) => a.step_number - b.step_number);
+  const { project, steps, step3Note } = input;
+  const sorted = steps;
   const mins = getMinDays(project.method, Number(project.budget));
   const currentStep = project.current_step;
   let cursor = seedEstimateCursor(project, step3Note);
@@ -162,4 +254,21 @@ export function buildProjectTimelineItems(
       isCurrent,
     };
   });
+}
+
+/**
+ * สร้างรายการไทม์ไลน์ 10 ขั้น
+ * - ขั้น 1–6: แสดงวันที่ระเบียบจริงเมื่อมี (ไม่ใส่ ~)
+ * - ขั้น 7+: ประมาณการล่วงหน้า (~) จนกว่าจะบันทึก due_date หรือเสร็จขั้น
+ */
+export function buildProjectTimelineItems(
+  steps: ProjectTimelineStep[],
+  project: ProjectTimelineProject,
+  step3Note?: string | null,
+  projectId?: string,
+): ProjectTimelineItem[] {
+  const resolvedProjectId = projectId ?? project.id ?? "";
+  return recalculateProjectTimeline(
+    buildProjectTimelineInput(resolvedProjectId, project, steps, step3Note),
+  );
 }

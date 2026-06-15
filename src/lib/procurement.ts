@@ -8,6 +8,7 @@ export {
   milestoneProgressPercent,
 } from "@/lib/egp-milestones";
 import {
+  STEP2_DOC,
   STEP3_DOC,
   STEP4_DOC,
   STEP5_DOC,
@@ -15,19 +16,20 @@ import {
   STEP7_DOC,
   STEP8_DOC,
 } from "@/lib/step-doc-types";
-import { STEP1_ANNUAL_PLAN_DOCUMENT_TYPE } from "@/lib/checklist-inline-evidence";
+import { STEP1_EGP_PLAN_PUBLICATION_DOCUMENT_TYPE } from "@/lib/checklist-inline-evidence";
 
 export type DocItem = { name: string; required: boolean };
 
 /** เอกสารอ้างอิงต่อ Milestone e-GP (10 ขั้น) — สำหรับตรวจครบก่อนปิดขั้น */
 export const STEP_DOCS_DETAILED: DocItem[][] = [
   [
-    { name: STEP1_ANNUAL_PLAN_DOCUMENT_TYPE, required: true },
+    { name: STEP1_EGP_PLAN_PUBLICATION_DOCUMENT_TYPE, required: true },
     { name: "ประมาณการราคาเบื้องต้น", required: false },
   ],
   [
+    { name: STEP2_DOC.BOQ, required: true },
     { name: "คำสั่งแต่งตั้งคณะกรรมการจัดทำ TOR และราคากลาง", required: true },
-    { name: "คำสั่งแต่งตั้งคณะกรรมการพิจารณาผลและตรวจรับ", required: true },
+    { name: "คำสั่งแต่งตั้งคณะกรรมการพิจารณาผลและตรวจรับ", required: false },
     { name: "แบบรายงานผลการกำหนดราคากลาง (บก.06)", required: true },
     { name: "ใบเสนอราคาท้องตลาดอย่างน้อย 3 ราย", required: true },
     { name: "หนังสือแสดงความบริสุทธิ์ใจของกรรมการ", required: true },
@@ -46,6 +48,7 @@ export const STEP_DOCS_DETAILED: DocItem[][] = [
     { name: STEP4_DOC.BLACKLIST_EVIDENCE, required: true },
     { name: STEP4_DOC.CONFLICT_EVIDENCE, required: true },
     { name: STEP4_DOC.COMMITTEE_EVALUATION_REPORT, required: true },
+    { name: STEP2_DOC.EVALUATION_INSPECTION_ORDER, required: true },
   ],
   [
     { name: STEP5_DOC.EGP_WINNER_ANNOUNCEMENT, required: true },
