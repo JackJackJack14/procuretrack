@@ -109,6 +109,9 @@ export const STEP3_DRAFT_ANNOUNCEMENT_UPLOAD_LABEL =
 export const STEP3_MEDIAN_BG06_UPLOAD_LABEL =
   "📎 แนบไฟล์ตารางราคากลาง (บก.06) (PDF) — หากอัปโหลดในขั้นตอนที่ 2 แล้วไม่ต้องซ้ำ";
 
+export const STEP3_MEMO_APPROVAL_UPLOAD_LABEL =
+  "📎 บันทึกข้อความขอความเห็นชอบร่าง TOR (PDF)";
+
 export const STEP3_EGP_SCREENSHOT_UPLOAD_LABEL =
   "📎 แนบภาพหน้าจอระบบ e-GP ที่แสดงการเผยแพร่ประกาศ (PNG/JPG/PDF)";
 

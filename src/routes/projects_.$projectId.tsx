@@ -19,6 +19,11 @@ import {
   buildProjectTimelineInput,
   recalculateProjectTimeline,
 } from "@/lib/project-timeline";
+import {
+  buildTimelineValidationContext,
+  getTimelineSaveBlockMessage,
+} from "@/lib/timeline-validation";
+import { resolveStep1PlanPublicationDateISO } from "@/lib/step-milestone-dates";
 import { resolveDocFilePolicy, validateDocFile } from "@/lib/doc-file-types";
 import { uploadStepDocument } from "@/lib/doc-upload";
 import { checkStorageQuota, incrementStorageUsage, decrementStorageUsage } from "@/lib/storage";
@@ -82,6 +87,8 @@ import {
   getStep3ComplianceIssues,
   getStep3MandatoryHearingGateIssues,
   isStep3ReadyForNext,
+  countStep3CoreDocumentsReady,
+  countStep3FormRequiredProgress,
   buildStep3ComplianceLog,
   logStep3ComplianceWarnings,
   type Step3ComplianceLog,
@@ -99,11 +106,15 @@ import {
   EMPTY_STEP5_CHECKLIST,
   getStep5ComplianceIssues,
   isStep5ReadyForNext,
+  countStep5CoreDocumentsReady,
+  countStep5FormRequiredProgress,
   isStep5WinnerAnnouncementBeforeEvaluation,
   getStep5WinnerAnnouncementBeforeEvaluationMsg,
   EMPTY_STEP1_CHECKLIST,
   loadStep1FormFromStep,
   isStep1ReadyForNext,
+  countStep1CoreDocumentsReady,
+  countStep1FormRequiredProgress,
   getStep1ComplianceIssues,
   type Step1ChecklistKey,
   EMPTY_STEP2_CHECKLIST,
@@ -115,6 +126,8 @@ import {
   buildProjectStep2Fields,
   getStep2ComplianceIssues,
   isStep2ReadyForNext,
+  countStep2CoreDocumentsReady,
+  countStep2FormRequiredProgress,
   resolveProjectMedianPrice,
   isStep2MedianApprovalBeforeAppointment,
   STEP2_MEDIAN_APPROVAL_BEFORE_APPOINTMENT_MSG,
@@ -140,9 +153,13 @@ import {
   hasStep2MarketQuotesDoc,
   isAppealBlocking,
   isStep4ReadyForNext,
+  countStep4CoreDocumentsReady,
+  countStep4FormRequiredProgress,
   getStep4ComplianceIssues,
   getStep6ComplianceIssues,
   isStep6ReadyForNext,
+  countStep6CoreDocumentsReady,
+  countStep6FormRequiredProgress,
   EMPTY_STEP7_CONTRACT_NOTICE,
   loadStep7FormFromNote,
   getStep7ComplianceIssues,
@@ -241,6 +258,7 @@ import {
   getPreviousStepReopenPatch,
   getStepRollbackProcurementStepWipe,
   getStepRollbackProjectWipe,
+  updateProjectOmittingMissingColumns,
 } from "@/lib/step-rollback";
 import {
   canCompleteWorkflowStep,
@@ -603,11 +621,7 @@ function ProjectDetailPage() {
         projectUpdates.warranty_started_at = null;
         projectUpdates.warranty_end_date = null;
       }
-      const { error: projErr } = await supabase
-        .from("projects")
-        .update(projectUpdates)
-        .eq("id", project.id);
-      if (projErr) throw new Error(projErr.message);
+      await updateProjectOmittingMissingColumns(supabase, project.id, projectUpdates);
 
       setHistoricalEditUnlocked(false);
       setGenericManualChecklist(createEmptyManualChecklist(stepNum));
@@ -653,6 +667,42 @@ function ProjectDetailPage() {
             committeeReviewDeadlineISO: "",
           },
     [projectId, project?.id, project?.committee_review_workdays, project?.procurement_request_approval_date, step3Record?.note],
+  );
+
+  const timelineValidationCtx = useMemo(() => {
+    if (!project || project.id !== projectId) {
+      return buildTimelineValidationContext({ project: {}, steps: [], step3Note: null });
+    }
+    return buildTimelineValidationContext({
+      project: {
+        created_at: project.created_at,
+        median_price_approval_date: project.median_price_approval_date,
+        committee_appointment_order_date: project.committee_appointment_order_date,
+        procurement_request_approval_date: project.procurement_request_approval_date,
+        committee_review_workdays: project.committee_review_workdays,
+        evaluation_report_approval_date: project.evaluation_report_approval_date,
+        winner_announcement_date: project.winner_announcement_date,
+      },
+      steps,
+      step3Note: step3Record?.note ?? null,
+    });
+  }, [
+    projectId,
+    project?.id,
+    project?.created_at,
+    project?.median_price_approval_date,
+    project?.committee_appointment_order_date,
+    project?.procurement_request_approval_date,
+    project?.committee_review_workdays,
+    project?.evaluation_report_approval_date,
+    project?.winner_announcement_date,
+    steps,
+    step3Record?.note,
+  ]);
+
+  const step1PlanPublicationDate = useMemo(
+    () => resolveStep1PlanPublicationDateISO(steps, { created_at: project?.created_at }),
+    [steps, project?.created_at, step1Record?.completed_at],
   );
 
   const mergedStep4BidResult = useMemo(() => {
@@ -1312,6 +1362,15 @@ function ProjectDetailPage() {
     }
 
     if (current.step_number === 2) {
+      const timelineBlock = getTimelineSaveBlockMessage(2, timelineValidationCtx, {
+        committeeOrder: step2CommitteeOrder,
+        medianPrice: step2MedianPrice,
+      });
+      if (timelineBlock) {
+        toast.error(timelineBlock);
+        setError(timelineBlock);
+        return false;
+      }
       if (
         isStep2MedianApprovalBeforeAppointment(
           step2MedianPrice.median_price_approval_date ?? "",
@@ -1320,7 +1379,7 @@ function ProjectDetailPage() {
       ) {
         toast.error(STEP2_MEDIAN_APPROVAL_BEFORE_APPOINTMENT_MSG);
         setError(STEP2_MEDIAN_APPROVAL_BEFORE_APPOINTMENT_MSG);
-        return;
+        return false;
       }
       const complianceLog = buildStep2ComplianceLog(
         step2CommitteeOrder,
@@ -1341,7 +1400,7 @@ function ProjectDetailPage() {
       );
       if (e?.error) {
         setError(e.error.message);
-        return;
+        return false;
       }
 
       const { error: projErr } = await supabase
@@ -1420,10 +1479,18 @@ function ProjectDetailPage() {
       }
       await propagateResponsibleToStep1(effectiveResponsibleName);
       await invalidateAll();
-      return;
+      return true;
     }
 
     if (current.step_number === 3) {
+      const timelineBlock = getTimelineSaveBlockMessage(3, timelineValidationCtx, {
+        announcement: step3Announcement,
+      });
+      if (timelineBlock) {
+        toast.error(timelineBlock);
+        setError(timelineBlock);
+        return false;
+      }
       const complianceLog = buildStep3ComplianceLog(
         step2Committees,
         step3ComplianceLog.committee_overlap_reason ?? "",
@@ -1459,6 +1526,14 @@ function ProjectDetailPage() {
     }
 
     if (current.step_number === 4) {
+      const timelineBlock = getTimelineSaveBlockMessage(4, timelineValidationCtx, {
+        bidResult: step4BidResult,
+      });
+      if (timelineBlock) {
+        toast.error(timelineBlock);
+        setError(timelineBlock);
+        return false;
+      }
       const formNote = serializeStepNote(note, {
         checklist: step4Checklist,
         bidResult: step4BidResult,
@@ -1472,12 +1547,15 @@ function ProjectDetailPage() {
         setError(e.error.message);
         return;
       }
-      const { error: projErr } = await supabase
-        .from("projects")
-        .update(buildProjectStep4Fields(step4BidResult))
-        .eq("id", project.id);
-      if (projErr) {
-        console.warn("[Step4] project bid result sync failed", projErr);
+      try {
+        await updateProjectOmittingMissingColumns(
+          supabase,
+          project.id,
+          buildProjectStep4Fields(step4BidResult),
+        );
+      } catch (projErr: unknown) {
+        const message = projErr instanceof Error ? projErr.message : "บันทึกผลการเสนอราคาไม่สำเร็จ";
+        console.warn("[Step4] project bid result sync failed", message);
       }
       draftSavedToast("ขั้นตอนที่ 4 ");
       await propagateResponsibleToStep1(effectiveResponsibleName);
@@ -1486,6 +1564,14 @@ function ProjectDetailPage() {
     }
 
     if (current.step_number === 5) {
+      const timelineBlock = getTimelineSaveBlockMessage(5, timelineValidationCtx, {
+        step5Announcement: step5Announcement,
+      });
+      if (timelineBlock) {
+        toast.error(timelineBlock);
+        setError(timelineBlock);
+        return false;
+      }
       if (
         step5Announcement.winner_announcement_date?.trim() &&
         step5EvaluationApprovalDate &&
@@ -1526,6 +1612,14 @@ function ProjectDetailPage() {
     }
 
     if (current.step_number === 6) {
+      const timelineBlock = getTimelineSaveBlockMessage(6, timelineValidationCtx, {
+        appeal: step6Appeal,
+      });
+      if (timelineBlock) {
+        toast.error(timelineBlock);
+        setError(timelineBlock);
+        return false;
+      }
       const formNote = serializeStepNote(note, { checklist: genericManualChecklist });
       const { error: e } = await patchStepDraft(
         current.id,
@@ -1550,6 +1644,14 @@ function ProjectDetailPage() {
     }
 
     if (current.step_number === 9) {
+      const timelineBlock = getTimelineSaveBlockMessage(9, timelineValidationCtx, {
+        contractSchedule: step9ContractSchedule,
+      });
+      if (timelineBlock) {
+        toast.error(timelineBlock);
+        setError(timelineBlock);
+        return false;
+      }
       const endISO = computeStep9ContractEndDateISO(
         step9ContractSchedule.work_start_date,
         step9ContractSchedule.contract_duration_days,
@@ -1600,6 +1702,19 @@ function ProjectDetailPage() {
       await propagateResponsibleToStep1(effectiveResponsibleName);
       await invalidateAll();
       return;
+    }
+
+    if (current.step_number === 7 || current.step_number === 8 || current.step_number === 10) {
+      const timelineBlock = getTimelineSaveBlockMessage(current.step_number, timelineValidationCtx, {
+        contractNotice: step7ContractNotice,
+        contractExecution: step8ContractExecution,
+        inspectionRows: step10InspectionRows,
+      });
+      if (timelineBlock) {
+        toast.error(timelineBlock);
+        setError(timelineBlock);
+        return false;
+      }
     }
 
     const formNote =
@@ -1731,6 +1846,8 @@ function ProjectDetailPage() {
         const pubErr = validateStep3PublicationDates(
           step3Announcement.publication_start,
           step3Announcement.publication_end,
+          step3Announcement.approval_letter_date,
+          step3Announcement.publication_end_extension_reason,
         );
         if (pubErr) {
           toast.error(pubErr);
@@ -1764,6 +1881,8 @@ function ProjectDetailPage() {
             (d) => d.document_type === STEP3_DOC.FEEDBACK_REPORT,
           ),
           hearingFormActive: true,
+          timelineCtx: timelineValidationCtx,
+          step3Docs,
         });
         if (step3ComplianceIssues.length > 0) {
           toast.error(step3ComplianceIssues[0].message);
@@ -1788,20 +1907,34 @@ function ProjectDetailPage() {
         (d) => d.document_type === STEP2_DOC.EVALUATION_INSPECTION_ORDER,
       );
       const hasMarketQuotesDoc = hasStep2MarketQuotesDoc(step2Docs);
-      const complianceIssues = getStep2ComplianceIssues(step2Checklist, {
+      const step2AutoStates = computeAutoChecklistState({
+        stepNumber: 2,
         committees: step2Committees,
         committeeOrder: step2CommitteeOrder,
         medianPrice: step2MedianPrice,
-        responsibleName: effectiveResponsibleName,
         hasAppointmentOrderDoc: hasAppointmentDoc,
-        hasBoqDoc,
-        hasBg06Doc,
         hasIntegrityLetterDoc,
-        hasEvaluationInspectionOrderDoc,
-        hasMarketQuotesDoc,
-        step1Budget: calcBudget,
-        stepDocs: step2Docs,
+        hasBg06Doc,
       });
+      const complianceIssues = getStep2ComplianceIssues(
+        step2Checklist,
+        {
+          committees: step2Committees,
+          committeeOrder: step2CommitteeOrder,
+          medianPrice: step2MedianPrice,
+          responsibleName: effectiveResponsibleName,
+          hasAppointmentOrderDoc: hasAppointmentDoc,
+          hasBoqDoc,
+          hasBg06Doc,
+          hasIntegrityLetterDoc,
+          hasEvaluationInspectionOrderDoc,
+          hasMarketQuotesDoc,
+          step1Budget: calcBudget,
+          stepDocs: step2Docs,
+          timelineCtx: timelineValidationCtx,
+        },
+        step2AutoStates,
+      );
       if (complianceIssues.length > 0) {
         toast.error(complianceIssues[0].message);
         setError(complianceIssues[0].message);
@@ -1852,6 +1985,7 @@ function ProjectDetailPage() {
           evaluationApprovalDate: step5EvaluationApprovalDate,
           responsibleName: effectiveResponsibleName,
           stepDocs: step5Docs,
+          timelineCtx: timelineValidationCtx,
         },
       );
       if (complianceIssues.length > 0) {
@@ -1876,6 +2010,7 @@ function ProjectDetailPage() {
           hasCgdReportDoc: hasStep6CgdReportDoc(step6Uploaded),
           responsibleName: effectiveResponsibleName,
           stepDocs: step6Docs,
+          timelineCtx: timelineValidationCtx,
         },
       );
       if (complianceIssues.length > 0) {
@@ -1903,6 +2038,7 @@ function ProjectDetailPage() {
             isStep7DraftContractDocType(d.document_type),
           ),
           stepDocs: step7Docs,
+          timelineCtx: timelineValidationCtx,
         },
         computeAutoChecklistState({
           stepNumber: 7,
@@ -1931,6 +2067,7 @@ function ProjectDetailPage() {
           earliestSigningISO,
           appealDeadlineISO,
           stepDocs: step8Docs,
+          timelineCtx: timelineValidationCtx,
         },
         computeAutoChecklistState({
           stepNumber: 8,
@@ -1954,6 +2091,7 @@ function ProjectDetailPage() {
           contractSignedDate,
           procurementPath: effectiveProcurementPath,
           externalCapture: step9ExternalCapture,
+          timelineCtx: timelineValidationCtx,
         },
         computeAutoChecklistState({
           stepNumber: 9,
@@ -1976,6 +2114,7 @@ function ProjectDetailPage() {
           responsibleName: effectiveResponsibleName,
           stepDocs: step10Docs,
           totalInstallmentCount,
+          timelineCtx: timelineValidationCtx,
         },
         computeAutoChecklistState({
           stepNumber: 10,
@@ -2005,6 +2144,7 @@ function ProjectDetailPage() {
           hasEvaluationInspectionOrderDoc: hasEvaluationInspectionOrderDoc(docs),
           hasEvaluationOrderFromStep2: hasEvaluationOrderFromStep2(docs),
           timeline: step4Timeline,
+          timelineCtx: timelineValidationCtx,
         },
       );
       if (complianceIssues.length > 0) {
@@ -2125,6 +2265,10 @@ function ProjectDetailPage() {
   }
 
   const docsForStep = docs.filter((d) => d.step_number === activeStep);
+  const step3InheritedDocs =
+    activeStep === 3
+      ? [{ fromStep: 2, docs: docs.filter((d) => d.step_number === 2) }]
+      : undefined;
 
   return (
     <AppShell breadcrumb={`โครงการ / ${project.name}`}>
@@ -2253,6 +2397,9 @@ function ProjectDetailPage() {
           project={project}
           steps={steps}
           step3Note={step3Record?.note ?? null}
+          step3LiveAnnouncement={
+            project.current_step === 3 ? step3Announcement : null
+          }
         />
 
         {/* Detail panel */}
@@ -2362,6 +2509,9 @@ function ProjectDetailPage() {
             hasEgpScreenshotDoc: step3DocsForAuto.some(
               (d) => d.document_type === STEP3_DOC.EGP_SCREENSHOT,
             ),
+            hasMemoDoc: step3DocsForAuto.some(
+              (d) => d.document_type === STEP3_DOC.MEMO_APPROVAL,
+            ),
             hasEgpBidSummaryDoc: hasStep4EgpBidSummaryDoc(
               stepDocsForAuto.map((d) => d.document_type),
             ),
@@ -2398,6 +2548,40 @@ function ProjectDetailPage() {
             requiredDocs: requiredDocsForStep,
             uploadedDocTypes: uploadedDocTypesForAuto,
           });
+          const step2ComplianceOpts =
+            current.step_number === 2
+              ? {
+                  committees: step2Committees,
+                  committeeOrder: step2CommitteeOrder,
+                  medianPrice: step2MedianPrice,
+                  responsibleName: effectiveResponsibleName,
+                  hasAppointmentOrderDoc: docsForStep.some(
+                    (d) => d.document_type === STEP2_DOC.APPOINTMENT_ORDER,
+                  ),
+                  hasBoqDoc: docsForStep.some((d) => d.document_type === STEP2_DOC.BOQ),
+                  hasBg06Doc: docsForStep.some(
+                    (d) => d.document_type === STEP2_DOC.MEDIAN_PRICE_BG06,
+                  ),
+                  hasIntegrityLetterDoc: docsForStep.some(
+                    (d) => d.document_type === STEP2_DOC.INTEGRITY_LETTER,
+                  ),
+                  hasEvaluationInspectionOrderDoc: docsForStep.some(
+                    (d) => d.document_type === STEP2_DOC.EVALUATION_INSPECTION_ORDER,
+                  ),
+                  hasMarketQuotesDoc: hasStep2MarketQuotesDoc(docsForStep),
+                  step1Budget: calcBudget,
+                  stepDocs: docsForStep,
+                  timelineCtx: timelineValidationCtx,
+                }
+              : null;
+          const step2ReadyForGate =
+            current.step_number !== 2 || !step2ComplianceOpts
+              ? true
+              : isStep2ReadyForNext(
+                  step2Checklist,
+                  step2ComplianceOpts,
+                  autoCheckStates,
+                );
           const isStepCompletedView =
             current.status === "completed" &&
             workflowMode !== "historical_edit" &&
@@ -2577,6 +2761,13 @@ function ProjectDetailPage() {
                         onDocsChange: invalidateAll,
                       }}
                       complianceLog={step2ComplianceLog}
+                      onSaveMarketQuotes={saveDraft}
+                      step2GateDebug={
+                        step2ComplianceOpts
+                          ? { ...step2ComplianceOpts, autoCheckStates }
+                          : undefined
+                      }
+                      chronologicalCtx={timelineValidationCtx}
                     />
                   )}
                   {current.step_number === 3 && showStep3HearingForm && (
@@ -2589,24 +2780,22 @@ function ProjectDetailPage() {
                       onAnnouncementChange={patchStep3Announcement}
                       approvedMedianPrice={project.approved_median_price ?? null}
                       medianPriceApprovalDate={project.median_price_approval_date ?? null}
-                      step2Bg06Uploaded={docs.some(
-                        (d) =>
-                          d.step_number === 2 &&
-                          d.document_type === STEP2_DOC.MEDIAN_PRICE_BG06,
-                      )}
                       responsibleName={responsibleName}
                       onResponsibleNameChange={setResponsibleName}
                       step1ResponsibleDefault={step1ResponsibleDefault}
+                      step1PlanPublicationDate={step1PlanPublicationDate}
                       docBinder={{
                         project,
                         stepNumber: 3,
                         docs: docsForStep,
                         onDocsChange: invalidateAll,
+                        inheritedDocs: step3InheritedDocs,
                       }}
                       budget={calcBudget}
                       step2Committees={step2Committees}
                       complianceLog={step3ComplianceLog}
                       onComplianceLogChange={patchStep3ComplianceLog}
+                      chronologicalCtx={timelineValidationCtx}
                     />
                   )}
                   {current.step_number === 3 && !showStep3HearingForm && current.status !== "completed" && (
@@ -2639,6 +2828,7 @@ function ProjectDetailPage() {
                         docs: docsForStep,
                         onDocsChange: invalidateAll,
                       }}
+                      chronologicalCtx={timelineValidationCtx}
                     />
                   )}
                   {current.step_number === 5 && (
@@ -2659,6 +2849,7 @@ function ProjectDetailPage() {
                         docs: docsForStep,
                         onDocsChange: invalidateAll,
                       }}
+                      chronologicalCtx={timelineValidationCtx}
                     />
                   )}
                   {current.step_number === 6 && (
@@ -2686,6 +2877,7 @@ function ProjectDetailPage() {
                         docs: docsForStep,
                         onDocsChange: invalidateAll,
                       }}
+                      chronologicalCtx={timelineValidationCtx}
                     />
                   )}
                   {current.step_number === 7 && (
@@ -2712,6 +2904,7 @@ function ProjectDetailPage() {
                       step1ResponsibleDefault={step1ResponsibleDefault}
                       note={note}
                       onNoteChange={setNote}
+                      chronologicalCtx={timelineValidationCtx}
                     />
                   )}
                   {current.step_number === 8 && (
@@ -2738,6 +2931,7 @@ function ProjectDetailPage() {
                       step1ResponsibleDefault={step1ResponsibleDefault}
                       note={note}
                       onNoteChange={setNote}
+                      chronologicalCtx={timelineValidationCtx}
                     />
                   )}
                   {current.step_number === 9 && (
@@ -2775,6 +2969,7 @@ function ProjectDetailPage() {
                       bidResult={step4BidResult}
                       onBidResultChange={patchStep4BidResult}
                       step1Budget={calcBudget}
+                      chronologicalCtx={timelineValidationCtx}
                     />
                   )}
                   {current.step_number === 10 && (
@@ -2814,6 +3009,7 @@ function ProjectDetailPage() {
                       }
                       warrantyEndDate={project.warranty_end_date ?? null}
                       warrantyStartedAt={project.warranty_started_at ?? null}
+                      chronologicalCtx={timelineValidationCtx}
                     />
                   )}
                   </>
@@ -2857,42 +3053,15 @@ function ProjectDetailPage() {
                 const step2HasMarketQuotesDoc =
                   current.step_number === 2 && hasStep2MarketQuotesDoc(docsForStep);
                 const step2ComplianceIssues =
-                  current.step_number === 2
+                  current.step_number === 2 && step2ComplianceOpts
                     ? getStep2ComplianceIssues(
                         step2Checklist,
-                        {
-                          committees: step2Committees,
-                          committeeOrder: step2CommitteeOrder,
-                          medianPrice: step2MedianPrice,
-                          responsibleName: effectiveResponsibleName,
-                          hasAppointmentOrderDoc: step2HasAppointmentDoc,
-                          hasBoqDoc: step2HasBoqDoc,
-                          hasBg06Doc: step2HasBg06Doc,
-                          hasIntegrityLetterDoc: step2HasIntegrityLetterDoc,
-                          hasEvaluationInspectionOrderDoc: step2HasEvaluationInspectionOrderDoc,
-                          hasMarketQuotesDoc: step2HasMarketQuotesDoc,
-                          step1Budget: calcBudget,
-                          stepDocs: docsForStep,
-                        },
+                        step2ComplianceOpts,
                         autoCheckStates,
                       )
                     : [];
                 const step2Ready =
-                  current.step_number !== 2 ||
-                  isStep2ReadyForNext(step2Checklist, {
-                    committees: step2Committees,
-                    committeeOrder: step2CommitteeOrder,
-                    medianPrice: step2MedianPrice,
-                    responsibleName: effectiveResponsibleName,
-                    hasAppointmentOrderDoc: step2HasAppointmentDoc,
-                    hasBoqDoc: step2HasBoqDoc,
-                    hasBg06Doc: step2HasBg06Doc,
-                    hasIntegrityLetterDoc: step2HasIntegrityLetterDoc,
-                    hasEvaluationInspectionOrderDoc: step2HasEvaluationInspectionOrderDoc,
-                    hasMarketQuotesDoc: step2HasMarketQuotesDoc,
-                    step1Budget: calcBudget,
-                    stepDocs: docsForStep,
-                  });
+                  current.step_number !== 2 || step2ReadyForGate;
                 const step4UploadedTypes =
                   current.step_number === 4
                     ? docsForStep.map((d) => d.document_type)
@@ -2957,6 +3126,8 @@ function ProjectDetailPage() {
                           (d) => d.document_type === STEP3_DOC.FEEDBACK_REPORT,
                         ),
                         hearingFormActive: true,
+                        timelineCtx: timelineValidationCtx,
+                        step3Docs: step3DocsForCompliance,
                       }
                     : null;
                 const step3MandatoryIssues =
@@ -3029,6 +3200,7 @@ function ProjectDetailPage() {
                           hasEvaluationInspectionOrderDoc: hasEvaluationInspectionOrderDoc(docs),
                           hasEvaluationOrderFromStep2: hasEvaluationOrderFromStep2(docs),
                           timeline: step4Timeline,
+                          timelineCtx: timelineValidationCtx,
                         },
                         autoCheckStates,
                       )
@@ -3053,6 +3225,7 @@ function ProjectDetailPage() {
                           evaluationApprovalDate: step5EvaluationApprovalDate,
                           responsibleName: effectiveResponsibleName,
                           stepDocs: docsForStep,
+                          timelineCtx: timelineValidationCtx,
                         },
                         autoCheckStates,
                       )
@@ -3089,6 +3262,7 @@ function ProjectDetailPage() {
                           hasCgdReportDoc: step6HasCgdReport,
                           responsibleName: effectiveResponsibleName,
                           stepDocs: docsForStep,
+                          timelineCtx: timelineValidationCtx,
                         },
                         autoCheckStates,
                       )
@@ -3121,6 +3295,7 @@ function ProjectDetailPage() {
                           notificationDeadlineISO: step7NotificationDeadlineISO,
                           hasDraftContractDoc: step7HasDraftContractDoc,
                           stepDocs: docsForStep,
+                          timelineCtx: timelineValidationCtx,
                         },
                         autoCheckStates,
                       )
@@ -3149,6 +3324,7 @@ function ProjectDetailPage() {
                           earliestSigningISO: step8EarliestSigningISO,
                           appealDeadlineISO: step8AppealDeadlineISO,
                           stepDocs: docsForStep,
+                          timelineCtx: timelineValidationCtx,
                         },
                         autoCheckStates,
                       )
@@ -3177,6 +3353,7 @@ function ProjectDetailPage() {
                           contractSignedDate,
                           procurementPath: effectiveProcurementPath,
                           externalCapture: step9ExternalCapture,
+                          timelineCtx: timelineValidationCtx,
                         },
                         autoCheckStates,
                       )
@@ -3204,6 +3381,7 @@ function ProjectDetailPage() {
                           responsibleName: effectiveResponsibleName,
                           stepDocs: docsForStep,
                           totalInstallmentCount,
+                          timelineCtx: timelineValidationCtx,
                         },
                         autoCheckStates,
                       )
@@ -3231,10 +3409,16 @@ function ProjectDetailPage() {
                     hasEvaluationInspectionOrderDoc: hasEvaluationInspectionOrderDoc(docs),
                     hasEvaluationOrderFromStep2: hasEvaluationOrderFromStep2(docs),
                     timeline: step4Timeline,
+                    timelineCtx: timelineValidationCtx,
                   });
                 const checklistItemsForStep =
+                  current.step_number === 3 ||
+                  current.step_number === 1 ||
+                  current.step_number === 2 ||
+                  current.step_number === 4 ||
+                  current.step_number === 5 ||
                   current.step_number === 6
-                    ? getStep6ChecklistItems(step6Appeal.appeal_status ?? "")
+                    ? []
                     : current.step_number === 10
                       ? getStep10ChecklistItems(
                           countStep10PassedInstallments(step10InspectionRows),
@@ -3255,16 +3439,145 @@ function ProjectDetailPage() {
                             : current.step_number >= 6 && current.step_number <= 10
                               ? genericManualChecklist
                               : {};
+                const step1CoreDocsProgress =
+                  current.step_number === 1
+                    ? countStep1CoreDocumentsReady(docsForStep)
+                    : null;
+                const step1FormProgress =
+                  current.step_number === 1
+                    ? countStep1FormRequiredProgress({
+                        egpCode,
+                        budget: step1Budget,
+                        responsibleName: effectiveResponsibleName,
+                        projectName: step1ProjectName,
+                        method: step1Method,
+                        projectProfile: step1Profile,
+                        specificMethodReason: step1SpecificMethodReason,
+                      })
+                    : null;
+                const step2CoreDocsProgress =
+                  current.step_number === 2 && step2ComplianceOpts
+                    ? countStep2CoreDocumentsReady({
+                        hasAppointmentOrderDoc: step2HasAppointmentDoc,
+                        hasBoqDoc: step2HasBoqDoc,
+                        hasIntegrityLetterDoc: step2HasIntegrityLetterDoc,
+                        hasBg06Doc: step2HasBg06Doc,
+                        stepDocs: docsForStep,
+                      })
+                    : null;
+                const step2FormProgress =
+                  current.step_number === 2 && step2ComplianceOpts
+                    ? countStep2FormRequiredProgress(step2ComplianceOpts)
+                    : null;
+                const step4CoreDocsProgress =
+                  current.step_number === 4
+                    ? countStep4CoreDocumentsReady({
+                        hasEgpBidSummaryDoc: step4HasEgpSummary,
+                        hasBlacklistEvidenceDoc: step4HasBlacklist,
+                        hasConflictEvidenceDoc: step4HasConflict,
+                        hasCommitteeEvaluationDoc: step4HasCommitteeReport,
+                        hasEvaluationInspectionOrderDoc: hasEvaluationInspectionOrderDoc(docs),
+                      })
+                    : null;
+                const step4FormProgress =
+                  current.step_number === 4
+                    ? countStep4FormRequiredProgress(step4BidResult, {
+                        responsibleName: effectiveResponsibleName,
+                        timeline: step4Timeline,
+                        timelineCtx: timelineValidationCtx,
+                      })
+                    : null;
+                const step5CoreDocsProgress =
+                  current.step_number === 5
+                    ? countStep5CoreDocumentsReady({
+                        hasEgpWinnerDoc: step5HasEgpWinner,
+                        hasPhysicalBoardDoc: step5HasPhysicalBoard,
+                        hasAllBiddersResultDoc: step5HasAllBiddersResult,
+                      })
+                    : null;
+                const step5FormProgress =
+                  current.step_number === 5
+                    ? countStep5FormRequiredProgress(step5Announcement, {
+                        evaluationApprovalDate: step5EvaluationApprovalDate,
+                        responsibleName: effectiveResponsibleName,
+                        timelineCtx: timelineValidationCtx,
+                      })
+                    : null;
+                const step6CoreDocsProgress =
+                  current.step_number === 6
+                    ? countStep6CoreDocumentsReady(step6Appeal.appeal_status ?? "", {
+                        hasNoAppealEgpDoc: step6HasNoAppealEgp,
+                        hasAgencyReportDoc: step6HasAgencyReport,
+                        hasCgdReportDoc: step6HasCgdReport,
+                      })
+                    : null;
+                const step6FormProgress =
+                  current.step_number === 6
+                    ? countStep6FormRequiredProgress(step6Appeal, {
+                        responsibleName: effectiveResponsibleName,
+                        timelineCtx: timelineValidationCtx,
+                      })
+                    : null;
+                const step3CoreDocsProgress =
+                  current.step_number === 3 && showStep3HearingForm && step3ComplianceOpts
+                    ? countStep3CoreDocumentsReady(step3ComplianceOpts)
+                    : null;
+                const step3FormProgress =
+                  current.step_number === 3 && showStep3HearingForm && step3ComplianceOpts
+                    ? countStep3FormRequiredProgress(step3ComplianceOpts.announcement)
+                    : null;
                 const reactiveChecklist =
-                  checklistItemsForStep.length > 0
-                    ? computeReactiveChecklistEffective(
-                        current.step_number,
-                        checklistItemsForStep,
-                        manualForReactive,
-                        autoCheckStates,
-                        docsForStep,
-                      )
-                    : { allDone: true, done: 0, total: 0, effective: {} };
+                  step1CoreDocsProgress != null && step1FormProgress != null
+                    ? {
+                        allDone: step1Ready,
+                        done: step1CoreDocsProgress.done + step1FormProgress.done,
+                        total: step1CoreDocsProgress.total + step1FormProgress.total,
+                        effective: {},
+                      }
+                    : step2CoreDocsProgress != null && step2FormProgress != null
+                      ? {
+                          allDone: step2Ready,
+                          done: step2CoreDocsProgress.done + step2FormProgress.done,
+                          total: step2CoreDocsProgress.total + step2FormProgress.total,
+                          effective: {},
+                        }
+                      : step3CoreDocsProgress != null && step3FormProgress != null
+                        ? {
+                            allDone: step3MandatoryIssues.length === 0 && step3Ready,
+                            done: step3CoreDocsProgress.done + step3FormProgress.done,
+                            total: step3CoreDocsProgress.total + step3FormProgress.total,
+                            effective: {},
+                          }
+                        : step4CoreDocsProgress != null && step4FormProgress != null
+                          ? {
+                              allDone: step4Ready,
+                              done: step4CoreDocsProgress.done + step4FormProgress.done,
+                              total: step4CoreDocsProgress.total + step4FormProgress.total,
+                              effective: {},
+                            }
+                          : step5CoreDocsProgress != null && step5FormProgress != null
+                            ? {
+                                allDone: step5Ready,
+                                done: step5CoreDocsProgress.done + step5FormProgress.done,
+                                total: step5CoreDocsProgress.total + step5FormProgress.total,
+                                effective: {},
+                              }
+                            : step6CoreDocsProgress != null && step6FormProgress != null
+                              ? {
+                                  allDone: step6Ready,
+                                  done: step6CoreDocsProgress.done + step6FormProgress.done,
+                                  total: step6CoreDocsProgress.total + step6FormProgress.total,
+                                  effective: {},
+                                }
+                              : checklistItemsForStep.length > 0
+                      ? computeReactiveChecklistEffective(
+                          current.step_number,
+                          checklistItemsForStep,
+                          manualForReactive,
+                          autoCheckStates,
+                          docsForStep,
+                        )
+                      : { allDone: true, done: 0, total: 0, effective: {} };
                 const bypassCurrentStep = isProcurementStepBypassed(
                   current.step_number,
                   project.procurement_path,
@@ -3319,6 +3632,19 @@ function ProjectDetailPage() {
                                     : current.step_number === 10
                                       ? !step10Ready
                                       : !allUploaded);
+                if (
+                  current.step_number === 2 &&
+                  disabled &&
+                  !bypassCurrentStep &&
+                  !isCompleted
+                ) {
+                  console.log("[Step2] ปุ่ม disabled —", {
+                    step2Ready,
+                    isCompleted,
+                    bypassCurrentStep,
+                    blockingIssues: step2ComplianceIssues.map((i) => i.message),
+                  });
+                }
                 const showCompleteBtn =
                   workflowMode === "current" &&
                   !isCompleted &&
@@ -4187,14 +4513,23 @@ function ProjectTimeline({
   project,
   steps,
   step3Note,
+  step3LiveAnnouncement = null,
 }: {
   projectId: string;
   project: Project;
   steps: Step[];
   step3Note?: string | null;
+  step3LiveAnnouncement?: Step3Announcement | null;
 }) {
   const timelineInput = useMemo(
-    () => buildProjectTimelineInput(projectId, project, steps, step3Note),
+    () =>
+      buildProjectTimelineInput(
+        projectId,
+        project,
+        steps,
+        step3Note,
+        step3LiveAnnouncement,
+      ),
     [
       projectId,
       project.id,
@@ -4204,10 +4539,16 @@ function ProjectTimeline({
       project.created_at,
       project.committee_appointment_order_date,
       project.median_price_approval_date,
+      project.procurement_request_approval_date,
+      project.committee_review_workdays,
       project.evaluation_report_approval_date,
       project.winner_announcement_date,
       steps,
       step3Note,
+      step3LiveAnnouncement?.publication_start,
+      step3LiveAnnouncement?.publication_end,
+      step3LiveAnnouncement?.procurement_request_approval_date,
+      step3LiveAnnouncement?.committee_review_workdays,
     ],
   );
   const items = useMemo(

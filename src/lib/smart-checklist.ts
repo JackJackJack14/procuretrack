@@ -45,8 +45,18 @@ export type SmartChecklistItem<K extends string = string> = {
   key: K;
   label: string;
   hint?: string;
+  /** ข้อความเงื่อนไขระเบียบ (แสดงใต้รายการ — ด่าน 3) */
+  complianceHelperText?: string;
   mode: ChecklistMode;
 };
+
+/** เงื่อนไขระเบียบ — แสดงใต้ข้อ 2 กลุ่มที่ 1 ด่าน 3 */
+export const STEP3_HEARING_FILES_COMPLIANCE_HELPER =
+  "⚠️ เงื่อนไข: โปรดตรวจสอบร่างประกาศฯ และเอกสารประกวดราคาให้เป็นไปตามแบบมาตรฐาน และไม่มีการกำหนดคุณลักษณะเฉพาะที่สืบไปถึงการล็อกสเปคตาม พ.ร.บ. มาตรา 9";
+
+/** เงื่อนไขระเบียบ — แสดงใต้ข้อ 3 กลุ่มที่ 1 ด่าน 3 */
+export const STEP3_EGP_PUBLICATION_COMPLIANCE_HELPER =
+  "⚠️ เงื่อนไข: ต้องจัดทำบันทึกข้อความภายในเสนอหัวหน้าหน่วยงานเพื่อขอความเห็นชอบก่อนนำไปขึ้นเว็บภาครัฐ";
 
 /** โหมด Auto/Manual ต่อ key — ขั้น 1–4 อ้างอิง key เดิมใน step-form */
 const STEP_CHECKLIST_MODES: Record<number, Record<string, ChecklistMode>> = {
@@ -65,9 +75,9 @@ const STEP_CHECKLIST_MODES: Record<number, Record<string, ChecklistMode>> = {
     bg06_table_verified: "auto",
   },
   3: {
-    draft_announcement_standard_compliant: "manual",
-    spec_no_lock_in_verified: "manual",
-    internal_memo_director_approval: "manual",
+    draft_announcement_standard_compliant: "auto",
+    spec_no_lock_in_verified: "auto",
+    internal_memo_director_approval: "auto",
     median_price_step2_verified: "auto",
     hearing_files_prepared: "auto",
     egp_published_for_comment: "auto",
@@ -281,7 +291,21 @@ export function getSmartChecklistItems(stepNumber: number): SmartChecklistItem[]
     case 2:
       return withModes(2, STEP2_CHECKLIST_ITEMS);
     case 3:
-      return withModes(3, STEP3_CHECKLIST_ITEMS);
+      return withModes(3, STEP3_CHECKLIST_ITEMS)
+        .filter((item) =>
+          (["hearing_files_prepared", "egp_published_for_comment"] as string[]).includes(
+            item.key,
+          ),
+        )
+        .map((item) => {
+          if (item.key === "hearing_files_prepared") {
+            return { ...item, complianceHelperText: STEP3_HEARING_FILES_COMPLIANCE_HELPER };
+          }
+          if (item.key === "egp_published_for_comment") {
+            return { ...item, complianceHelperText: STEP3_EGP_PUBLICATION_COMPLIANCE_HELPER };
+          }
+          return item;
+        });
     case 4:
       return withModes(4, STEP4_CHECKLIST_ITEMS);
     case 5:
@@ -444,7 +468,8 @@ export function computeAutoChecklistState(ctx: SmartChecklistAutoContext): Recor
     const ann = ctx.announcement;
     auto.egp_published_for_comment =
       !!(ann?.egp_project_code?.trim() || ann?.egp_announcement_no?.trim()) &&
-      (!!ctx.hasEgpAnnouncementDoc || !!ctx.hasEgpScreenshotDoc);
+      (!!ctx.hasEgpAnnouncementDoc || !!ctx.hasEgpScreenshotDoc) &&
+      !!ctx.hasMemoDoc;
     auto.comment_channel_prepared = !!ann?.comment_channel_email?.trim();
     return auto;
   }
@@ -578,13 +603,15 @@ export function buildEffectiveChecklist(
         item.mode === "auto" ? hasDoc && !!auto[item.key] : hasDoc;
     } else if (item.mode === "auto") {
       effective[item.key] = !!auto[item.key];
-    } else if (evidence && docs && !evidence.uploadDriven) {
-      effective[item.key] =
-        hasInlineEvidenceDoc(
-          docs,
-          evidence.documentType,
-          evidence.legacyDocumentTypes,
-        ) && !!manual[item.key];
+    } else if (item.mode === "manual" && evidence && !evidence.uploadDriven) {
+      effective[item.key] = !!manual[item.key];
+    } else if (item.mode === "manual" && evidence?.uploadDriven && docs) {
+      const hasDoc = hasInlineEvidenceDoc(
+        docs,
+        evidence.documentType,
+        evidence.legacyDocumentTypes,
+      );
+      effective[item.key] = hasDoc && !!manual[item.key];
     } else {
       effective[item.key] = !!manual[item.key];
     }

@@ -84,25 +84,12 @@ const STEP2_INLINE: ChecklistInlineEvidence[] = [
 
 const STEP3_INLINE: ChecklistInlineEvidence[] = [
   {
-    checklistKey: "draft_announcement_standard_compliant",
-    documentType: STEP3_DOC.DRAFT_ANNOUNCEMENT_BID,
-    uploadLabel: "แนบร่างประกาศและเอกสารประกวดราคา",
-    filePolicyId: "tor_spec",
+    checklistKey: "hearing_files_prepared",
+    documentType: STEP3_DOC.MEDIAN_BG06,
+    uploadLabel: "ตารางราคากลาง บก.06",
+    filePolicyId: "bg06",
     uploadDriven: true,
-  },
-  {
-    checklistKey: "spec_no_lock_in_verified",
-    documentType: STEP3_DOC.DRAFT_TOR_SPEC,
-    uploadLabel: "แนบร่าง TOR / คุณลักษณะเฉพาะ",
-    filePolicyId: "tor_spec",
-    uploadDriven: true,
-  },
-  {
-    checklistKey: "internal_memo_director_approval",
-    documentType: STEP3_DOC.MEMO_APPROVAL,
-    uploadLabel: "แนบ PDF บันทึกข้อความเห็นชอบ",
-    filePolicyId: "pdf_only",
-    uploadDriven: true,
+    legacyDocumentTypes: [STEP2_DOC.MEDIAN_PRICE_BG06],
   },
   {
     checklistKey: "egp_published_for_comment",

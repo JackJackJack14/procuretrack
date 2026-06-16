@@ -3,7 +3,9 @@ import { InlineDocUpload } from "@/components/steps/InlineDocUpload";
 import {
   getInlineEvidenceByKey,
 } from "@/lib/checklist-inline-evidence";
+import { STEP2_DOC, STEP3_DOC } from "@/lib/step-doc-types";
 import type { ProjectDocRef, StepDocRecord } from "@/lib/doc-upload";
+import { mergeDocsForChecklistDisplay, type InheritedDocSource } from "@/lib/step-doc-display";
 import {
   buildEffectiveChecklist,
   countSmartChecklistProgressFromItems,
@@ -18,6 +20,8 @@ export type SmartChecklistDocBinder = {
   stepNumber: number;
   docs: StepDocRecord[];
   onDocsChange: () => void;
+  /** เอกสารจากขั้นตอนก่อนหน้า — แสดงสถานะ inherited บน UI */
+  inheritedDocs?: InheritedDocSource[];
 };
 
 type Props = {
@@ -43,12 +47,15 @@ export function SmartChecklist({
 }: Props) {
   const evidenceByKey = getInlineEvidenceByKey(stepNumber);
   const stepDocs = docBinder?.docs ?? [];
+  const mergedDocs = docBinder
+    ? mergeDocsForChecklistDisplay(stepDocs, docBinder.inheritedDocs)
+    : stepDocs;
 
   const effective = buildEffectiveChecklist(
     stepNumber,
     manualChecklist,
     autoStates,
-    docBinder ? stepDocs : undefined,
+    docBinder ? mergedDocs : undefined,
   );
 
   const { done, total, allDone } = countSmartChecklistProgressFromItems(items, effective);
@@ -88,6 +95,7 @@ export function SmartChecklist({
 
       {autoItems.length > 0 && (
         <ChecklistGroup
+          stepNumber={stepNumber}
           title="กลุ่มที่ 1: Auto-Check (ระบบ + หลักฐานอัปโหลด)"
           subtitle="ติ๊กอัตโนมัติเมื่อข้อมูลฟอร์ม/ไฟล์หลักฐานครบ"
           items={autoItems}
@@ -96,19 +104,22 @@ export function SmartChecklist({
           docBinder={docBinder}
           readOnly={readOnly}
           onManualChange={onManualChange}
+          inheritedDocs={docBinder?.inheritedDocs}
         />
       )}
 
       {manualItems.length > 0 && (
         <ChecklistGroup
-          title="กลุ่มที่ 2: Manual-Check (หลักฐานยันหน้างาน)"
-          subtitle="แนบไฟล์ในแถว — ระบบติ๊กให้อัตโนมัติเมื่อมีหลักฐาน"
+          stepNumber={stepNumber}
+          title="กลุ่มที่ 2: Manual-Check (ยืนยันความถูกต้อง)"
+          subtitle="ติ๊กยืนยันในแต่ละข้อหลังตรวจสอบเอกสาร — แนบหลักฐานเพิ่มเติมในแถวได้ (ถ้ามี)"
           items={manualItems}
           effective={effective}
           evidenceByKey={evidenceByKey}
           docBinder={docBinder}
           readOnly={readOnly}
           onManualChange={onManualChange}
+          inheritedDocs={docBinder?.inheritedDocs}
         />
       )}
     </div>
@@ -116,6 +127,7 @@ export function SmartChecklist({
 }
 
 function ChecklistGroup({
+  stepNumber,
   title,
   subtitle,
   items,
@@ -124,7 +136,9 @@ function ChecklistGroup({
   docBinder,
   readOnly,
   onManualChange,
+  inheritedDocs,
 }: {
+  stepNumber: number;
   title: string;
   subtitle: string;
   items: SmartChecklistItem[];
@@ -133,6 +147,7 @@ function ChecklistGroup({
   docBinder?: SmartChecklistDocBinder;
   readOnly?: boolean;
   onManualChange?: (key: string, checked: boolean) => void;
+  inheritedDocs?: InheritedDocSource[];
 }) {
   return (
     <div className="rounded-md border bg-background p-3 space-y-2">
@@ -145,8 +160,7 @@ function ChecklistGroup({
           const checked = !!effective[item.key];
           const evidence = evidenceByKey.get(item.key);
           const isUploadDriven = !!evidence?.uploadDriven;
-          const showManualCheckbox =
-            item.mode === "manual" && evidence && !isUploadDriven && !docBinder;
+          const showManualCheckbox = item.mode === "manual";
 
           return (
             <div
@@ -191,11 +205,56 @@ function ChecklistGroup({
                         ({item.hint})
                       </span>
                     )}
+                    {item.complianceHelperText && (
+                      <span className="block text-xs text-muted-foreground mt-1.5 font-normal leading-relaxed">
+                        {item.complianceHelperText}
+                      </span>
+                    )}
                   </span>
                 </div>
 
-                {evidence && docBinder && (
-                  <div className="shrink-0 sm:max-w-[240px] w-full sm:w-auto pl-6 sm:pl-0">
+                {evidence && docBinder && item.key === "hearing_files_prepared" && stepNumber === 3 && (
+                  <div className="shrink-0 sm:max-w-[300px] w-full sm:w-auto pl-6 sm:pl-0 space-y-2">
+                    <InlineDocUpload
+                      project={docBinder.project}
+                      stepNumber={docBinder.stepNumber}
+                      documentType={STEP3_DOC.DRAFT_TOR_SPEC}
+                      label="ร่าง TOR / คุณลักษณะเฉพาะ"
+                      existing={docBinder.docs}
+                      onChange={docBinder.onDocsChange}
+                      compact
+                      filePolicyId="tor_spec"
+                      readOnly={readOnly}
+                    />
+                    <InlineDocUpload
+                      project={docBinder.project}
+                      stepNumber={docBinder.stepNumber}
+                      documentType={STEP3_DOC.DRAFT_ANNOUNCEMENT_BID}
+                      label="ร่างประกาศและเอกสารประกวดราคา"
+                      existing={docBinder.docs}
+                      onChange={docBinder.onDocsChange}
+                      compact
+                      filePolicyId="tor_spec"
+                      readOnly={readOnly}
+                    />
+                    <InlineDocUpload
+                      project={docBinder.project}
+                      stepNumber={docBinder.stepNumber}
+                      documentType={STEP3_DOC.MEDIAN_BG06}
+                      label="ตารางราคากลาง บก.06"
+                      existing={docBinder.docs}
+                      onChange={docBinder.onDocsChange}
+                      compact
+                      filePolicyId="bg06"
+                      inheritedDocs={inheritedDocs}
+                      alternateDocumentTypes={[STEP2_DOC.MEDIAN_PRICE_BG06]}
+                      readOnly={readOnly}
+                    />
+                  </div>
+                )}
+
+                {evidence && docBinder && !(item.key === "hearing_files_prepared" && stepNumber === 3) && (
+                  <div className="shrink-0 sm:max-w-[280px] w-full sm:w-auto pl-6 sm:pl-0">
                     <InlineDocUpload
                       project={docBinder.project}
                       stepNumber={docBinder.stepNumber}
@@ -205,6 +264,9 @@ function ChecklistGroup({
                       onChange={docBinder.onDocsChange}
                       compact
                       filePolicyId={evidence.filePolicyId}
+                      inheritedDocs={inheritedDocs}
+                      alternateDocumentTypes={evidence.legacyDocumentTypes}
+                      readOnly={readOnly}
                     />
                   </div>
                 )}

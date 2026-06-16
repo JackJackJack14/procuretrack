@@ -17,7 +17,7 @@ export function ComplianceGateBanner({ show, progressPct, issues = [] }: Props) 
     >
       <p className="text-sm font-semibold text-destructive flex items-center gap-2">
         <AlertTriangle className="h-4 w-4 shrink-0" />
-        ยังไม่สามารถไปขั้นตอนถัดไปได้ — Smart Checklist ครบ {progressPct}% (ต้อง 100%)
+        ยังไม่สามารถไปขั้นตอนถัดไปได้ — ความพร้อม {progressPct}% (ต้อง 100%)
       </p>
       <p className="text-xs text-destructive/90 leading-relaxed">
         ปุ่ม «บันทึกร่าง» บันทึกข้อมูลตัวอักษร/ตัวเลขได้ตลอด · ปุ่ม «บันทึกและไปขั้นตอนถัดไป»

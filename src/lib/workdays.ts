@@ -15,16 +15,18 @@ export function isThaiHoliday(date: Date): boolean {
   ];
   if (fixedHolidays.includes(dateStr)) return true;
 
-  // ปี พ.ศ. 2569 (ค.ศ. 2026) — อ้างอิงประกาศ ธปท. / ปฏิทินราชการ
+  // ปี พ.ศ. 2569 (ค.ศ. 2026) — วันหยุดราชการตามประกาศ สลค./มติ ครม.
+  // รวมวันหยุดชดเชยและวันหยุดพิเศษ 2 ม.ค. (ไม่รวม 2 มิ.ย. และ 31 ก.ค. ที่ครม.ถอนออก)
+  // วันพุทธ/จันทรคติ + วันหยุดคงที่ (01-01, 04-06, สงกรานต์ ฯลฯ) อยู่ใน fixedHolidays ด้านบน
   const holidays2026 = [
-    "2026-01-02", // วันหยุดพิเศษปีใหม่
+    "2026-01-02", // วันหยุดราชการเพิ่มเป็นกรณีพิเศษ (ปีใหม่)
     "2026-03-03", // วันมาฆบูชา
-    "2026-05-11", // วันพระราชพิธีพืชมงคล (หน่วยราชการ)
-    "2026-05-31", // วันวิสาขบูชา
-    "2026-06-01", // ชดเชยวันวิสาขบูชา (ตกวันอาทิตย์)
+    "2026-05-13", // วันพระราชพิธีพืชมงคล (หยุดเฉพาะหน่วยงานราชการ)
+    "2026-05-31", // วันวิสาขบูชา (อาทิตย์)
+    "2026-06-01", // ชดเชยวันวิสาขบูชา
     "2026-07-29", // วันอาสาฬหบูชา
     "2026-07-30", // วันเข้าพรรษา
-    "2026-10-13", // วันคล้ายวันสวรรคต ร.9
+    "2026-10-13", // วันคล้ายวันสวรรคต พระบาทสมเด็จพระบรมชนกาถธำรงเจ้าอยู่หัว
     "2026-12-07", // ชดเชยวันพ่อแห่งชาติ (5 ธ.ค. ตกวันเสาร์)
   ];
 
@@ -79,7 +81,7 @@ export function countWorkdaysBetweenISO(startISO: string, endISO: string): numbe
   return countWorkdaysBetween(start, end);
 }
 
-function toISODate(d: Date): string {
+export function toISODate(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
@@ -116,6 +118,34 @@ export const STEP3_PUBLICATION_END_GUIDELINE =
 export const STEP3_PUBLICATION_END_TOO_SHORT_MSG =
   "❌ ไม่สามารถเลือกวันทำการน้อยกว่า 3 วันทำการได้ เนื่องจากขัดต่อระเบียบกระทรวงการคลังฯ";
 
+export const STEP3_PUBLICATION_BEFORE_APPROVAL_MSG =
+  "❌ วันที่เผยแพร่ไม่สามารถก่อนวันที่ได้รับอนุมัติจากหัวหน้าหน่วยงานได้";
+
+export const STEP3_PUBLICATION_EXTENSION_REASON_MSG =
+  "กรุณาระบุเหตุผลประกอบการขยายระยะเวลาเผยแพร่เกินเกณฑ์ขั้นต่ำ 3 วันทำการ";
+
+/** วันเริ่มเผยแพร่ต้องไม่ก่อนวันที่หัวหน้าหน่วยงานลงนามอนุมัติ */
+export function isPublicationStartOnOrAfterApproval(
+  startISO: string,
+  approvalISO: string,
+): boolean {
+  const start = startISO?.trim() ?? "";
+  const approval = approvalISO?.trim() ?? "";
+  if (!start || !approval) return true;
+  return start >= approval;
+}
+
+/** วันสิ้นสุดเผยแพร่ขยายเกินเกณฑ์ขั้นต่ำ (start + 3 วันทำการ) */
+export function isPublicationEndExtendedBeyondMinimum(
+  startISO: string,
+  endISO: string,
+  workdaysAfter = MIN_DRAFT_PUBLICATION_WORKDAYS,
+): boolean {
+  const minEnd = defaultPublicationEndISO(startISO, workdaysAfter);
+  if (!minEnd || !endISO?.trim()) return false;
+  return endISO.trim() > minEnd;
+}
+
 /** วันสิ้นสุดเผยแพร่ถูกต้องตามขั้นต่ำ (≥ min วันทำการถัดจากวันเริ่ม) */
 export function isPublicationEndValidISO(startISO: string, endISO: string): boolean {
   if (!startISO || !endISO) return false;
@@ -140,11 +170,17 @@ export const STEP3_PUBLICATION_NON_WORKDAY_MSG =
 export function validateStep3PublicationDates(
   startISO?: string,
   endISO?: string,
+  approvalISO?: string,
+  extensionReason?: string,
 ): string | null {
   const start = startISO?.trim() ?? "";
   const end = endISO?.trim() ?? "";
+  const approval = approvalISO?.trim() ?? "";
   if (!start || !end) {
     return "กรุณาระบุวันเริ่มและวันสิ้นสุดการเผยแพร่ร่างประกาศให้ครบ";
+  }
+  if (approval && !isPublicationStartOnOrAfterApproval(start, approval)) {
+    return STEP3_PUBLICATION_BEFORE_APPROVAL_MSG;
   }
   if (!isWorkdayISO(start)) {
     return `${STEP3_PUBLICATION_NON_WORKDAY_MSG} (วันเริ่มเผยแพร่)`;
@@ -154,6 +190,12 @@ export function validateStep3PublicationDates(
   }
   if (!isPublicationEndValidISO(start, end)) {
     return STEP3_PUBLICATION_END_TOO_SHORT_MSG;
+  }
+  if (
+    isPublicationEndExtendedBeyondMinimum(start, end) &&
+    !extensionReason?.trim()
+  ) {
+    return STEP3_PUBLICATION_EXTENSION_REASON_MSG;
   }
   return null;
 }
@@ -244,6 +286,18 @@ export const APPEAL_PERIOD_WORKDAYS = 7;
 
 /** ระยะออกหนังสือแจ้งทำสัญญา — ระเบียบกระทรวงการคลังฯ ข้อ 161 */
 export const CONTRACT_NOTIFICATION_WORKDAYS = 5;
+
+/**
+ * ไทม์ไลน์โครงการ — ระยะขั้นต่ำ Fastest Path สำหรับด่านที่ยังไม่มีวันที่จริง (วันทำการ)
+ * ใช้กับ addWorkdays() เท่านั้น — ห้ามบวก Calendar Days
+ */
+export const PROJECT_TIMELINE_ESTIMATE_STEP3_WORKDAYS = MIN_DRAFT_PUBLICATION_WORKDAYS;
+export const PROJECT_TIMELINE_ESTIMATE_STEP5_WORKDAYS = 7;
+export const PROJECT_TIMELINE_ESTIMATE_STEP6_WORKDAYS = APPEAL_PERIOD_WORKDAYS;
+/** รวมขั้นต่ำ 3 วันทำการสำหรับขั้น 7–9 (แบ่ง 1 วันต่อขั้น) */
+export const PROJECT_TIMELINE_ESTIMATE_STEP7_9_WORKDAYS_EACH = 1;
+/** ระยะรับซองราคาเริ่มต้นเมื่อยังไม่มี committee_review_workdays จากขั้น 3 */
+export const PROJECT_TIMELINE_ESTIMATE_STEP4_DEFAULT_BID_WORKDAYS = 5;
 
 /**
  * จำนวนวันทำการขั้นต่ำต่อ Milestone e-GP (10 ขั้น)
