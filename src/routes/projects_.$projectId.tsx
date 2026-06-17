@@ -96,6 +96,11 @@ import {
   buildProjectProcurementRequestFields,
   buildProjectStep4Fields,
   buildProjectStep5Fields,
+  step4BidResultToProcurementAnnouncement,
+  resolveStep3PublicationEnd,
+  resolveStep2MedianApprovalDate,
+  applyStep4CommitteeAutoFill,
+  isStep4ProcurementSignDateValid,
   loadStep4FormFromNote,
   loadStep5FormFromNote,
   mergeStep4BidResultFromProject,
@@ -149,13 +154,16 @@ import {
   logStep2ComplianceWarnings,
   type Step2ComplianceLog,
   hasEvaluationInspectionOrderDoc,
+  hasSiteSupervisorOrderDoc,
   hasEvaluationOrderFromStep2,
+  logStep4DocumentInheritanceDebug,
   hasStep2MarketQuotesDoc,
   isAppealBlocking,
   isStep4ReadyForNext,
   countStep4CoreDocumentsReady,
   countStep4FormRequiredProgress,
   getStep4ComplianceIssues,
+  STEP4_PROCUREMENT_SIGN_DATE_INVALID_MSG,
   getStep6ComplianceIssues,
   isStep6ReadyForNext,
   countStep6CoreDocumentsReady,
@@ -223,10 +231,8 @@ import {
 import { resolveProjectContractSignedDate } from "@/lib/step9-guideline";
 import { resolveProjectContractEndDate } from "@/lib/step10-guideline";
 import {
-  hasStep4BlacklistEvidenceDoc,
-  hasStep4CommitteeReportDoc,
-  hasStep4ConflictEvidenceDoc,
-  hasStep4EgpBidSummaryDoc,
+  hasStep4SignedProcurementRequestDoc,
+  hasStep4PriceComparisonDoc,
   hasStep5EgpWinnerDoc,
   hasStep5PhysicalBoardDoc,
   hasStep6AgencyReportDoc,
@@ -258,7 +264,6 @@ import {
   getPreviousStepReopenPatch,
   getStepRollbackProcurementStepWipe,
   getStepRollbackProjectWipe,
-  updateProjectOmittingMissingColumns,
 } from "@/lib/step-rollback";
 import {
   canCompleteWorkflowStep,
@@ -431,6 +436,7 @@ function ProjectDetailPage() {
     ...EMPTY_STEP9_CONTRACT_SCHEDULE,
   });
   const [step10InspectionRows, setStep10InspectionRows] = useState<Step10InspectionRow[]>([]);
+  const [step4CommitteesHydrating, setStep4CommitteesHydrating] = useState(false);
 
   const { data, isPending: loading, refetch } = useQuery({
     queryKey: ["project", projectId],
@@ -621,7 +627,11 @@ function ProjectDetailPage() {
         projectUpdates.warranty_started_at = null;
         projectUpdates.warranty_end_date = null;
       }
-      await updateProjectOmittingMissingColumns(supabase, project.id, projectUpdates);
+      const { error: projectUpdateErr } = await supabase
+        .from("projects")
+        .update(projectUpdates)
+        .eq("id", project.id);
+      if (projectUpdateErr) throw new Error(projectUpdateErr.message);
 
       setHistoricalEditUnlocked(false);
       setGenericManualChecklist(createEmptyManualChecklist(stepNum));
@@ -668,6 +678,60 @@ function ProjectDetailPage() {
           },
     [projectId, project?.id, project?.committee_review_workdays, project?.procurement_request_approval_date, step3Record?.note],
   );
+  const step3PublicationEnd = useMemo(() => {
+    const fromAnnouncement = step3Announcement.publication_end?.trim();
+    if (fromAnnouncement) return fromAnnouncement;
+    return resolveStep3PublicationEnd(step3Record?.note ?? null);
+  }, [step3Announcement.publication_end, step3Record?.note]);
+  const step2Record = useMemo(() => steps.find((s) => s.step_number === 2), [steps]);
+  const step2MedianApprovalDate = useMemo(
+    () => resolveStep2MedianApprovalDate(project, step2Record?.note ?? null),
+    [project, step2Record?.note],
+  );
+  const step4EvaluationOrderDocs = useMemo(
+    () =>
+      docs.filter(
+        (d) =>
+          d.document_type === STEP2_DOC.EVALUATION_INSPECTION_ORDER &&
+          (d.step_number === 2 || d.step_number === 4),
+      ),
+    [docs],
+  );
+  const step4SupervisorOrderDocs = useMemo(
+    () =>
+      docs.filter(
+        (d) =>
+          d.document_type === STEP2_DOC.SITE_SUPERVISOR_ORDER &&
+          (d.step_number === 2 || d.step_number === 4),
+      ),
+    [docs],
+  );
+  const committeesDbSnapshot = useMemo(
+    () =>
+      committees
+        .map((c) => `${c.committee_type}|${c.member_name}|${c.position ?? ""}`)
+        .join("\n"),
+    [committees],
+  );
+  const resolvedStep4Committees = useMemo(() => {
+    if (!project) return { ...EMPTY_STEP2_COMMITTEES };
+    const step2Form = mergeStep2FormFromProject(
+      loadStep2FormFromStep((step2Record ?? { note: null }) as Step),
+      project,
+    );
+    return loadStep2CommitteesFromDb(
+      committees,
+      project.committee_appointment_mode,
+      step2Form.committees,
+    );
+  }, [
+    project,
+    step2Record?.note,
+    step2Record?.id,
+    committeesDbSnapshot,
+    committees,
+    project?.committee_appointment_mode,
+  ]);
 
   const timelineValidationCtx = useMemo(() => {
     if (!project || project.id !== projectId) {
@@ -857,6 +921,54 @@ function ProjectDetailPage() {
     setResponsibleName(resolveResponsibleOfficer(active, step1ResponsibleDefault));
   }, [activeStep, step1ResponsibleDefault, steps]);
 
+  /** ด่าน 4 — ดึง/เติมรายชื่อคณะกรรมการจากด่าน 2 (ปิด loading ใน finally เสมอ) */
+  useEffect(() => {
+    if (current?.step_number !== 4 || !project) {
+      setStep4CommitteesHydrating(false);
+      return;
+    }
+    if (loading) {
+      setStep4CommitteesHydrating(true);
+      return;
+    }
+
+    let cancelled = false;
+    setStep4CommitteesHydrating(true);
+    console.log("🔄 [COMMITTEE] START: กำลังเริ่มดึงข้อมูลคณะกรรมการจากด่าน 2");
+
+    try {
+      const data = resolvedStep4Committees ?? { ...EMPTY_STEP2_COMMITTEES };
+      console.log("✅ [COMMITTEE] SUCCESS: ข้อมูลที่ดึงมาได้คือ:", data);
+
+      if (!cancelled) {
+        setStep2Committees(data);
+        setStep4BidResult((prev) => {
+          const next = applyStep4CommitteeAutoFill(prev, data, {
+            step2Note: step2Record?.note ?? null,
+          });
+          if (
+            next.evaluation_committee_text === prev.evaluation_committee_text &&
+            next.inspection_committee_text === prev.inspection_committee_text
+          ) {
+            return prev;
+          }
+          return next;
+        });
+      }
+    } catch (error) {
+      console.log("❌ [COMMITTEE] CRASH: โค้ดระเบิดตรงนี้เนื่องจาก:", error);
+    } finally {
+      if (!cancelled) {
+        console.log("🏁 [COMMITTEE] FINALLY: สั่งปิด Loading State เรียบร้อย");
+        setStep4CommitteesHydrating(false);
+      }
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [current?.step_number, current?.id, project?.id, loading, resolvedStep4Committees]);
+
   useEffect(() => {
     if (!current || !project) return;
     if (current.step_number === 1) {
@@ -933,12 +1045,31 @@ function ProjectDetailPage() {
       return;
     }
     if (current.step_number === 4) {
+      logStep4DocumentInheritanceDebug(docs);
+      const step2Form = mergeStep2FormFromProject(
+        loadStep2FormFromStep((step2Record ?? { note: null }) as Step),
+        project,
+      );
+      const committeesForStep4 = loadStep2CommitteesFromDb(
+        committees,
+        project.committee_appointment_mode,
+        step2Form.committees,
+      );
+      setStep2Committees(committeesForStep4);
+      setStep2MedianPrice({
+        ...EMPTY_STEP2_MEDIAN_PRICE,
+        ...step2Form.medianPrice,
+      });
       const step4Form = loadStep4FormFromNote(current.note);
       setStep4Checklist(step4Form.checklist ?? { ...EMPTY_STEP4_CHECKLIST });
       setStep4BidResult(
-        mergeStep4BidResultFromProject(
-          step4Form.bidResult ?? { ...EMPTY_STEP4_BID_RESULT },
-          project,
+        applyStep4CommitteeAutoFill(
+          mergeStep4BidResultFromProject(
+            step4Form.bidResult ?? { ...EMPTY_STEP4_BID_RESULT },
+            project,
+          ),
+          committeesForStep4,
+          { step2Note: step2Record?.note ?? null },
         ),
       );
       const draft4 = loadStepDraftFields(current);
@@ -1064,7 +1195,7 @@ function ProjectDetailPage() {
     const draft = loadStepDraftFields(current);
     setNote(draft.userNote);
     setDueDate(draft.dueDate);
-  }, [current?.id, project?.id, project?.committee_appointment_mode, committees.length, mergedStep4BidResult, step7Record?.note, contractSignedDate, totalInstallmentCount, step10PlannedDates]); // eslint-disable-line
+  }, [current?.id, project?.id, project?.committee_appointment_mode, committees.length, step2Record?.id, step2Record?.note, mergedStep4BidResult, step7Record?.note, contractSignedDate, totalInstallmentCount, step10PlannedDates]); // eslint-disable-line
 
   useEffect(() => {
     if (current?.step_number !== 10) return;
@@ -1526,6 +1657,18 @@ function ProjectDetailPage() {
     }
 
     if (current.step_number === 4) {
+      const procApproval = step4BidResult.procurement_request_approval_date?.trim() ?? "";
+      if (
+        procApproval &&
+        !isStep4ProcurementSignDateValid(procApproval, {
+          step2MedianApprovalDate,
+          step3PublicationEnd,
+        })
+      ) {
+        toast.error(STEP4_PROCUREMENT_SIGN_DATE_INVALID_MSG);
+        setError(STEP4_PROCUREMENT_SIGN_DATE_INVALID_MSG);
+        return false;
+      }
       const timelineBlock = getTimelineSaveBlockMessage(4, timelineValidationCtx, {
         bidResult: step4BidResult,
       });
@@ -1547,15 +1690,19 @@ function ProjectDetailPage() {
         setError(e.error.message);
         return;
       }
-      try {
-        await updateProjectOmittingMissingColumns(
-          supabase,
-          project.id,
-          buildProjectStep4Fields(step4BidResult),
-        );
-      } catch (projErr: unknown) {
-        const message = projErr instanceof Error ? projErr.message : "บันทึกผลการเสนอราคาไม่สำเร็จ";
-        console.warn("[Step4] project bid result sync failed", message);
+      const { error: projErr } = await supabase
+        .from("projects")
+        .update({
+          ...buildProjectStep4Fields(step4BidResult),
+          ...buildProjectProcurementRequestFields(
+            step4BidResultToProcurementAnnouncement(step4BidResult),
+          ),
+        })
+        .eq("id", project.id);
+      if (projErr) {
+        setError(projErr.message);
+        toast.error(projErr.message);
+        return false;
       }
       draftSavedToast("ขั้นตอนที่ 4 ");
       await propagateResponsibleToStep1(effectiveResponsibleName);
@@ -2137,13 +2284,12 @@ function ProjectDetailPage() {
         step4BidResult,
         {
           responsibleName: effectiveResponsibleName,
-          hasEgpBidSummaryDoc: hasStep4EgpBidSummaryDoc(step4Uploaded),
-          hasBlacklistEvidenceDoc: hasStep4BlacklistEvidenceDoc(step4Uploaded),
-          hasConflictEvidenceDoc: hasStep4ConflictEvidenceDoc(step4Uploaded),
-          hasCommitteeEvaluationDoc: hasStep4CommitteeReportDoc(step4Uploaded),
-          hasEvaluationInspectionOrderDoc: hasEvaluationInspectionOrderDoc(docs),
-          hasEvaluationOrderFromStep2: hasEvaluationOrderFromStep2(docs),
-          timeline: step4Timeline,
+          hasSignedProcurementRequestDoc: hasStep4SignedProcurementRequestDoc(step4Uploaded),
+          hasCommitteeOrderDoc: hasEvaluationInspectionOrderDoc(docs),
+          hasSupervisorOrderDoc: hasSiteSupervisorOrderDoc(docs),
+          hasPriceComparisonDoc: hasStep4PriceComparisonDoc(step4Uploaded),
+          step2MedianApprovalDate,
+          step3PublicationEnd,
           timelineCtx: timelineValidationCtx,
         },
       );
@@ -2512,16 +2658,7 @@ function ProjectDetailPage() {
             hasMemoDoc: step3DocsForAuto.some(
               (d) => d.document_type === STEP3_DOC.MEMO_APPROVAL,
             ),
-            hasEgpBidSummaryDoc: hasStep4EgpBidSummaryDoc(
-              stepDocsForAuto.map((d) => d.document_type),
-            ),
-            hasBlacklistEvidenceDoc: hasStep4BlacklistEvidenceDoc(
-              stepDocsForAuto.map((d) => d.document_type),
-            ),
-            hasConflictEvidenceDoc: hasStep4ConflictEvidenceDoc(
-              stepDocsForAuto.map((d) => d.document_type),
-            ),
-            hasCommitteeEvaluationDoc: hasStep4CommitteeReportDoc(
+            hasSignedProcurementRequestDoc: hasStep4SignedProcurementRequestDoc(
               stepDocsForAuto.map((d) => d.document_type),
             ),
             appealStatus:
@@ -2817,11 +2954,16 @@ function ProjectDetailPage() {
                       onResponsibleNameChange={setResponsibleName}
                       step1ResponsibleDefault={step1ResponsibleDefault}
                       step4Timeline={step4Timeline}
-                      evaluationOrderFromStep2={docs.filter(
-                        (d) =>
-                          d.step_number === 2 &&
-                          d.document_type === STEP2_DOC.EVALUATION_INSPECTION_ORDER,
-                      )}
+                      step3PublicationEnd={step3PublicationEnd}
+                      step2MedianApprovalDate={step2MedianApprovalDate}
+                      step2Committees={resolvedStep4Committees}
+                      committeesSourceLoading={loading || step4CommitteesHydrating}
+                      budget={calcBudget}
+                      approvedMedianPrice={project.approved_median_price ?? null}
+                      specificMethodReason={step1SpecificMethodReason}
+                      evaluationOrderDocs={step4EvaluationOrderDocs}
+                      supervisorOrderDocs={step4SupervisorOrderDocs}
+                      inheritanceSourceDocs={docs}
                       docBinder={{
                         project,
                         stepNumber: 4,
@@ -3066,18 +3208,16 @@ function ProjectDetailPage() {
                   current.step_number === 4
                     ? docsForStep.map((d) => d.document_type)
                     : [];
-                const step4HasEgpSummary =
+                const step4HasSignedProcurementRequest =
                   current.step_number === 4 &&
-                  hasStep4EgpBidSummaryDoc(step4UploadedTypes);
-                const step4HasBlacklist =
+                  hasStep4SignedProcurementRequestDoc(step4UploadedTypes);
+                const step4HasCommitteeOrderDoc =
+                  current.step_number === 4 && hasEvaluationInspectionOrderDoc(docs);
+                const step4HasSupervisorOrderDoc =
+                  current.step_number === 4 && hasSiteSupervisorOrderDoc(docs);
+                const step4HasPriceComparisonDoc =
                   current.step_number === 4 &&
-                  hasStep4BlacklistEvidenceDoc(step4UploadedTypes);
-                const step4HasConflict =
-                  current.step_number === 4 &&
-                  hasStep4ConflictEvidenceDoc(step4UploadedTypes);
-                const step4HasCommitteeReport =
-                  current.step_number === 4 &&
-                  hasStep4CommitteeReportDoc(step4UploadedTypes);
+                  hasStep4PriceComparisonDoc(step4UploadedTypes);
                 const step5UploadedTypes =
                   current.step_number === 5
                     ? docsForStep.map((d) => d.document_type)
@@ -3193,13 +3333,12 @@ function ProjectDetailPage() {
                         step4BidResult,
                         {
                           responsibleName: effectiveResponsibleName,
-                          hasEgpBidSummaryDoc: step4HasEgpSummary,
-                          hasBlacklistEvidenceDoc: step4HasBlacklist,
-                          hasConflictEvidenceDoc: step4HasConflict,
-                          hasCommitteeEvaluationDoc: step4HasCommitteeReport,
-                          hasEvaluationInspectionOrderDoc: hasEvaluationInspectionOrderDoc(docs),
-                          hasEvaluationOrderFromStep2: hasEvaluationOrderFromStep2(docs),
-                          timeline: step4Timeline,
+                          hasSignedProcurementRequestDoc: step4HasSignedProcurementRequest,
+                          hasCommitteeOrderDoc: step4HasCommitteeOrderDoc,
+                          hasSupervisorOrderDoc: step4HasSupervisorOrderDoc,
+                          hasPriceComparisonDoc: step4HasPriceComparisonDoc,
+                          step2MedianApprovalDate,
+                          step3PublicationEnd,
                           timelineCtx: timelineValidationCtx,
                         },
                         autoCheckStates,
@@ -3402,13 +3541,12 @@ function ProjectDetailPage() {
                   current.step_number !== 4 ||
                   isStep4ReadyForNext(step4Checklist, step4BidResult, {
                     responsibleName: effectiveResponsibleName,
-                    hasEgpBidSummaryDoc: step4HasEgpSummary,
-                    hasBlacklistEvidenceDoc: step4HasBlacklist,
-                    hasConflictEvidenceDoc: step4HasConflict,
-                    hasCommitteeEvaluationDoc: step4HasCommitteeReport,
-                    hasEvaluationInspectionOrderDoc: hasEvaluationInspectionOrderDoc(docs),
-                    hasEvaluationOrderFromStep2: hasEvaluationOrderFromStep2(docs),
-                    timeline: step4Timeline,
+                    hasSignedProcurementRequestDoc: step4HasSignedProcurementRequest,
+                    hasCommitteeOrderDoc: step4HasCommitteeOrderDoc,
+                    hasSupervisorOrderDoc: step4HasSupervisorOrderDoc,
+                    hasPriceComparisonDoc: step4HasPriceComparisonDoc,
+                    step2MedianApprovalDate,
+                    step3PublicationEnd,
                     timelineCtx: timelineValidationCtx,
                   });
                 const checklistItemsForStep =
@@ -3472,18 +3610,18 @@ function ProjectDetailPage() {
                 const step4CoreDocsProgress =
                   current.step_number === 4
                     ? countStep4CoreDocumentsReady({
-                        hasEgpBidSummaryDoc: step4HasEgpSummary,
-                        hasBlacklistEvidenceDoc: step4HasBlacklist,
-                        hasConflictEvidenceDoc: step4HasConflict,
-                        hasCommitteeEvaluationDoc: step4HasCommitteeReport,
-                        hasEvaluationInspectionOrderDoc: hasEvaluationInspectionOrderDoc(docs),
+                        hasSignedProcurementRequestDoc: step4HasSignedProcurementRequest,
+                        hasCommitteeOrderDoc: step4HasCommitteeOrderDoc,
+                        hasSupervisorOrderDoc: step4HasSupervisorOrderDoc,
+                        hasPriceComparisonDoc: step4HasPriceComparisonDoc,
                       })
                     : null;
                 const step4FormProgress =
                   current.step_number === 4
                     ? countStep4FormRequiredProgress(step4BidResult, {
                         responsibleName: effectiveResponsibleName,
-                        timeline: step4Timeline,
+                        step2MedianApprovalDate,
+                        step3PublicationEnd,
                         timelineCtx: timelineValidationCtx,
                       })
                     : null;

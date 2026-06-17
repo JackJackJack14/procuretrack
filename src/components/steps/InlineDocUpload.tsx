@@ -37,6 +37,8 @@ type Props = {
   alternateDocumentTypes?: string[];
   /** ปิดการลบไฟล์ (เช่น เอกสารสืบทอน) */
   readOnly?: boolean;
+  /** อนุญาตลบไฟล์ที่สืบทอนจากด่านก่อนหน้า เพื่ออัปโหลดฉบับใหม่ */
+  allowInheritedDelete?: boolean;
 };
 
 /** ปุ่มอัปโหลดแบบ inline — แสดงชื่อไฟล์ + เปิดดู + ลบในแถวเดียว */
@@ -52,6 +54,7 @@ export function InlineDocUpload({
   inheritedDocs,
   alternateDocumentTypes,
   readOnly = false,
+  allowInheritedDelete = false,
 }: Props) {
   const policy = filePolicyId
     ? resolveDocFilePolicyById(filePolicyId)
@@ -89,7 +92,14 @@ export function InlineDocUpload({
   };
 
   const handleDelete = async () => {
-    if (!file || isInherited || readOnly || !confirm(`ลบไฟล์ "${file.file_name}" ?`)) return;
+    if (
+      !file ||
+      readOnly ||
+      (!allowInheritedDelete && isInherited) ||
+      !confirm(`ลบไฟล์ "${file.file_name}" ?`)
+    ) {
+      return;
+    }
     setBusy(true);
     try {
       const ok = await deleteStepDocument(project, file);
@@ -119,12 +129,9 @@ export function InlineDocUpload({
         <div
           className={`rounded-md border-2 border-success/50 bg-success/10 text-xs ${inheritedBarCls}`}
         >
-          <p className="text-success font-semibold">✅ มีเอกสารในระบบแล้ว</p>
-          {inheritedFromStep != null && (
-            <p className="text-[11px] text-muted-foreground">
-              ดึงจากขั้นตอนที่ {inheritedFromStep}
-            </p>
-          )}
+          <p className="text-success font-semibold">
+            ✅ มีเอกสารในระบบแล้ว (ดึงข้อมูลอัตโนมัติจากขั้นตอนที่ {inheritedFromStep ?? 2})
+          </p>
           <div className="flex flex-wrap items-center gap-2">
             <span
               className="text-foreground font-medium truncate max-w-[180px] sm:max-w-[240px]"
@@ -148,6 +155,17 @@ export function InlineDocUpload({
               <Download className="h-3 w-3" />
               {!compact && "ดาวน์โหลด"}
             </button>
+            {allowInheritedDelete && !readOnly && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void handleDelete()}
+                className="inline-flex items-center text-destructive hover:bg-destructive/10 rounded p-0.5 disabled:opacity-50"
+                title="ลบไฟล์เพื่ออัปโหลดฉบับใหม่"
+              >
+                {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+              </button>
+            )}
           </div>
         </div>
       </div>

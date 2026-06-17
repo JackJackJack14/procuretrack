@@ -418,6 +418,10 @@ export function buildStep4EvidenceFieldValues(bidResult: Step4BidResult): Record
   };
 }
 
+export function hasStep4SignedProcurementRequestDoc(uploadedDocTypes: string[]): boolean {
+  return uploadedDocTypes.includes(STEP4_DOC.SIGNED_PROCUREMENT_REQUEST);
+}
+
 export function hasStep4EgpBidSummaryDoc(uploadedDocTypes: string[]): boolean {
   return uploadedDocTypes.includes(STEP4_DOC.EGP_BID_SUMMARY);
 }
@@ -432,6 +436,10 @@ export function hasStep4ConflictEvidenceDoc(uploadedDocTypes: string[]): boolean
 
 export function hasStep4CommitteeReportDoc(uploadedDocTypes: string[]): boolean {
   return uploadedDocTypes.some((t) => isStep4CommitteeReportDocType(t));
+}
+
+export function hasStep4PriceComparisonDoc(uploadedDocTypes: string[]): boolean {
+  return uploadedDocTypes.includes(STEP4_DOC.PRICE_COMPARISON_TABLE);
 }
 
 export function hasStep5EgpWinnerDoc(uploadedDocTypes: string[]): boolean {
@@ -522,39 +530,19 @@ export function getChecklistEvidenceIssues(
   return issues;
 }
 
-/** เอกสารบังคับขั้นตอนที่ 4 ตามมาตรฐาน Audit Trail */
+/** เอกสารบังคับขั้นตอนที่ 4 — รายงานขอซื้อขอจ้างที่ลงนามแล้ว (ข้อ 22) */
 export function getStep4RequiredAuditDocuments(): { name: string; required: boolean }[] {
-  return [
-    { name: STEP4_DOC.EGP_BID_SUMMARY, required: true },
-    { name: STEP4_DOC.BLACKLIST_EVIDENCE, required: true },
-    { name: STEP4_DOC.CONFLICT_EVIDENCE, required: true },
-    { name: STEP4_DOC.COMMITTEE_EVALUATION_REPORT, required: true },
-  ];
+  return [{ name: STEP4_DOC.SIGNED_PROCUREMENT_REQUEST, required: true }];
 }
 
-/** ตรวจเอกสารบังคับขั้น 4 — รองรับไฟล์เก่า (PDF รายงานผลการพิจารณา) และคำสั่งจากด่าน 2 */
+/** ตรวจเอกสารบังคับขั้น 4 */
 export function isStep4RequiredDocSatisfied(
   requiredName: string,
   uploadedTypes: string[],
-  step2UploadedTypes?: string[],
+  _step2UploadedTypes?: string[],
 ): boolean {
-  if (requiredName === STEP4_DOC.EGP_BID_SUMMARY) {
-    return hasStep4EgpBidSummaryDoc(uploadedTypes);
-  }
-  if (requiredName === STEP4_DOC.BLACKLIST_EVIDENCE) {
-    return hasStep4BlacklistEvidenceDoc(uploadedTypes);
-  }
-  if (requiredName === STEP4_DOC.CONFLICT_EVIDENCE) {
-    return hasStep4ConflictEvidenceDoc(uploadedTypes);
-  }
-  if (requiredName === STEP4_DOC.COMMITTEE_EVALUATION_REPORT) {
-    return hasStep4CommitteeReportDoc(uploadedTypes);
-  }
-  if (requiredName === STEP2_DOC.EVALUATION_INSPECTION_ORDER) {
-    return (
-      uploadedTypes.includes(requiredName) ||
-      (step2UploadedTypes?.includes(requiredName) ?? false)
-    );
+  if (requiredName === STEP4_DOC.SIGNED_PROCUREMENT_REQUEST) {
+    return hasStep4SignedProcurementRequestDoc(uploadedTypes);
   }
   return uploadedTypes.includes(requiredName);
 }

@@ -79,6 +79,8 @@ const POLICIES: Record<DocFilePolicyId, DocFilePolicy> = {
 /** Explicit mapping for known procurement document labels. */
 const DOC_TYPE_POLICY: Record<string, DocFilePolicyId> = {
   [STEP2_DOC.APPOINTMENT_ORDER]: "pdf_only",
+  [STEP2_DOC.EVALUATION_INSPECTION_ORDER]: "pdf_only",
+  [STEP2_DOC.SITE_SUPERVISOR_ORDER]: "pdf_only",
   [STEP2_DOC.MEDIAN_PRICE_BG06]: "bg06",
 
   [STEP3_DOC.DRAFT_TOR_SPEC]: "tor_spec",
@@ -89,12 +91,14 @@ const DOC_TYPE_POLICY: Record<string, DocFilePolicyId> = {
   [STEP3_DOC.EGP_SCREENSHOT]: "egp_screenshot",
   [STEP3_DOC.FEEDBACK_REPORT]: "pdf_only",
 
+  [STEP4_DOC.SIGNED_PROCUREMENT_REQUEST]: "pdf_only",
   [STEP4_DOC.EGP_BID_SUMMARY]: "pdf_only",
   [STEP4_DOC.BLACKLIST_EVIDENCE]: "screenshot_evidence",
   [STEP4_DOC.CONFLICT_EVIDENCE]: "screenshot_evidence",
   "ภาพหน้าจอ/เอกสารตรวจ Blacklist (e-GP)": "screenshot_evidence",
   "ภาพหน้าจอ/เอกสารตรวจผลประโยชน์ร่วมกัน": "screenshot_evidence",
   [STEP4_DOC.COMMITTEE_EVALUATION_REPORT]: "pdf_only",
+  [STEP4_DOC.PRICE_COMPARISON_TABLE]: "pdf_only",
   [STEP4_DOC.EVALUATION_REPORT]: "pdf_only",
 
   [STEP5_DOC.EGP_WINNER_ANNOUNCEMENT]: "screenshot_evidence",

@@ -184,6 +184,11 @@ export function getStep2TimelineDateFields(
 export function getStep4TimelineDateFields(bidResult: Step4BidResult): StepDateField[] {
   return [
     {
+      id: "procurement_request_approval_date",
+      iso: bidResult.procurement_request_approval_date ?? "",
+      label: "วันที่หัวหน้าหน่วยงานลงนามในรายงานขอซื้อขอจ้าง",
+    },
+    {
       id: "evaluation_report_approval_date",
       iso: bidResult.evaluation_report_approval_date ?? "",
       label: "วันที่หัวหน้าหน่วยงานลงนามอนุมัติผลการพิจารณา",

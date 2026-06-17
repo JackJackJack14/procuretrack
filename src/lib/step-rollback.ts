@@ -9,35 +9,6 @@ import {
   EMPTY_STEP5_ANNOUNCEMENT,
   EMPTY_STEP6_APPEAL,
 } from "@/lib/step-form";
-import type { SupabaseClient } from "@supabase/supabase-js";
-
-const MISSING_PROJECT_COLUMN_RE =
-  /Could not find the '([^']+)' column of 'projects' in the schema cache/i;
-
-/**
- * อัปเดต projects โดยข้ามคอลัมน์ที่ยังไม่มีใน DB (schema cache ยังไม่อัปเดต)
- * ใช้ตอน rollback / save บนโปรเจกต์ที่ยังไม่ได้รัน migration ครบ
- */
-export async function updateProjectOmittingMissingColumns(
-  supabase: SupabaseClient,
-  projectId: string,
-  updates: Record<string, unknown>,
-): Promise<void> {
-  let payload = { ...updates };
-  for (let attempt = 0; attempt < 16; attempt++) {
-    const { error } = await supabase.from("projects").update(payload).eq("id", projectId);
-    if (!error) return;
-    const match = error.message.match(MISSING_PROJECT_COLUMN_RE);
-    if (!match || !(match[1] in payload)) {
-      throw new Error(error.message);
-    }
-    const column = match[1];
-    const { [column]: _removed, ...rest } = payload;
-    payload = rest;
-    console.warn(`[projects.update] omitting missing column: ${column}`);
-  }
-  throw new Error("อัปเดตโครงการไม่สำเร็จ — โครงสร้างฐานข้อมูลไม่ตรงกับระบบ");
-}
 
 /** ข้อความยืนยันก่อน Hard Rollback */
 export function getRollbackConfirmMessage(stepNumber: number): string {

@@ -40,12 +40,15 @@ import {
   STEP2_BG06_UPLOAD_LABEL,
   STEP2_INTEGRITY_LETTER_UPLOAD_LABEL,
   STEP2_EVALUATION_INSPECTION_ORDER_UPLOAD_LABEL,
+  STEP2_SITE_SUPERVISOR_ORDER_UPLOAD_LABEL,
   step2MarketQuoteDocType,
   step2MarketQuoteUploadLabel,
   countStep2MarketQuoteDocsUploaded,
   STEP5_DOC,
   STEP5_ALL_BIDDERS_RESULT_UPLOAD_LABEL,
   STEP4_DOC,
+  STEP4_SIGNED_PROCUREMENT_REQUEST_UPLOAD_LABEL,
+  STEP4_PRICE_COMPARISON_UPLOAD_LABEL,
   STEP4_EGP_SUMMARY_UPLOAD_LABEL,
   STEP4_COMMITTEE_REPORT_UPLOAD_LABEL,
   STEP6_DOC,
@@ -81,7 +84,18 @@ import {
   type Step4BidResult,
   type Step4Checklist,
   type Step4ChecklistKey,
-  STEP4_CHECKLIST_ITEMS,
+  applyStep4CommitteeAutoFill,
+  logStep4DocumentInheritanceDebug,
+  EMPTY_STEP4_BIDDER,
+  STEP4_BIDDER_QUALIFICATION_OPTIONS,
+  normalizeStep4Bidders,
+  resolveLowestValidStep4Bidder,
+  resolveLowestValidStep4BidderIndices,
+  type Step4Bidder,
+  type Step4BidderQualification,
+  STEP4_PROCUREMENT_SIGN_DATE_INVALID_MSG,
+  getStep4ProcurementSignDateIssues,
+  resolveStep4ProcurementSignMinDate,
   type Step1Checklist,
   type Step1ChecklistKey,
   STEP1_CHECKLIST_ITEMS,
@@ -919,7 +933,7 @@ function Step2MarketQuotesModal({
   );
 }
 
-/** Modal เอกสารแต่งตั้งเสริม (Optional) — ด่าน 2 */
+/** Modal เอกสารแต่งตั้งเสริม — ขั้นตอนที่ 2 (สืบทอนไปขั้นตอนที่ 4) */
 function Step2OptionalAppointmentDocsModal({
   docBinder,
   readOnly,
@@ -927,10 +941,13 @@ function Step2OptionalAppointmentDocsModal({
   docBinder: Step2DocBinder;
   readOnly?: boolean;
 }) {
-  const optionalDocs = docBinder.docs.filter(
+  const committeeDocs = docBinder.docs.filter(
     (d) => d.document_type === STEP2_DOC.EVALUATION_INSPECTION_ORDER,
   );
-  const fileCount = optionalDocs.length;
+  const supervisorDocs = docBinder.docs.filter(
+    (d) => d.document_type === STEP2_DOC.SITE_SUPERVISOR_ORDER,
+  );
+  const fileCount = committeeDocs.length + supervisorDocs.length;
 
   return (
     <Dialog>
@@ -951,15 +968,15 @@ function Step2OptionalAppointmentDocsModal({
       </DialogTrigger>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>เอกสารแต่งตั้งเสริม (ไม่บังคับในด่านนี้)</DialogTitle>
+          <DialogTitle>เอกสารแต่งตั้ง (แนบล่วงหน้าสำหรับขั้นตอนที่ 4)</DialogTitle>
           <DialogDescription>
-            คำสั่งแต่งตั้งคณะกรรมการพิจารณาผลและตรวจรับ — แนบล่วงหน้าได้ที่นี่
-            หรือบังคับแนบในด่านที่ 4 ตามระเบียบพัสดุฯ ข้อ 22
+            คำสั่งแต่งตั้งคณะกรรมการและผู้ควบคุมงาน — แนบล่วงหน้าได้ที่ขั้นตอนที่ 2
+            ระบบจะดึงไปแสดงในขั้นตอนที่ 4 อัตโนมัติ (เอกสารบังคับ)
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-3">
+        <div className="space-y-4">
           <p className="text-xs text-muted-foreground">
-            หากแนบที่นี่ ระบบจะดึงไปแสดงในด่านที่ 4 อัตโนมัติ — ไม่ต้องอัปโหลดซ้ำ
+            หากแนบที่นี่ ระบบจะดึงไปแสดงในขั้นตอนที่ 4 อัตโนมัติ — ไม่ต้องอัปโหลดซ้ำ
           </p>
           <InlineDocUpload
             project={docBinder.project}
@@ -968,6 +985,16 @@ function Step2OptionalAppointmentDocsModal({
             label={STEP2_EVALUATION_INSPECTION_ORDER_UPLOAD_LABEL}
             existing={docBinder.docs}
             onChange={docBinder.onDocsChange}
+            readOnly={readOnly}
+          />
+          <InlineDocUpload
+            project={docBinder.project}
+            stepNumber={docBinder.stepNumber}
+            documentType={STEP2_DOC.SITE_SUPERVISOR_ORDER}
+            label={STEP2_SITE_SUPERVISOR_ORDER_UPLOAD_LABEL}
+            existing={docBinder.docs}
+            onChange={docBinder.onDocsChange}
+            readOnly={readOnly}
           />
         </div>
       </DialogContent>
@@ -1119,6 +1146,31 @@ export function Step2DetailForm({
             </div>
           </div>
         )}
+      </div>
+
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
+        <SectionTitle>คณะกรรมการพิจารณาผลและตรวจรับ (ส่งต่อขั้นตอนที่ 4)</SectionTitle>
+        <p className="text-xs text-muted-foreground -mt-2">
+          บันทึกรายชื่อแยกตามคำสั่งแต่งตั้ง — ระบบจะดึงไปเติมในขั้นตอนที่ 4 อัตโนมัติ (ไม่รวมกับชุด TOR/ราคากลาง)
+        </p>
+        <CommitteeMemberList
+          title="คณะกรรมการพิจารณาผลประกวดราคา"
+          members={committees.evaluation_members}
+          listKey="evaluation_members"
+          onCommitteeChange={onCommitteeChange}
+          onAddCommittee={onAddCommittee}
+          onRemoveCommittee={onRemoveCommittee}
+          readOnly={readOnly}
+        />
+        <CommitteeMemberList
+          title="คณะกรรมการตรวจรับพัสดุ"
+          members={committees.inspection_members}
+          listKey="inspection_members"
+          onCommitteeChange={onCommitteeChange}
+          onAddCommittee={onAddCommittee}
+          onRemoveCommittee={onRemoveCommittee}
+          readOnly={readOnly}
+        />
       </div>
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
@@ -1350,7 +1402,7 @@ export function Step2DetailForm({
       <div className="flex flex-wrap items-center gap-3 pt-1">
         <Step2OptionalAppointmentDocsModal docBinder={docBinder} readOnly={readOnly} />
         <p className="text-xs text-muted-foreground">
-          เอกสารเสริม — คำสั่งพิจารณาผล/ตรวจรับ (ไม่บังคับในด่านนี้)
+          เอกสารแต่งตั้ง — สืบทอนไปขั้นตอนที่ 4 (เอกสารบังคับ)
         </p>
       </div>
 
@@ -2150,9 +2202,17 @@ type Step4FormProps = {
   onResponsibleNameChange: (v: string) => void;
   step1ResponsibleDefault?: string;
   step4Timeline?: Step4Timeline;
+  step3PublicationEnd?: string;
+  step2MedianApprovalDate?: string;
+  step2Committees: Step2CommitteesState;
+  committeesSourceLoading?: boolean;
+  budget: number;
+  approvedMedianPrice?: number | null;
+  specificMethodReason?: string;
   docBinder: Step4DocBinder;
-  /** คำสั่งแต่งตั้งพิจารณาผล/ตรวจรับที่อัปโหลดจากด่าน 2 */
-  evaluationOrderFromStep2?: StepDocRecord[];
+  evaluationOrderDocs?: StepDocRecord[];
+  supervisorOrderDocs?: StepDocRecord[];
+  inheritanceSourceDocs?: StepDocRecord[];
 } & ChronologicalFormProps;
 
 function parseOptionalCount(raw: string): number | null {
@@ -2162,7 +2222,176 @@ function parseOptionalCount(raw: string): number | null {
   return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
-/** ขั้นตอนที่ 4 — รายชื่อผู้เสนอราคาและผลการเสนอราคา */
+function parseOptionalBidderPrice(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const n = parseBudgetInput(trimmed);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+/** ตารางผู้ยื่นข้อเสนอ — ขั้นตอนที่ 4 */
+function Step4BiddersTable({
+  bidders,
+  readOnly,
+  onBiddersChange,
+}: {
+  bidders: Step4Bidder[];
+  readOnly?: boolean;
+  onBiddersChange: (next: Step4Bidder[]) => void;
+}) {
+  const safeBidders = normalizeStep4Bidders(bidders);
+  const lowestIndices = resolveLowestValidStep4BidderIndices(safeBidders);
+
+  const emitBidders = (next: Step4Bidder[]) => {
+    const normalized = normalizeStep4Bidders(next);
+    console.log("📊 [BIDDERS DEBUG] Current Bidders List State:", normalized);
+    const lowestBidder = resolveLowestValidStep4Bidder(normalized);
+    console.log("🏆 [BIDDERS DEBUG] Calculated Lowest Valid Bidder:", lowestBidder);
+    onBiddersChange(normalized);
+  };
+
+  const patchRow = (index: number, patch: Partial<Step4Bidder>) => {
+    const next = safeBidders.map((row, i) =>
+      i === index ? { ...row, ...patch } : row,
+    );
+    emitBidders(next);
+  };
+
+  const addRow = () => {
+    emitBidders([...safeBidders, { ...EMPTY_STEP4_BIDDER }]);
+  };
+
+  const removeRow = (index: number) => {
+    emitBidders(safeBidders.filter((_, i) => i !== index));
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="overflow-x-auto rounded-md border border-border">
+        <table className="w-full min-w-[640px] text-sm">
+          <thead>
+            <tr className="border-b border-border bg-muted/40 text-left text-xs text-muted-foreground">
+              <th className="px-2 py-2 font-medium w-8">#</th>
+              <th className="px-2 py-2 font-medium min-w-[160px]">
+                ชื่อบริษัท/ห้างหุ้นส่วนจำกัด *
+              </th>
+              <th className="px-2 py-2 font-medium min-w-[120px]">ราคาที่เสนอ (บาท) *</th>
+              <th className="px-2 py-2 font-medium min-w-[120px]">สถานะคุณสมบัติ</th>
+              <th className="px-2 py-2 font-medium min-w-[140px]">ราคาหลังต่อรอง/หมายเหตุ</th>
+              <th className="px-2 py-2 w-10" aria-label="ลบแถว" />
+            </tr>
+          </thead>
+          <tbody>
+            {safeBidders.length === 0 ? (
+              <tr>
+                <td colSpan={6} className="px-3 py-6 text-center text-muted-foreground text-xs">
+                  ยังไม่มีรายชื่อ — กดปุ่มด้านล่างเพื่อเพิ่มผู้ยื่นข้อเสนอ
+                </td>
+              </tr>
+            ) : (
+              safeBidders.map((row, index) => {
+                const isLowest = lowestIndices.includes(index);
+                return (
+                  <tr
+                    key={index}
+                    className={`border-b border-border last:border-b-0 ${
+                      isLowest ? "bg-success/10" : "bg-background"
+                    }`}
+                  >
+                    <td className="px-2 py-2 align-top text-muted-foreground">{index + 1}</td>
+                    <td className="px-2 py-2 align-top">
+                      <input
+                        value={row.company_name}
+                        onChange={(e) => patchRow(index, { company_name: e.target.value })}
+                        placeholder="ชื่อนิติบุคคล"
+                        disabled={readOnly}
+                        className={inputCls}
+                      />
+                      {isLowest && (
+                        <p className="text-[11px] text-success font-medium mt-1">
+                          🟢 เสนอราคาต่ำสุดและผ่านคุณสมบัติ
+                        </p>
+                      )}
+                    </td>
+                    <td className="px-2 py-2 align-top">
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.01}
+                        value={row.offered_price != null ? String(row.offered_price) : ""}
+                        onChange={(e) =>
+                          patchRow(index, {
+                            offered_price: parseOptionalBidderPrice(e.target.value),
+                          })
+                        }
+                        placeholder="0"
+                        disabled={readOnly}
+                        className={inputCls}
+                      />
+                    </td>
+                    <td className="px-2 py-2 align-top">
+                      <select
+                        value={row.qualification_status}
+                        onChange={(e) =>
+                          patchRow(index, {
+                            qualification_status: e.target.value as Step4BidderQualification,
+                          })
+                        }
+                        disabled={readOnly}
+                        className={inputCls}
+                      >
+                        {STEP4_BIDDER_QUALIFICATION_OPTIONS.map((opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="px-2 py-2 align-top">
+                      <input
+                        value={row.negotiation_notes ?? ""}
+                        onChange={(e) =>
+                          patchRow(index, { negotiation_notes: e.target.value })
+                        }
+                        placeholder="ไม่บังคับ"
+                        disabled={readOnly}
+                        className={inputCls}
+                      />
+                    </td>
+                    <td className="px-2 py-2 align-top">
+                      {!readOnly && (
+                        <button
+                          type="button"
+                          onClick={() => removeRow(index)}
+                          className="h-9 w-9 rounded-md border border-input text-destructive hover:bg-destructive/10 flex items-center justify-center"
+                          title="ลบแถวนี้"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+      {!readOnly && (
+        <button
+          type="button"
+          onClick={addRow}
+          className="h-9 px-3 rounded-md border border-input bg-background text-sm hover:bg-accent inline-flex items-center gap-1.5"
+        >
+          <Plus className="h-4 w-4" />
+          เพิ่มรายชื่อผู้ยื่นข้อเสนอ
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** ขั้นตอนที่ 4 — รายงานขอซื้อขอจ้าง (ข้อ 22) */
 export function Step4DetailForm({
   checklist: _checklist,
   onChecklistChange: _onChecklistChange,
@@ -2174,8 +2403,17 @@ export function Step4DetailForm({
   onResponsibleNameChange,
   step1ResponsibleDefault = "",
   step4Timeline,
+  step3PublicationEnd = "",
+  step2MedianApprovalDate = "",
+  step2Committees,
+  committeesSourceLoading = false,
+  budget,
+  approvedMedianPrice = null,
+  specificMethodReason = "",
   docBinder,
-  evaluationOrderFromStep2 = [],
+  evaluationOrderDocs = [],
+  supervisorOrderDocs = [],
+  inheritanceSourceDocs = [],
   chronologicalCtx,
 }: Step4FormProps) {
   const timeline = step4Timeline ?? {
@@ -2187,6 +2425,21 @@ export function Step4DetailForm({
   const bidSubmissionEndDate = timeline.bidSubmissionEndISO;
   const committeeReviewDeadlineISO = timeline.committeeReviewDeadlineISO;
   const timelineLines = getStep4TimelineDisplayLines(timeline);
+  const publicationEnd = step3PublicationEnd.trim();
+  const medianApprovalDate = step2MedianApprovalDate.trim();
+  const procurementSignMinDate = resolveStep4ProcurementSignMinDate({
+    step2MedianApprovalDate: medianApprovalDate,
+    step3PublicationEnd: publicationEnd,
+  });
+  const procurementSignDateOpts = {
+    step2MedianApprovalDate: medianApprovalDate,
+    step3PublicationEnd: publicationEnd,
+  };
+
+  const medianDisplay = resolveProjectMedianPrice({
+    approved_median_price: approvedMedianPrice,
+    estimated_price: null,
+  });
 
   const winningAmountDisplay =
     bidResult.winning_bid_amount != null && bidResult.winning_bid_amount > 0
@@ -2197,8 +2450,86 @@ export function Step4DetailForm({
       ? formatBudgetInput(String(bidResult.final_agreed_amount))
       : "";
 
+  const [procApprovalDateRejected, setProcApprovalDateRejected] = useState(false);
   const [approvalDateRejected, setApprovalDateRejected] = useState(false);
   const approvalManuallySetRef = useRef(false);
+
+  const committeesTextPending = committeesSourceLoading;
+  const wasCommitteesLoadingRef = useRef(committeesSourceLoading);
+
+  useEffect(() => {
+    if (inheritanceSourceDocs.length > 0) {
+      logStep4DocumentInheritanceDebug(inheritanceSourceDocs);
+    }
+  }, [inheritanceSourceDocs]);
+
+  /** หลังดึงคณะกรรมการจากขั้นตอนที่ 2 เสร็จ — เติมข้อความที่มีตำแหน่งครบ (ครั้งเดียวต่อรอบโหลด) */
+  useEffect(() => {
+    if (committeesSourceLoading) {
+      wasCommitteesLoadingRef.current = true;
+      return;
+    }
+    if (readOnly || !wasCommitteesLoadingRef.current) return;
+    wasCommitteesLoadingRef.current = false;
+
+    const synced = applyStep4CommitteeAutoFill(bidResult, step2Committees);
+    const evalText = synced.evaluation_committee_text ?? "";
+    const inspText = synced.inspection_committee_text ?? "";
+    const evalChanged = evalText !== (bidResult.evaluation_committee_text ?? "");
+    const inspChanged = inspText !== (bidResult.inspection_committee_text ?? "");
+    if (!evalChanged && !inspChanged) return;
+
+    onBidResultChange({
+      evaluation_committee_text: evalText,
+      inspection_committee_text: inspText,
+    });
+  }, [
+    committeesSourceLoading,
+    readOnly,
+    step2Committees,
+    bidResult,
+    onBidResultChange,
+  ]);
+
+  const handleProcurementApprovalDateChange = (v: string) => {
+    if (!v) {
+      setProcApprovalDateRejected(false);
+      onBidResultChange({ procurement_request_approval_date: "" });
+      return;
+    }
+    const issues = getStep4ProcurementSignDateIssues(v, procurementSignDateOpts).filter(
+      (i) => i.id !== "step3_publication_end_missing",
+    );
+    if (issues.length > 0) {
+      setProcApprovalDateRejected(true);
+      toast.error(STEP4_PROCUREMENT_SIGN_DATE_INVALID_MSG);
+      return;
+    }
+    setProcApprovalDateRejected(false);
+    onBidResultChange({ procurement_request_approval_date: v });
+  };
+
+  const procSignChronologyIssues = bidResult.procurement_request_approval_date?.trim()
+    ? getStep4ProcurementSignDateIssues(
+        bidResult.procurement_request_approval_date,
+        procurementSignDateOpts,
+      ).filter((i) => i.id !== "step3_publication_end_missing")
+    : [];
+
+  const showProcApprovalDateError =
+    procApprovalDateRejected || procSignChronologyIssues.length > 0;
+
+  const handleMockPrintProcurementRequest = () => {
+    toast.message(
+      [
+        "เตรียมพิมพ์บันทึกขอซื้อขอจ้าง (Mock)",
+        `เหตุผลความจำเป็น: ${specificMethodReason.trim() || "—"}`,
+        `ราคากลาง: ${medianDisplay != null && medianDisplay > 0 ? formatBaht(medianDisplay) : "—"}`,
+        `วงเงินโครงการ: ${budget > 0 ? formatBaht(budget) : "—"}`,
+      ].join(" · "),
+      { duration: 7000 },
+    );
+  };
 
   /** ค่าเริ่มต้น = วันนี้ (ไม่ต่ำกว่าวันปิดรับซอง) */
   useEffect(() => {
@@ -2265,84 +2596,193 @@ export function Step4DetailForm({
     approvalDate,
     committeeReviewDeadlineISO,
   );
-  const hasStep2EvaluationOrder = evaluationOrderFromStep2.length > 0;
+  const step2EvaluationOrderDocs = evaluationOrderDocs.filter((d) => d.step_number === 2);
+  const step2SupervisorOrderDocs = supervisorOrderDocs.filter((d) => d.step_number === 2);
+  const hasStep2EvaluationOrder = step2EvaluationOrderDocs.length > 0;
+  const hasStep2SupervisorOrder = step2SupervisorOrderDocs.length > 0;
+  const showBidWinnerReason = bidResult.egp_bid_submission_count != null;
 
   return (
     <div className="space-y-4 max-w-2xl">
-      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <SectionTitle>คำสั่งแต่งตั้งคณะกรรมการพิจารณาผลและตรวจรับ (ข้อ 22)</SectionTitle>
-          <span className="inline-flex items-center rounded-full bg-destructive/15 text-destructive px-2 py-0.5 text-xs font-medium">
-            บังคับ
-          </span>
-        </div>
-        {hasStep2EvaluationOrder ? (
-          <div className="space-y-3">
-            <p className="text-xs text-muted-foreground">
-              ดึงจากขั้นตอนที่ 2 อัตโนมัติ — ไม่ต้องอัปโหลดซ้ำ
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
+        <SectionTitle>รายงานขอซื้อขอจ้าง (ข้อ 22)</SectionTitle>
+        <FieldRow label="เลขที่หนังสือบันทึกข้อความเสนอขอเห็นชอบ *">
+          <input
+            value={bidResult.procurement_request_letter_no ?? ""}
+            onChange={(e) =>
+              onBidResultChange({ procurement_request_letter_no: e.target.value })
+            }
+            placeholder="กษ ๐๖๐๒ / ๔๕๖"
+            disabled={readOnly}
+            className={inputCls}
+          />
+        </FieldRow>
+        <FieldRow label="วันที่หัวหน้าหน่วยงานลงนามในรายงานขอซื้อขอจ้าง *">
+          <ChronologicalDatePicker
+            stepNumber={4}
+            chronologicalCtx={chronologicalCtx}
+            intraStepMinDate={procurementSignMinDate}
+            additionalMinDates={[medianApprovalDate, publicationEnd].filter(Boolean)}
+            value={bidResult.procurement_request_approval_date ?? ""}
+            onChange={handleProcurementApprovalDateChange}
+            disabled={!publicationEnd || readOnly}
+            onInvalidDate={() => setProcApprovalDateRejected(true)}
+            showChronologicalHint={false}
+          />
+          {!publicationEnd && (
+            <p className="text-xs text-muted-foreground mt-1">
+              กรุณาบันทึกวันสิ้นสุดการรับฟังความคิดเห็นในขั้นตอนที่ 3 ก่อน
             </p>
-            {evaluationOrderFromStep2.map((file) => (
-              <div
-                key={file.id}
-                className="flex items-center justify-between gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm"
-              >
-                <span className="truncate" title={file.file_name}>
-                  {file.file_name}
-                </span>
-                <div className="flex items-center gap-1 shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => openStepDocument(docBinder.project, file)}
-                    className="h-8 px-2 rounded-md border border-input text-xs hover:bg-accent"
-                  >
-                    เปิดดู
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => downloadStepDocument(docBinder.project, file)}
-                    className="h-8 px-2 rounded-md border border-input text-xs hover:bg-accent"
-                  >
-                    ดาวน์โหลด
-                  </button>
-                </div>
-              </div>
-            ))}
-            <button
-              type="button"
-              disabled={readOnly || !!bidResult.evaluation_inspection_order_confirmed}
-              onClick={() =>
-                onBidResultChange({ evaluation_inspection_order_confirmed: true })
+          )}
+          {publicationEnd && !medianApprovalDate && (
+            <p className="text-xs text-muted-foreground mt-1">
+              ยังไม่พบวันอนุมัติราคากลางจากขั้นตอนที่ 2 — ระบบจะตรวจสอบเมื่อมีการบันทึกวันที่ลงนาม
+            </p>
+          )}
+          {bidResult.procurement_request_approval_date && !showProcApprovalDateError && (
+            <p className="text-xs text-muted-foreground mt-1">
+              {formatThaiDate(bidResult.procurement_request_approval_date)}
+            </p>
+          )}
+          {showProcApprovalDateError && (
+            <p className="text-xs text-destructive font-medium mt-1" role="alert">
+              {STEP4_PROCUREMENT_SIGN_DATE_INVALID_MSG}
+              {medianApprovalDate && (
+                <>
+                  {" "}
+                  (อนุมัติราคากลางขั้นตอนที่ 2: {formatThaiDateSlash(medianApprovalDate)})
+                </>
+              )}
+              {publicationEnd && (
+                <>
+                  {" "}
+                  (สิ้นสุดรับฟังความคิดเห็นขั้นตอนที่ 3: {formatThaiDateSlash(publicationEnd)})
+                </>
+              )}
+            </p>
+          )}
+        </FieldRow>
+        <FieldRow label="ระยะเวลารับซองราคา / พิจารณาผล (วันทำการ) *">
+          <input
+            type="number"
+            min={1}
+            step={1}
+            value={
+              bidResult.committee_review_workdays != null
+                ? String(bidResult.committee_review_workdays)
+                : ""
+            }
+            onChange={(e) => {
+              const raw = e.target.value.trim();
+              if (!raw) {
+                onBidResultChange({ committee_review_workdays: null });
+                return;
               }
-              className={`h-9 px-4 rounded-md text-sm font-medium ${
-                bidResult.evaluation_inspection_order_confirmed
-                  ? "bg-success/15 text-success border border-success/30"
-                  : "bg-primary text-primary-foreground hover:bg-primary/90"
-              } disabled:opacity-70`}
-            >
-              {bidResult.evaluation_inspection_order_confirmed
-                ? "ยืนยันเอกสารแล้ว"
-                : "ยืนยันว่าตรวจสอบคำสั่งจากด่าน 2 แล้ว"}
-            </button>
+              const n = parseInt(raw, 10);
+              onBidResultChange({
+                committee_review_workdays: Number.isFinite(n) && n > 0 ? n : null,
+              });
+            }}
+            placeholder="เช่น 15 วันทำการ"
+            disabled={readOnly}
+            className={inputCls}
+          />
+        </FieldRow>
+        <div className="flex flex-wrap gap-2 pt-1">
+          <button
+            type="button"
+            onClick={handleMockPrintProcurementRequest}
+            disabled={readOnly}
+            className="h-9 px-4 rounded-md border border-input bg-background text-sm font-medium hover:bg-accent disabled:opacity-50 inline-flex items-center gap-2"
+          >
+            <FileText className="h-4 w-4" />
+            พิมพ์/Download บันทึกขอซื้อขอจ้าง
+          </button>
+        </div>
+        <FieldRow label="รายงานขอซื้อขอจ้างที่เซ็นลงนามแล้ว *">
+          <p className="text-xs text-muted-foreground mb-2">
+            แนบไฟล์ PDF รายงานขอซื้อขอจ้างที่หัวหน้าหน่วยงานลงนามแล้ว — เอกสารบังคับเพื่อไปขั้นถัดไป
+          </p>
+          <InlineDocUpload
+            project={docBinder.project}
+            stepNumber={docBinder.stepNumber}
+            documentType={STEP4_DOC.SIGNED_PROCUREMENT_REQUEST}
+            label={STEP4_SIGNED_PROCUREMENT_REQUEST_UPLOAD_LABEL}
+            existing={docBinder.docs}
+            onChange={docBinder.onDocsChange}
+          />
+        </FieldRow>
+      </div>
+
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
+        <SectionTitle>คณะกรรมการ (ดึงจากขั้นตอนที่ 2 — แก้ไขได้)</SectionTitle>
+        <p className="text-xs text-muted-foreground -mt-2">
+          ระบบเติมรายชื่อจากขั้นตอนที่ 2 อัตโนมัติ หากมีการเปลี่ยนแปลงตัวบุคคลให้แก้ไขในช่องด้านล่าง
+        </p>
+        {committeesTextPending ? (
+          <div
+            className="flex items-center gap-2 rounded-md border border-dashed border-border bg-background px-3 py-4 text-sm text-muted-foreground"
+            role="status"
+            aria-live="polite"
+          >
+            <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+            กำลังดึงรายชื่อคณะกรรมการจากขั้นตอนที่ 2…
           </div>
         ) : (
           <>
-            <p className="text-xs text-muted-foreground">
-              ยังไม่มีไฟล์จากขั้นตอนที่ 2 — กรุณาแนบคำสั่งฯ ในขั้นตอนนี้ (บังคับตามระเบียบพัสดุฯ ข้อ 22)
-            </p>
-            <InlineDocUpload
-              project={docBinder.project}
-              stepNumber={docBinder.stepNumber}
-              documentType={STEP2_DOC.EVALUATION_INSPECTION_ORDER}
-              label={STEP2_EVALUATION_INSPECTION_ORDER_UPLOAD_LABEL}
-              existing={docBinder.docs}
-              onChange={docBinder.onDocsChange}
-            />
+        <FieldRow label="คณะกรรมการพิจารณาผล *">
+          <textarea
+            value={bidResult.evaluation_committee_text ?? ""}
+            onChange={(e) => onBidResultChange({ evaluation_committee_text: e.target.value })}
+            rows={4}
+            placeholder="รายชื่อกรรมการพิจารณาผล"
+            disabled={readOnly}
+            className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+        </FieldRow>
+        <FieldRow label="คณะกรรมการตรวจรับ *">
+          <textarea
+            value={bidResult.inspection_committee_text ?? ""}
+            onChange={(e) => onBidResultChange({ inspection_committee_text: e.target.value })}
+            rows={4}
+            placeholder="รายชื่อกรรมการตรวจรับ"
+            disabled={readOnly}
+            className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+        </FieldRow>
           </>
         )}
       </div>
 
-      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
-        <SectionTitle>กลุ่มที่ 1: ข้อมูลการแข่งขัน (ดึงค่ามาจากระบบ e-GP)</SectionTitle>
+      <div className="rounded-lg border border-dashed border-border bg-muted/10 p-4 space-y-3">
+        <p className="text-sm font-medium text-foreground">
+          คำสั่งแต่งตั้งคณะกรรมการ (ข้อ 22) *
+        </p>
+        <p className="text-xs text-muted-foreground">
+          เอกสารบังคับเพื่อผ่านขั้นตอน — หากมีไฟล์จากขั้นตอนที่ 2 ระบบดึงมาแสดงอัตโนมัติ
+          {hasStep2EvaluationOrder
+            ? " (พบไฟล์แล้ว — ลบด้วยไอคอนถังขยะได้หากต้องการอัปโหลดฉบับใหม่ในขั้นตอนที่ 4)"
+            : " — กรุณาแนบไฟล์ PDF"}
+        </p>
+        <InlineDocUpload
+          project={docBinder.project}
+          stepNumber={docBinder.stepNumber}
+          documentType={STEP2_DOC.EVALUATION_INSPECTION_ORDER}
+          label={STEP2_EVALUATION_INSPECTION_ORDER_UPLOAD_LABEL}
+          existing={docBinder.docs}
+          inheritedDocs={
+            hasStep2EvaluationOrder
+              ? [{ fromStep: 2, docs: step2EvaluationOrderDocs }]
+              : undefined
+          }
+          allowInheritedDelete={!readOnly}
+          onChange={docBinder.onDocsChange}
+          readOnly={readOnly}
+        />
+      </div>
+
+      <div className="rounded-lg border border-dashed border-border bg-muted/10 p-4 space-y-4">
+        <SectionTitle>ข้อมูลการแข่งขัน (ไม่บังคับ)</SectionTitle>
         <div className="grid sm:grid-cols-2 gap-4">
           <FieldRow label="จำนวนผู้ขอรับ/ซื้อเอกสาร">
             <input
@@ -2381,10 +2821,51 @@ export function Step4DetailForm({
             />
           </FieldRow>
         </div>
+        {showBidWinnerReason && (
+          <FieldRow label="สรุปเหตุผลความจำเป็นในการคัดเลือกผู้ชนะ">
+            <textarea
+              value={bidResult.winner_selection_reason_summary ?? ""}
+              onChange={(e) =>
+                onBidResultChange({ winner_selection_reason_summary: e.target.value })
+              }
+              rows={3}
+              placeholder="บันทึกที่มาของการได้ผู้ชนะรายนี้สำหรับรายงานผลพิจารณาในขั้นตอนถัดไป"
+              disabled={readOnly}
+              className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            />
+          </FieldRow>
+        )}
       </div>
 
-      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
-        <SectionTitle>กลุ่มที่ 2: ข้อมูลผู้ชนะและการต่อรองราคา</SectionTitle>
+      <div className="rounded-lg border border-dashed border-border bg-muted/10 p-4 space-y-4">
+        <SectionTitle>ข้อมูลการเสนอราคาของผู้เข้าร่วมแข่งขัน</SectionTitle>
+        <p className="text-xs text-muted-foreground -mt-2">
+          บันทึกรายชื่อผู้ยื่นข้อเสนอและเปรียบเทียบราคา — ข้อมูลจะถูกเก็บไว้สำหรับอ้างอิง สตง.
+          และส่งต่อขั้นตอนที่ 8 อัตโนมัติ
+        </p>
+        <Step4BiddersTable
+          bidders={bidResult.bidders ?? []}
+          readOnly={readOnly}
+          onBiddersChange={(next) => onBidResultChange({ bidders: next })}
+        />
+        <FieldRow label="แนบตารางเปรียบเทียบราคาฉบับสมบูรณ์ (PDF) *">
+          <p className="text-xs text-muted-foreground mb-2">
+            เอกสารบังคับ — แนบไฟล์สรุปตารางเปรียบเทียบราคาฉบับสมบูรณ์ (ไฟล์เดียว)
+          </p>
+          <InlineDocUpload
+            project={docBinder.project}
+            stepNumber={docBinder.stepNumber}
+            documentType={STEP4_DOC.PRICE_COMPARISON_TABLE}
+            label={STEP4_PRICE_COMPARISON_UPLOAD_LABEL}
+            existing={docBinder.docs}
+            onChange={docBinder.onDocsChange}
+            readOnly={readOnly}
+          />
+        </FieldRow>
+      </div>
+
+      <div className="rounded-lg border border-dashed border-border bg-muted/10 p-4 space-y-4">
+        <SectionTitle>ข้อมูลผู้ชนะและการต่อรองราคา (ไม่บังคับ)</SectionTitle>
         <FieldRow label="ชื่อผู้ชนะการเสนอราคา">
           <input
             value={bidResult.winning_bidder_name ?? ""}
@@ -2437,14 +2918,14 @@ export function Step4DetailForm({
         </FieldRow>
       </div>
 
-      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
-        <SectionTitle>{FORM_AUDIT_TRAIL_STANDARD.auditTrailGroupTitle}</SectionTitle>
+      <div className="rounded-lg border border-dashed border-border bg-muted/10 p-4 space-y-4">
+        <SectionTitle>เอกสารเสริม / Audit Trail (ไม่บังคับ)</SectionTitle>
         <p className="text-xs text-muted-foreground leading-relaxed -mt-2">
-          แนบหลักฐานการตรวจสอบและรายงานผล · กลุ่มนี้บันทึกเลขที่หนังสือและวันที่อนุมัติผล
+          แนบหลักฐานเพิ่มเติมได้ตามความเหมาะสม — ไม่บล็อกปุ่มไปขั้นถัดไป
         </p>
-        <FieldRow label="รายงานสรุปผลการเสนอราคาจาก e-GP">
+        <FieldRow label="รายงานสรุปผลการเสนอราคาจาก e-GP (ไม่บังคับ)">
           <p className="text-xs text-muted-foreground mb-2">
-            ดาวน์โหลดรายงานสรุปผลจากระบบ e-GP แล้วแนบเป็น PDF
+            ดาวน์โหลดรายงานสรุปผลจากระบบ e-GP แล้วแนบเป็น PDF (ถ้ามี)
           </p>
           <InlineDocUpload
             project={docBinder.project}
@@ -2455,7 +2936,7 @@ export function Step4DetailForm({
             onChange={docBinder.onDocsChange}
           />
         </FieldRow>
-        <FieldRow label="หลักฐานตรวจ Blacklist">
+        <FieldRow label="หลักฐานตรวจ Blacklist (ไม่บังคับ)">
           <p className="text-xs text-muted-foreground mb-2">
             แนบภาพหน้าจอหรือเอกสารยืนยันการตรวจสอบ Blacklist ในระบบ e-GP
           </p>
@@ -2468,7 +2949,7 @@ export function Step4DetailForm({
             onChange={docBinder.onDocsChange}
           />
         </FieldRow>
-        <FieldRow label="หลักฐานตรวจผลประโยชน์ร่วมกัน">
+        <FieldRow label="หลักฐานตรวจผลประโยชน์ร่วมกัน (ไม่บังคับ)">
           <p className="text-xs text-muted-foreground mb-2">
             แนบหลักฐานการตรวจสอบผลประโยชน์ทับซ้อนก่อนประกาศผล
           </p>
@@ -2481,7 +2962,7 @@ export function Step4DetailForm({
             onChange={docBinder.onDocsChange}
           />
         </FieldRow>
-        <FieldRow label="รายงานผลการพิจารณาของคณะกรรมการ">
+        <FieldRow label="รายงานผลการพิจารณาของคณะกรรมการ (ไม่บังคับ)">
           <p className="text-xs text-muted-foreground mb-2">
             แนบรายงานผลการพิจารณาที่คณะกรรมการลงนามครบถ้วน
           </p>
@@ -2509,7 +2990,7 @@ export function Step4DetailForm({
           </div>
         )}
         <FieldRow
-          label="เลขที่หนังสือรายงานผลการพิจารณา"
+          label="เลขที่หนังสือรายงานผลการพิจารณา (ไม่บังคับ)"
           tooltipKey="step4.evaluation_report_letter_no"
         >
           <input
@@ -2522,7 +3003,7 @@ export function Step4DetailForm({
           />
         </FieldRow>
         <FieldRow
-          label="วันที่หัวหน้าหน่วยงานลงนามอนุมัติผล"
+          label="วันที่หัวหน้าหน่วยงานลงนามอนุมัติผล (ไม่บังคับ)"
           tooltipKey="step4.evaluation_report_approval_date"
         >
           <ChronologicalDatePicker
@@ -2590,6 +3071,32 @@ export function Step4DetailForm({
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
         <SectionTitle>รายชื่อผู้ควบคุมงานหน้างาน (คำสั่งแต่งตั้งช่าง)</SectionTitle>
+        <div className="rounded-lg border border-dashed border-border bg-muted/10 p-4 space-y-3">
+          <p className="text-sm font-medium text-foreground">
+            คำสั่งแต่งตั้งผู้ควบคุมงาน *
+          </p>
+          <p className="text-xs text-muted-foreground">
+            เอกสารบังคับเพื่อผ่านขั้นตอน — หากมีไฟล์จากขั้นตอนที่ 2 ระบบดึงมาแสดงอัตโนมัติ
+            {hasStep2SupervisorOrder
+              ? " (พบไฟล์แล้ว — ลบด้วยไอคอนถังขยะได้หากต้องการอัปโหลดฉบับใหม่ในขั้นตอนที่ 4)"
+              : " — กรุณาแนบไฟล์ PDF"}
+          </p>
+          <InlineDocUpload
+            project={docBinder.project}
+            stepNumber={docBinder.stepNumber}
+            documentType={STEP2_DOC.SITE_SUPERVISOR_ORDER}
+            label={STEP2_SITE_SUPERVISOR_ORDER_UPLOAD_LABEL}
+            existing={docBinder.docs}
+            inheritedDocs={
+              hasStep2SupervisorOrder
+                ? [{ fromStep: 2, docs: step2SupervisorOrderDocs }]
+                : undefined
+            }
+            allowInheritedDelete={!readOnly}
+            onChange={docBinder.onDocsChange}
+            readOnly={readOnly}
+          />
+        </div>
         <FieldRow label="ชื่อ-นามสกุล ผู้ควบคุมงาน">
           <input
             value={bidResult.site_supervisor_name ?? ""}

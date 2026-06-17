@@ -5,6 +5,7 @@ export const STEP2_DOC = {
   MEDIAN_PRICE_BG06: "แบบรายงานผลการกำหนดราคากลาง (บก.06)",
   INTEGRITY_LETTER: "หนังสือแสดงความบริสุทธิ์ใจของกรรมการ",
   EVALUATION_INSPECTION_ORDER: "คำสั่งแต่งตั้งคณะกรรมการพิจารณาผลและตรวจรับ",
+  SITE_SUPERVISOR_ORDER: "คำสั่งแต่งตั้งผู้ควบคุมงานหน้างาน",
   MARKET_QUOTES: "ใบเสนอราคาท้องตลาดอย่างน้อย 3 ราย",
 } as const;
 
@@ -22,6 +23,9 @@ export const STEP2_INTEGRITY_LETTER_UPLOAD_LABEL =
 
 export const STEP2_EVALUATION_INSPECTION_ORDER_UPLOAD_LABEL =
   "📎 แนบไฟล์คำสั่งแต่งตั้งคณะกรรมการพิจารณาผลและตรวจรับ (PDF)";
+
+export const STEP2_SITE_SUPERVISOR_ORDER_UPLOAD_LABEL =
+  "📎 แนบไฟล์คำสั่งแต่งตั้งผู้ควบคุมงานหน้างาน (PDF)";
 
 export const STEP2_MARKET_QUOTES_UPLOAD_LABEL =
   "📎 แนบไฟล์ใบเสนอราคาท้องตลาดอย่างน้อย 3 ราย (PDF/ZIP)";
@@ -132,6 +136,8 @@ export const STEP4_DOC_LEGACY = {
 } as const;
 
 export const STEP4_DOC = {
+  /** เอกสารบังคับ — รายงานขอซื้อขอจ้างที่เซ็นลงนามแล้ว (ข้อ 22) */
+  SIGNED_PROCUREMENT_REQUEST: "PDF รายงานขอซื้อขอจ้างที่เซ็นลงนามแล้ว",
   /** หลักฐานข้อที่ 1 — ดาวน์โหลดรายงานสรุปผลจาก e-GP */
   EGP_BID_SUMMARY: "PDF รายงานสรุปผลการเสนอราคาจากระบบ e-GP",
   /** หลักฐานข้อที่ 2 — ตรวจ Blacklist จากระบบภายนอก */
@@ -140,9 +146,14 @@ export const STEP4_DOC = {
   CONFLICT_EVIDENCE: "ภาพหน้าจอ/เอกสารตรวจผลประโยชน์ร่วมกัน",
   /** หลักฐานข้อที่ 4–5 — รายงานผลการพิจารณาของคณะกรรมการ */
   COMMITTEE_EVALUATION_REPORT: "PDF รายงานผลการพิจารณาของคณะกรรมการ",
+  /** เอกสารบังคับ — ตารางเปรียบเทียบราคาฉบับสมบูรณ์ */
+  PRICE_COMPARISON_TABLE: "ตารางเปรียบเทียบราคาฉบับสมบูรณ์ (PDF)",
   /** @deprecated ใช้ COMMITTEE_EVALUATION_REPORT — รองรับไฟล์เก่าใน DB */
   EVALUATION_REPORT: STEP4_DOC_LEGACY.EVALUATION_REPORT,
 } as const;
+
+export const STEP4_PRICE_COMPARISON_UPLOAD_LABEL =
+  "📎 แนบตารางเปรียบเทียบราคาฉบับสมบูรณ์ (PDF)";
 
 /** ประเภทเอกสารขั้นตอนที่ 5 — ผูกกับ Smart Checklist + Audit Trail */
 export const STEP5_DOC = {
@@ -284,11 +295,14 @@ export function isStep4CommitteeReportDocType(documentType: string): boolean {
   );
 }
 
+export const STEP4_SIGNED_PROCUREMENT_REQUEST_UPLOAD_LABEL =
+  "📎 แนบไฟล์รายงานขอซื้อขอจ้างที่เซ็นลงนามแล้ว (PDF) *";
+
 export const STEP4_EGP_SUMMARY_UPLOAD_LABEL =
-  "📎 หลักฐานข้อที่ 1 — แนบรายงานสรุปผลการเสนอราคาจากระบบ e-GP (PDF)";
+  "📎 แนบรายงานสรุปผลการเสนอราคาจาก e-GP (PDF) (ไม่บังคับ)";
 
 export const STEP4_COMMITTEE_REPORT_UPLOAD_LABEL =
-  "📎 หลักฐานข้อที่ 4 — แนบรายงานผลการพิจารณาของคณะกรรมการ (PDF)";
+  "📎 แนบรายงานผลการพิจารณาของคณะกรรมการ (PDF) (ไม่บังคับ)";
 
 /** @deprecated */
 export const STEP4_EVALUATION_UPLOAD_LABEL = STEP4_COMMITTEE_REPORT_UPLOAD_LABEL;
