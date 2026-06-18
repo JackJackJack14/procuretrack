@@ -299,10 +299,10 @@ export const STEP4_SIGNED_PROCUREMENT_REQUEST_UPLOAD_LABEL =
   "📎 แนบไฟล์รายงานขอซื้อขอจ้างที่เซ็นลงนามแล้ว (PDF) *";
 
 export const STEP4_EGP_SUMMARY_UPLOAD_LABEL =
-  "📎 แนบรายงานสรุปผลการเสนอราคาจาก e-GP (PDF) (ไม่บังคับ)";
+  "📎 แนบตารางสรุปผลการเสนอราคาจาก e-GP (PDF) *";
 
 export const STEP4_COMMITTEE_REPORT_UPLOAD_LABEL =
-  "📎 แนบรายงานผลการพิจารณาของคณะกรรมการ (PDF) (ไม่บังคับ)";
+  "📎 แนบรายงานผลการพิจารณาของคณะกรรมการ (PDF) *";
 
 /** @deprecated */
 export const STEP4_EVALUATION_UPLOAD_LABEL = STEP4_COMMITTEE_REPORT_UPLOAD_LABEL;

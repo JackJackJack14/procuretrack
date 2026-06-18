@@ -24,6 +24,7 @@ import {
   getTimelineSaveBlockMessage,
 } from "@/lib/timeline-validation";
 import { resolveStep1PlanPublicationDateISO } from "@/lib/step-milestone-dates";
+import { parseCurrencyForDatabase } from "@/lib/currency-format";
 import { resolveDocFilePolicy, validateDocFile } from "@/lib/doc-file-types";
 import { uploadStepDocument } from "@/lib/doc-upload";
 import { checkStorageQuota, incrementStorageUsage, decrementStorageUsage } from "@/lib/storage";
@@ -96,10 +97,12 @@ import {
   buildProjectProcurementRequestFields,
   buildProjectStep4Fields,
   buildProjectStep5Fields,
+  buildStep4NotesPayload,
+  normalizeStep4BidResult,
   step4BidResultToProcurementAnnouncement,
   resolveStep3PublicationEnd,
   resolveStep2MedianApprovalDate,
-  applyStep4CommitteeAutoFill,
+  applyStep4WinnerFromBiddersTable,
   isStep4ProcurementSignDateValid,
   loadStep4FormFromNote,
   loadStep5FormFromNote,
@@ -153,10 +156,8 @@ import {
   buildStep2ComplianceLog,
   logStep2ComplianceWarnings,
   type Step2ComplianceLog,
-  hasEvaluationInspectionOrderDoc,
+  hasStep4EvaluationInspectionOrderDoc,
   hasSiteSupervisorOrderDoc,
-  hasEvaluationOrderFromStep2,
-  logStep4DocumentInheritanceDebug,
   hasStep2MarketQuotesDoc,
   isAppealBlocking,
   isStep4ReadyForNext,
@@ -233,6 +234,8 @@ import { resolveProjectContractEndDate } from "@/lib/step10-guideline";
 import {
   hasStep4SignedProcurementRequestDoc,
   hasStep4PriceComparisonDoc,
+  hasStep4CommitteeReportDoc,
+  hasStep4EgpBidSummaryDoc,
   hasStep5EgpWinnerDoc,
   hasStep5PhysicalBoardDoc,
   hasStep6AgencyReportDoc,
@@ -244,6 +247,11 @@ import {
   isStep5RequiredDocSatisfied,
 } from "@/lib/form-audit-trail";
 import { ComplianceGateBanner } from "@/components/ComplianceGateBanner";
+import {
+  inferPublicationComplianceTarget,
+  resolveDocTypeFromComplianceIssue,
+  scrollToComplianceErrorAfterPaint,
+} from "@/lib/compliance-scroll";
 import { StepAuditZipButton } from "@/components/StepAuditZipButton";
 import {
   computeReactiveChecklistEffective,
@@ -371,6 +379,8 @@ function ProjectDetailPage() {
   const [activeStep, setActiveStep] = useState<number>(1);
   const [tab, setTab] = useState<"detail" | "contract">("detail");
   const [error, setError] = useState<string | null>(null);
+  const [highlightedMissingDocs, setHighlightedMissingDocs] = useState<string[]>([]);
+  const [highlightedComplianceIssues, setHighlightedComplianceIssues] = useState<string[]>([]);
 
   // Step edit state
   const [responsibleName, setResponsibleName] = useState("");
@@ -436,7 +446,6 @@ function ProjectDetailPage() {
     ...EMPTY_STEP9_CONTRACT_SCHEDULE,
   });
   const [step10InspectionRows, setStep10InspectionRows] = useState<Step10InspectionRow[]>([]);
-  const [step4CommitteesHydrating, setStep4CommitteesHydrating] = useState(false);
 
   const { data, isPending: loading, refetch } = useQuery({
     queryKey: ["project", projectId],
@@ -688,15 +697,6 @@ function ProjectDetailPage() {
     () => resolveStep2MedianApprovalDate(project, step2Record?.note ?? null),
     [project, step2Record?.note],
   );
-  const step4EvaluationOrderDocs = useMemo(
-    () =>
-      docs.filter(
-        (d) =>
-          d.document_type === STEP2_DOC.EVALUATION_INSPECTION_ORDER &&
-          (d.step_number === 2 || d.step_number === 4),
-      ),
-    [docs],
-  );
   const step4SupervisorOrderDocs = useMemo(
     () =>
       docs.filter(
@@ -713,25 +713,6 @@ function ProjectDetailPage() {
         .join("\n"),
     [committees],
   );
-  const resolvedStep4Committees = useMemo(() => {
-    if (!project) return { ...EMPTY_STEP2_COMMITTEES };
-    const step2Form = mergeStep2FormFromProject(
-      loadStep2FormFromStep((step2Record ?? { note: null }) as Step),
-      project,
-    );
-    return loadStep2CommitteesFromDb(
-      committees,
-      project.committee_appointment_mode,
-      step2Form.committees,
-    );
-  }, [
-    project,
-    step2Record?.note,
-    step2Record?.id,
-    committeesDbSnapshot,
-    committees,
-    project?.committee_appointment_mode,
-  ]);
 
   const timelineValidationCtx = useMemo(() => {
     if (!project || project.id !== projectId) {
@@ -921,53 +902,10 @@ function ProjectDetailPage() {
     setResponsibleName(resolveResponsibleOfficer(active, step1ResponsibleDefault));
   }, [activeStep, step1ResponsibleDefault, steps]);
 
-  /** ด่าน 4 — ดึง/เติมรายชื่อคณะกรรมการจากด่าน 2 (ปิด loading ใน finally เสมอ) */
   useEffect(() => {
-    if (current?.step_number !== 4 || !project) {
-      setStep4CommitteesHydrating(false);
-      return;
-    }
-    if (loading) {
-      setStep4CommitteesHydrating(true);
-      return;
-    }
-
-    let cancelled = false;
-    setStep4CommitteesHydrating(true);
-    console.log("🔄 [COMMITTEE] START: กำลังเริ่มดึงข้อมูลคณะกรรมการจากด่าน 2");
-
-    try {
-      const data = resolvedStep4Committees ?? { ...EMPTY_STEP2_COMMITTEES };
-      console.log("✅ [COMMITTEE] SUCCESS: ข้อมูลที่ดึงมาได้คือ:", data);
-
-      if (!cancelled) {
-        setStep2Committees(data);
-        setStep4BidResult((prev) => {
-          const next = applyStep4CommitteeAutoFill(prev, data, {
-            step2Note: step2Record?.note ?? null,
-          });
-          if (
-            next.evaluation_committee_text === prev.evaluation_committee_text &&
-            next.inspection_committee_text === prev.inspection_committee_text
-          ) {
-            return prev;
-          }
-          return next;
-        });
-      }
-    } catch (error) {
-      console.log("❌ [COMMITTEE] CRASH: โค้ดระเบิดตรงนี้เนื่องจาก:", error);
-    } finally {
-      if (!cancelled) {
-        console.log("🏁 [COMMITTEE] FINALLY: สั่งปิด Loading State เรียบร้อย");
-        setStep4CommitteesHydrating(false);
-      }
-    }
-
-    return () => {
-      cancelled = true;
-    };
-  }, [current?.step_number, current?.id, project?.id, loading, resolvedStep4Committees]);
+    setHighlightedMissingDocs([]);
+    setHighlightedComplianceIssues([]);
+  }, [activeStep]);
 
   useEffect(() => {
     if (!current || !project) return;
@@ -1045,31 +983,14 @@ function ProjectDetailPage() {
       return;
     }
     if (current.step_number === 4) {
-      logStep4DocumentInheritanceDebug(docs);
-      const step2Form = mergeStep2FormFromProject(
-        loadStep2FormFromStep((step2Record ?? { note: null }) as Step),
-        project,
-      );
-      const committeesForStep4 = loadStep2CommitteesFromDb(
-        committees,
-        project.committee_appointment_mode,
-        step2Form.committees,
-      );
-      setStep2Committees(committeesForStep4);
-      setStep2MedianPrice({
-        ...EMPTY_STEP2_MEDIAN_PRICE,
-        ...step2Form.medianPrice,
-      });
       const step4Form = loadStep4FormFromNote(current.note);
       setStep4Checklist(step4Form.checklist ?? { ...EMPTY_STEP4_CHECKLIST });
       setStep4BidResult(
-        applyStep4CommitteeAutoFill(
+        normalizeStep4BidResult(
           mergeStep4BidResultFromProject(
             step4Form.bidResult ?? { ...EMPTY_STEP4_BID_RESULT },
             project,
           ),
-          committeesForStep4,
-          { step2Note: step2Record?.note ?? null },
         ),
       );
       const draft4 = loadStepDraftFields(current);
@@ -1456,7 +1377,7 @@ function ProjectDetailPage() {
     };
 
     if (current.step_number === 1) {
-      const budgetVal = parseBudgetInput(step1Budget);
+      const budgetVal = parseCurrencyForDatabase(step1Budget) ?? 0;
       const formNote = serializeStepNote(note, {
         checklist: step1Checklist,
         specificMethodReason: step1SpecificMethodReason,
@@ -1677,9 +1598,22 @@ function ProjectDetailPage() {
         setError(timelineBlock);
         return false;
       }
+      const bidResultForSave = normalizeStep4BidResult(
+        applyStep4WinnerFromBiddersTable(step4BidResult),
+      );
+      console.log(
+        "👥 [STEP 4 STRUCTURED COMMITTEES] Evaluation Committee Array:",
+        bidResultForSave.evaluation_committee_members,
+      );
+      console.log(
+        "👥 [STEP 4 STRUCTURED COMMITTEES] Inspection Committee Array:",
+        bidResultForSave.inspection_committee_members,
+      );
+      setStep4BidResult(bidResultForSave);
       const formNote = serializeStepNote(note, {
         checklist: step4Checklist,
-        bidResult: step4BidResult,
+        bidResult: bidResultForSave,
+        step4_notes: buildStep4NotesPayload(bidResultForSave),
       });
       const { error: e } = await patchStepDraft(
         current.id,
@@ -1693,9 +1627,9 @@ function ProjectDetailPage() {
       const { error: projErr } = await supabase
         .from("projects")
         .update({
-          ...buildProjectStep4Fields(step4BidResult),
+          ...buildProjectStep4Fields(bidResultForSave),
           ...buildProjectProcurementRequestFields(
-            step4BidResultToProcurementAnnouncement(step4BidResult),
+            step4BidResultToProcurementAnnouncement(bidResultForSave),
           ),
         })
         .eq("id", project.id);
@@ -1963,6 +1897,19 @@ function ProjectDetailPage() {
     return true;
   };
 
+  const failStepCompliance = (message: string, issueId?: string, docType?: string) => {
+    toast.error(message);
+    setError(message);
+    const resolvedDocType =
+      docType ?? (issueId ? resolveDocTypeFromComplianceIssue(issueId) : null);
+    setHighlightedMissingDocs(resolvedDocType ? [resolvedDocType] : []);
+    setHighlightedComplianceIssues(issueId ? [issueId] : []);
+    scrollToComplianceErrorAfterPaint(
+      issueId ?? inferPublicationComplianceTarget(message),
+      resolvedDocType ?? undefined,
+    );
+  };
+
   const completeStep = async (opts?: { skipDocValidation?: boolean }) => {
     if (!current || !project) return;
     if (!canCompleteWorkflowStep(activeStep, project.current_step, current.status, project.procurement_path)) {
@@ -1980,8 +1927,7 @@ function ProjectDetailPage() {
         step3Announcement,
       );
       if (mandatoryIssues.length > 0) {
-        toast.error(mandatoryIssues[0].message);
-        setError(mandatoryIssues[0].message);
+        failStepCompliance(mandatoryIssues[0].message, mandatoryIssues[0].id);
         return;
       }
       const hearingFormActive = shouldShowStep3HearingForm(
@@ -1997,8 +1943,7 @@ function ProjectDetailPage() {
           step3Announcement.publication_end_extension_reason,
         );
         if (pubErr) {
-          toast.error(pubErr);
-          setError(pubErr);
+          failStepCompliance(pubErr, inferPublicationComplianceTarget(pubErr));
           return;
         }
         const step3Docs = docs.filter((d) => d.step_number === 3);
@@ -2032,8 +1977,7 @@ function ProjectDetailPage() {
           step3Docs,
         });
         if (step3ComplianceIssues.length > 0) {
-          toast.error(step3ComplianceIssues[0].message);
-          setError(step3ComplianceIssues[0].message);
+          failStepCompliance(step3ComplianceIssues[0].message, step3ComplianceIssues[0].id);
           return;
         }
       }
@@ -2049,9 +1993,6 @@ function ProjectDetailPage() {
       );
       const hasIntegrityLetterDoc = step2Docs.some(
         (d) => d.document_type === STEP2_DOC.INTEGRITY_LETTER,
-      );
-      const hasEvaluationInspectionOrderDoc = step2Docs.some(
-        (d) => d.document_type === STEP2_DOC.EVALUATION_INSPECTION_ORDER,
       );
       const hasMarketQuotesDoc = hasStep2MarketQuotesDoc(step2Docs);
       const step2AutoStates = computeAutoChecklistState({
@@ -2074,7 +2015,6 @@ function ProjectDetailPage() {
           hasBoqDoc,
           hasBg06Doc,
           hasIntegrityLetterDoc,
-          hasEvaluationInspectionOrderDoc,
           hasMarketQuotesDoc,
           step1Budget: calcBudget,
           stepDocs: step2Docs,
@@ -2083,8 +2023,7 @@ function ProjectDetailPage() {
         step2AutoStates,
       );
       if (complianceIssues.length > 0) {
-        toast.error(complianceIssues[0].message);
-        setError(complianceIssues[0].message);
+        failStepCompliance(complianceIssues[0].message, complianceIssues[0].id);
         return;
       }
     }
@@ -2112,8 +2051,7 @@ function ProjectDetailPage() {
         }),
       );
       if (complianceIssues.length > 0) {
-        toast.error(complianceIssues[0].message);
-        setError(complianceIssues[0].message);
+        failStepCompliance(complianceIssues[0].message, complianceIssues[0].id);
         return;
       }
     }
@@ -2136,8 +2074,7 @@ function ProjectDetailPage() {
         },
       );
       if (complianceIssues.length > 0) {
-        toast.error(complianceIssues[0].message);
-        setError(complianceIssues[0].message);
+        failStepCompliance(complianceIssues[0].message, complianceIssues[0].id);
         return;
       }
     }
@@ -2161,8 +2098,7 @@ function ProjectDetailPage() {
         },
       );
       if (complianceIssues.length > 0) {
-        toast.error(complianceIssues[0].message);
-        setError(complianceIssues[0].message);
+        failStepCompliance(complianceIssues[0].message, complianceIssues[0].id);
         return;
       }
     }
@@ -2193,8 +2129,7 @@ function ProjectDetailPage() {
         }),
       );
       if (complianceIssues.length > 0) {
-        toast.error(complianceIssues[0].message);
-        setError(complianceIssues[0].message);
+        failStepCompliance(complianceIssues[0].message, complianceIssues[0].id);
         return;
       }
     }
@@ -2222,8 +2157,7 @@ function ProjectDetailPage() {
         }),
       );
       if (complianceIssues.length > 0) {
-        toast.error(complianceIssues[0].message);
-        setError(complianceIssues[0].message);
+        failStepCompliance(complianceIssues[0].message, complianceIssues[0].id);
         return;
       }
     }
@@ -2247,8 +2181,7 @@ function ProjectDetailPage() {
         }),
       );
       if (complianceIssues.length > 0) {
-        toast.error(complianceIssues[0].message);
-        setError(complianceIssues[0].message);
+        failStepCompliance(complianceIssues[0].message, complianceIssues[0].id);
         return;
       }
     }
@@ -2270,8 +2203,7 @@ function ProjectDetailPage() {
         }),
       );
       if (complianceIssues.length > 0) {
-        toast.error(complianceIssues[0].message);
-        setError(complianceIssues[0].message);
+        failStepCompliance(complianceIssues[0].message, complianceIssues[0].id);
         return;
       }
     }
@@ -2285,17 +2217,18 @@ function ProjectDetailPage() {
         {
           responsibleName: effectiveResponsibleName,
           hasSignedProcurementRequestDoc: hasStep4SignedProcurementRequestDoc(step4Uploaded),
-          hasCommitteeOrderDoc: hasEvaluationInspectionOrderDoc(docs),
+          hasCommitteeOrderDoc: hasStep4EvaluationInspectionOrderDoc(docs),
           hasSupervisorOrderDoc: hasSiteSupervisorOrderDoc(docs),
           hasPriceComparisonDoc: hasStep4PriceComparisonDoc(step4Uploaded),
+          hasCommitteeReportDoc: hasStep4CommitteeReportDoc(step4Uploaded),
+          hasEgpBidSummaryDoc: hasStep4EgpBidSummaryDoc(step4Uploaded),
           step2MedianApprovalDate,
           step3PublicationEnd,
           timelineCtx: timelineValidationCtx,
         },
       );
       if (complianceIssues.length > 0) {
-        toast.error(complianceIssues[0].message);
-        setError(complianceIssues[0].message);
+        failStepCompliance(complianceIssues[0].message, complianceIssues[0].id);
         return;
       }
     }
@@ -2312,16 +2245,12 @@ function ProjectDetailPage() {
       const uploaded = docs
         .filter((d) => d.step_number === current.step_number)
         .map((d) => d.document_type);
-      const step2UploadedTypes =
-        current.step_number === 4
-          ? docs.filter((d) => d.step_number === 2).map((d) => d.document_type)
-          : [];
       const missing = requiredDocs.filter((name) => {
         if (current.step_number === 1) {
           return !isStep1RequiredDocSatisfied(name, uploaded);
         }
         if (current.step_number === 4) {
-          return !isStep4RequiredDocSatisfied(name, uploaded, step2UploadedTypes);
+          return !isStep4RequiredDocSatisfied(name, uploaded);
         }
         if (current.step_number === 2) {
           return !isStep2RequiredDocSatisfied(name, uploaded);
@@ -2333,14 +2262,15 @@ function ProjectDetailPage() {
       });
       if (missing.length > 0) {
         const msg = `เอกสารที่จำเป็นยังไม่ครบ (${missing.length} รายการ): ${missing.join(", ")}`;
-        setError(msg);
-        toast.error(msg);
+        failStepCompliance(msg, undefined, missing[0]);
         return;
       }
     }
     const completedStepNumber = current.step_number;
     const ok = await advanceToNextStep();
     if (ok) {
+      setHighlightedMissingDocs([]);
+      setHighlightedComplianceIssues([]);
       toast.success(
         completedStepNumber === 10
           ? "ปิดโครงการจ้างสำเร็จ — อยู่ระหว่างค้ำประกันความชำรุด 2 ปี"
@@ -2702,9 +2632,6 @@ function ProjectDetailPage() {
                   hasIntegrityLetterDoc: docsForStep.some(
                     (d) => d.document_type === STEP2_DOC.INTEGRITY_LETTER,
                   ),
-                  hasEvaluationInspectionOrderDoc: docsForStep.some(
-                    (d) => d.document_type === STEP2_DOC.EVALUATION_INSPECTION_ORDER,
-                  ),
                   hasMarketQuotesDoc: hasStep2MarketQuotesDoc(docsForStep),
                   step1Budget: calcBudget,
                   stepDocs: docsForStep,
@@ -2809,6 +2736,7 @@ function ProjectDetailPage() {
                   </div>
                 )}
                 <fieldset
+                  id="step-workflow-form"
                   disabled={workflowReadOnly && !step10WarrantyMaintenance}
                   className={`space-y-4 max-w-2xl min-w-0 border-0 p-0 m-0 ${
                     workflowReadOnly && !step10WarrantyMaintenance ? "opacity-90" : ""
@@ -2927,6 +2855,7 @@ function ProjectDetailPage() {
                         docs: docsForStep,
                         onDocsChange: invalidateAll,
                         inheritedDocs: step3InheritedDocs,
+                        highlightedMissingDocs,
                       }}
                       budget={calcBudget}
                       step2Committees={step2Committees}
@@ -2956,20 +2885,18 @@ function ProjectDetailPage() {
                       step4Timeline={step4Timeline}
                       step3PublicationEnd={step3PublicationEnd}
                       step2MedianApprovalDate={step2MedianApprovalDate}
-                      step2Committees={resolvedStep4Committees}
-                      committeesSourceLoading={loading || step4CommitteesHydrating}
                       budget={calcBudget}
                       approvedMedianPrice={project.approved_median_price ?? null}
                       specificMethodReason={step1SpecificMethodReason}
-                      evaluationOrderDocs={step4EvaluationOrderDocs}
                       supervisorOrderDocs={step4SupervisorOrderDocs}
-                      inheritanceSourceDocs={docs}
                       docBinder={{
                         project,
                         stepNumber: 4,
                         docs: docsForStep,
                         onDocsChange: invalidateAll,
+                        highlightedMissingDocs,
                       }}
+                      highlightedComplianceIssues={highlightedComplianceIssues}
                       chronologicalCtx={timelineValidationCtx}
                     />
                   )}
@@ -3187,11 +3114,6 @@ function ProjectDetailPage() {
                 const step2HasIntegrityLetterDoc =
                   current.step_number === 2 &&
                   docsForStep.some((d) => d.document_type === STEP2_DOC.INTEGRITY_LETTER);
-                const step2HasEvaluationInspectionOrderDoc =
-                  current.step_number === 2 &&
-                  docsForStep.some(
-                    (d) => d.document_type === STEP2_DOC.EVALUATION_INSPECTION_ORDER,
-                  );
                 const step2HasMarketQuotesDoc =
                   current.step_number === 2 && hasStep2MarketQuotesDoc(docsForStep);
                 const step2ComplianceIssues =
@@ -3212,12 +3134,18 @@ function ProjectDetailPage() {
                   current.step_number === 4 &&
                   hasStep4SignedProcurementRequestDoc(step4UploadedTypes);
                 const step4HasCommitteeOrderDoc =
-                  current.step_number === 4 && hasEvaluationInspectionOrderDoc(docs);
+                  current.step_number === 4 && hasStep4EvaluationInspectionOrderDoc(docs);
                 const step4HasSupervisorOrderDoc =
                   current.step_number === 4 && hasSiteSupervisorOrderDoc(docs);
                 const step4HasPriceComparisonDoc =
                   current.step_number === 4 &&
                   hasStep4PriceComparisonDoc(step4UploadedTypes);
+                const step4HasCommitteeReportDoc =
+                  current.step_number === 4 &&
+                  hasStep4CommitteeReportDoc(step4UploadedTypes);
+                const step4HasEgpBidSummaryDoc =
+                  current.step_number === 4 &&
+                  hasStep4EgpBidSummaryDoc(step4UploadedTypes);
                 const step5UploadedTypes =
                   current.step_number === 5
                     ? docsForStep.map((d) => d.document_type)
@@ -3337,6 +3265,8 @@ function ProjectDetailPage() {
                           hasCommitteeOrderDoc: step4HasCommitteeOrderDoc,
                           hasSupervisorOrderDoc: step4HasSupervisorOrderDoc,
                           hasPriceComparisonDoc: step4HasPriceComparisonDoc,
+                          hasCommitteeReportDoc: step4HasCommitteeReportDoc,
+                          hasEgpBidSummaryDoc: step4HasEgpBidSummaryDoc,
                           step2MedianApprovalDate,
                           step3PublicationEnd,
                           timelineCtx: timelineValidationCtx,
@@ -3545,6 +3475,8 @@ function ProjectDetailPage() {
                     hasCommitteeOrderDoc: step4HasCommitteeOrderDoc,
                     hasSupervisorOrderDoc: step4HasSupervisorOrderDoc,
                     hasPriceComparisonDoc: step4HasPriceComparisonDoc,
+                    hasCommitteeReportDoc: step4HasCommitteeReportDoc,
+                    hasEgpBidSummaryDoc: step4HasEgpBidSummaryDoc,
                     step2MedianApprovalDate,
                     step3PublicationEnd,
                     timelineCtx: timelineValidationCtx,
@@ -3614,6 +3546,8 @@ function ProjectDetailPage() {
                         hasCommitteeOrderDoc: step4HasCommitteeOrderDoc,
                         hasSupervisorOrderDoc: step4HasSupervisorOrderDoc,
                         hasPriceComparisonDoc: step4HasPriceComparisonDoc,
+                        hasCommitteeReportDoc: step4HasCommitteeReportDoc,
+                        hasEgpBidSummaryDoc: step4HasEgpBidSummaryDoc,
                       })
                     : null;
                 const step4FormProgress =
@@ -4329,8 +4263,8 @@ function DocChecklist({
     }
     setUploading(docType);
     try {
-      const ok = await uploadStepDocument(project, stepNumber, docType, file);
-      if (ok) refreshArchive();
+      const saved = await uploadStepDocument(project, stepNumber, docType, file);
+      if (saved) refreshArchive();
     } finally {
       setUploading(null);
     }

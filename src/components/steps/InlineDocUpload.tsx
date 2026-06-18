@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { createContext, useContext, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Download, Eye, Loader2, Paperclip, Trash2 } from "lucide-react";
 import {
@@ -15,10 +15,14 @@ import {
   type ProjectDocRef,
   type StepDocRecord,
 } from "@/lib/doc-upload";
+import { docUploadElementId } from "@/lib/compliance-scroll";
 import {
   resolveStepDocumentForDisplay,
   type InheritedDocSource,
 } from "@/lib/step-doc-display";
+
+/** รายการประเภทเอกสารที่ต้องเน้นแดงหลัง validation ไม่ผ่าน */
+export const MissingDocHighlightContext = createContext<readonly string[]>([]);
 
 type Props = {
   project: ProjectDocRef;
@@ -26,7 +30,7 @@ type Props = {
   documentType: string;
   label: string;
   existing: StepDocRecord[];
-  onChange: () => void;
+  onChange: () => void | Promise<void>;
   /** แถว Smart Checklist — กะทัดรัด */
   compact?: boolean;
   /** บังคับนโยบายไฟล์ (เช่น screenshot_evidence) */
@@ -39,6 +43,14 @@ type Props = {
   readOnly?: boolean;
   /** อนุญาตลบไฟล์ที่สืบทอนจากด่านก่อนหน้า เพื่ออัปโหลดฉบับใหม่ */
   allowInheritedDelete?: boolean;
+  /** เรียกหลังอัปโหลดสำเร็จ (ก่อน/หลัง onChange ตามที่ parent กำหนด) */
+  onUploadSuccess?: (info: {
+    documentType: string;
+    fileName: string;
+    storagePath: string;
+  }) => void;
+  /** บังคับเน้นแดง (override context) */
+  hasError?: boolean;
 };
 
 /** ปุ่มอัปโหลดแบบ inline — แสดงชื่อไฟล์ + เปิดดู + ลบในแถวเดียว */
@@ -55,7 +67,10 @@ export function InlineDocUpload({
   alternateDocumentTypes,
   readOnly = false,
   allowInheritedDelete = false,
+  onUploadSuccess,
+  hasError: hasErrorProp,
 }: Props) {
+  const highlightedMissingDocs = useContext(MissingDocHighlightContext);
   const policy = filePolicyId
     ? resolveDocFilePolicyById(filePolicyId)
     : resolveDocFilePolicy(documentType);
@@ -74,6 +89,11 @@ export function InlineDocUpload({
   const [busy, setBusy] = useState(false);
   const [dragOver, setDragOver] = useState(false);
 
+  const uploadElementId = docUploadElementId(documentType);
+  const showDocError =
+    !file &&
+    (hasErrorProp ?? highlightedMissingDocs.includes(documentType));
+
   const tryUpload = async (f: File) => {
     const check = filePolicyId
       ? validateDocFileWithPolicy(f, policy)
@@ -84,8 +104,15 @@ export function InlineDocUpload({
     }
     setUploading(true);
     try {
-      const ok = await uploadStepDocument(project, stepNumber, documentType, f);
-      if (ok) onChange();
+      const saved = await uploadStepDocument(project, stepNumber, documentType, f);
+      if (saved) {
+        onUploadSuccess?.({
+          documentType,
+          fileName: saved.file_name,
+          storagePath: saved.storage_path,
+        });
+        await Promise.resolve(onChange());
+      }
     } finally {
       setUploading(false);
     }
@@ -123,9 +150,16 @@ export function InlineDocUpload({
     : "px-3 py-2.5 space-y-1.5";
   const currentBarCls = compact ? "px-2 py-1" : "px-2.5 py-1.5";
 
+  const outerWrapperProps = {
+    id: uploadElementId,
+    "data-doc-type": documentType,
+    "data-compliance-target": uploadElementId,
+    className: wrapperCls,
+  } as const;
+
   if (file && isInherited) {
     return (
-      <div className={wrapperCls}>
+      <div {...outerWrapperProps}>
         <div
           className={`rounded-md border-2 border-success/50 bg-success/10 text-xs ${inheritedBarCls}`}
         >
@@ -173,7 +207,7 @@ export function InlineDocUpload({
   }
 
   return (
-    <div className={wrapperCls}>
+    <div {...outerWrapperProps}>
       <input
         ref={inputRef}
         type="file"
@@ -237,23 +271,31 @@ export function InlineDocUpload({
             }}
             onDragLeave={() => setDragOver(false)}
             onDrop={handleDrop}
-            className={`inline-flex items-center gap-1 rounded-md border border-dashed text-xs transition disabled:opacity-50 ${
+            className={`inline-flex items-center gap-1 rounded-md border text-xs transition disabled:opacity-50 ${
               compact ? "px-2 py-1" : "px-2.5 py-1.5 gap-1.5"
             } ${
-              dragOver
-                ? "border-primary bg-primary/5 text-foreground"
-                : "border-muted-foreground/40 bg-muted/20 text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+              showDocError
+                ? "border-2 border-red-500 bg-red-50 text-red-600 hover:bg-red-100"
+                : dragOver
+                  ? "border-primary bg-primary/5 text-foreground border-dashed"
+                  : "border-dashed border-muted-foreground/40 bg-muted/20 text-muted-foreground hover:bg-muted/50 hover:text-foreground"
             }`}
           >
             {uploading ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
+              <Loader2 className={`h-3 w-3 animate-spin ${showDocError ? "text-red-600" : ""}`} />
             ) : (
-              <Paperclip className="h-3 w-3" />
+              <Paperclip className={`h-3 w-3 ${showDocError ? "text-red-600" : ""}`} />
             )}
             <span className={compact ? "max-w-[180px] truncate" : ""}>{label}</span>
           </button>
-          {!compact && (
-            <p className="mt-1 text-[11px] text-muted-foreground">{policy.helperText}</p>
+          {showDocError ? (
+            <p className="mt-1.5 text-xs font-medium text-red-600" role="alert">
+              ⚠️ จำเป็นต้องแนบเอกสารชิ้นนี้ก่อนไปขั้นตอนถัดไป
+            </p>
+          ) : (
+            !compact && (
+              <p className="mt-1 text-[11px] text-muted-foreground">{policy.helperText}</p>
+            )
           )}
         </div>
       )}

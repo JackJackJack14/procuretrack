@@ -29,7 +29,6 @@ export const STEP_DOCS_DETAILED: DocItem[][] = [
   [
     { name: STEP2_DOC.BOQ, required: true },
     { name: "คำสั่งแต่งตั้งคณะกรรมการจัดทำ TOR และราคากลาง", required: true },
-    { name: "คำสั่งแต่งตั้งคณะกรรมการพิจารณาผลและตรวจรับ", required: false },
     { name: "แบบรายงานผลการกำหนดราคากลาง (บก.06)", required: true },
     { name: "ใบเสนอราคาท้องตลาดอย่างน้อย 3 ราย", required: true },
     { name: "หนังสือแสดงความบริสุทธิ์ใจของกรรมการ", required: true },
@@ -46,10 +45,10 @@ export const STEP_DOCS_DETAILED: DocItem[][] = [
   [
     { name: STEP4_DOC.SIGNED_PROCUREMENT_REQUEST, required: true },
     { name: STEP4_DOC.PRICE_COMPARISON_TABLE, required: true },
-    { name: STEP4_DOC.EGP_BID_SUMMARY, required: false },
+    { name: STEP4_DOC.EGP_BID_SUMMARY, required: true },
     { name: STEP4_DOC.BLACKLIST_EVIDENCE, required: false },
     { name: STEP4_DOC.CONFLICT_EVIDENCE, required: false },
-    { name: STEP4_DOC.COMMITTEE_EVALUATION_REPORT, required: false },
+    { name: STEP4_DOC.COMMITTEE_EVALUATION_REPORT, required: true },
     { name: STEP2_DOC.EVALUATION_INSPECTION_ORDER, required: true },
     { name: STEP2_DOC.SITE_SUPERVISOR_ORDER, required: true },
   ],
@@ -104,7 +103,8 @@ export const STATUS_LABEL: Record<string, string> = {
 };
 
 export function formatBaht(n: number) {
-  return new Intl.NumberFormat("th-TH").format(n);
+  if (!Number.isFinite(n)) return "—";
+  return n.toLocaleString("th-TH");
 }
 
 export function progressColor(pct: number) {

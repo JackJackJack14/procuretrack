@@ -28,7 +28,11 @@ export function Step3GuidelineBox({
   const showDetailedGuide = tier === "mandatory" || (tier === "discretionary" && hearingProceed);
 
   return (
-    <div className="rounded-lg p-4 mb-4 space-y-3" style={{ backgroundColor: "#F8FAFC", borderLeft: "4px solid #64748B" }}>
+    <div
+      data-compliance-target="step3_hearing_gate"
+      className="rounded-lg p-4 mb-4 space-y-3"
+      style={{ backgroundColor: "#F8FAFC", borderLeft: "4px solid #64748B" }}
+    >
       <div className="font-semibold text-foreground">📋 ขั้นตอนที่ 3: จัดทำร่างประกาศและรับฟังความคิดเห็น</div>
       <p className="text-xs text-muted-foreground">
         วงเงินงบประมาณโครงการ: ฿{formatBudgetBahtShort(budget)} บาท

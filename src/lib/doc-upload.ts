@@ -22,24 +22,24 @@ export async function uploadStepDocument(
   stepNumber: number,
   documentType: string,
   file: File,
-): Promise<boolean> {
+): Promise<StepDocRecord | null> {
   const typeCheck = validateDocFile(file, documentType);
   if (!typeCheck.ok) {
     toast.error(typeCheck.message);
-    return false;
+    return null;
   }
 
   if (file.size > 50 * 1024 * 1024) {
     toast.error("ขนาดไฟล์เกิน 50MB");
-    return false;
+    return null;
   }
   const quota = await checkStorageQuota(project.organization_id, file.size);
-  if (!quota.ok) return false;
+  if (!quota.ok) return null;
 
   const { data: u, error: authErr } = await supabase.auth.getUser();
   if (authErr) {
     toast.error(`ไม่สามารถตรวจสอบผู้ใช้ได้: ${authErr.message}`);
-    return false;
+    return null;
   }
 
   const ext = file.name.split(".").pop() ?? "bin";
@@ -47,28 +47,32 @@ export async function uploadStepDocument(
   const { error: upErr } = await supabase.storage.from("procurement-docs").upload(path, file);
   if (upErr) {
     toast.error(`อัปโหลดไฟล์ไม่สำเร็จ: ${upErr.message}`);
-    return false;
+    return null;
   }
 
-  const { error: dbErr } = await supabase.from("documents").insert({
-    organization_id: project.organization_id,
-    project_id: project.id,
-    step_number: stepNumber,
-    document_type: documentType,
-    file_name: file.name,
-    storage_path: path,
-    file_size: file.size,
-    mime_type: file.type,
-    uploaded_by: u.user?.id ?? null,
-  });
+  const { data: inserted, error: dbErr } = await supabase
+    .from("documents")
+    .insert({
+      organization_id: project.organization_id,
+      project_id: project.id,
+      step_number: stepNumber,
+      document_type: documentType,
+      file_name: file.name,
+      storage_path: path,
+      file_size: file.size,
+      mime_type: file.type,
+      uploaded_by: u.user?.id ?? null,
+    })
+    .select("id, step_number, document_type, file_name, storage_path, file_size")
+    .single();
   if (dbErr) {
     toast.error(`บันทึกข้อมูลเอกสารไม่สำเร็จ: ${dbErr.message}`);
-    return false;
+    return null;
   }
 
   await incrementStorageUsage(project.organization_id, file.size);
   toast.success("อัปโหลดไฟล์เรียบร้อย");
-  return true;
+  return inserted as StepDocRecord;
 }
 
 export async function deleteStepDocument(

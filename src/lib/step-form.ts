@@ -1,6 +1,11 @@
 /** ตัวเลือกวิธีจัดซื้อในฟอร์มขั้นตอนที่ 1 (3 วิธีหลัก) */
 import { buildStep4EvidenceFieldValues, getChecklistEvidenceIssues } from "@/lib/form-audit-trail";
 import { hasStep1PlanPublicationDoc } from "@/lib/checklist-inline-evidence";
+import {
+  formatBudgetInput as formatBudgetInputFromCurrency,
+  parseBudgetInput as parseBudgetInputFromCurrency,
+  stripCurrencyToNumber,
+} from "@/lib/currency-format";
 import { STEP2_DOC, STEP3_DOC, STEP4_DOC, STEP5_DOC, STEP6_DOC, STEP7_DOC, countStep2MarketQuoteDocsUploaded, hasStep2MarketQuotesDoc } from "@/lib/step-doc-types";
 import {
   buildEffectiveChecklist,
@@ -735,15 +740,22 @@ export function isStep2MedianPriceDeviationHigh(
   return Math.abs(approved - average) / average > threshold;
 }
 
-/** ตรวจว่ามีคำสั่งแต่งตั้งคณะกรรมการพิจารณาผลและตรวจรับ — จากขั้นตอนที่ 2 หรือ 4 */
+/** ตรวจว่ามีคำสั่งแต่งตั้งคณะกรรมการพิจารณาผลและตรวจรับ — อัปโหลดในขั้นตอนที่ 4 เท่านั้น */
+export function hasStep4EvaluationInspectionOrderDoc(
+  docs: Array<{ step_number?: number | null; document_type: string }>,
+): boolean {
+  return docs.some(
+    (d) =>
+      d.step_number === 4 &&
+      d.document_type === STEP2_DOC.EVALUATION_INSPECTION_ORDER,
+  );
+}
+
+/** @deprecated ใช้ hasStep4EvaluationInspectionOrderDoc สำหรับ validation ขั้นตอนที่ 4 */
 export function hasEvaluationInspectionOrderDoc(
   docs: Array<{ step_number?: number | null; document_type: string }>,
 ): boolean {
-  const docType = STEP2_DOC.EVALUATION_INSPECTION_ORDER;
-  return docs.some(
-    (d) =>
-      d.document_type === docType && (d.step_number === 2 || d.step_number === 4),
-  );
+  return hasStep4EvaluationInspectionOrderDoc(docs);
 }
 
 /** ตรวจว่ามีคำสั่งแต่งตั้งผู้ควบคุมงาน — จากขั้นตอนที่ 2 หรือ 4 */
@@ -1193,6 +1205,58 @@ export function resolveLowestValidStep4Bidder(
   return normalizeStep4Bidder(bidders[indices[0]]);
 }
 
+/** ดึงราคาเสนอชนะ / ราคาตกลงจริงจากแถวผู้ยื่น — ใช้ราคาหลังต่อรองจากหมายเหตุถ้ามี */
+export function resolveStep4PriceFromBidderRow(row: Step4Bidder): {
+  winning_bid_amount: number | null;
+  final_agreed_amount: number | null;
+} {
+  const normalized = normalizeStep4Bidder(row);
+  const offered = normalized.offered_price;
+  const negotiated = parsePriceFromNegotiationNotes(normalized.negotiation_notes);
+  if (offered == null || offered <= 0) {
+    return {
+      winning_bid_amount: null,
+      final_agreed_amount: negotiated,
+    };
+  }
+  return {
+    winning_bid_amount: offered,
+    final_agreed_amount: negotiated ?? offered,
+  };
+}
+
+function parsePriceFromNegotiationNotes(notes: string | undefined): number | null {
+  const trimmed = notes?.trim();
+  if (!trimmed) return null;
+  const direct = stripCurrencyToNumber(trimmed);
+  if (direct != null && direct > 0) return direct;
+  const match = trimmed.match(/[\d,]+(?:\.\d+)?/);
+  if (!match) return null;
+  const parsed = stripCurrencyToNumber(match[0]);
+  return parsed != null && parsed > 0 ? parsed : null;
+}
+
+/** ดึงผู้ชนะจากแถว highlight ในตาราง bidders — บันทึกหลังบ้านก่อน sync DB */
+export function applyStep4WinnerFromBiddersTable(bidResult: Step4BidResult): Step4BidResult {
+  const winner = resolveLowestValidStep4Bidder(normalizeStep4Bidders(bidResult.bidders));
+  if (!winner?.company_name) {
+    return bidResult;
+  }
+  const prices = resolveStep4PriceFromBidderRow(winner);
+  const extractedName = winner.company_name;
+  const extractedPrice = prices.final_agreed_amount;
+  console.log("🛡️ [BACKGROUND MAP] Extracted Winner Row to Database:", {
+    winner: extractedName,
+    finalPrice: extractedPrice,
+  });
+  return {
+    ...bidResult,
+    winning_bidder_name: extractedName,
+    winning_bid_amount: prices.winning_bid_amount,
+    final_agreed_amount: extractedPrice,
+  };
+}
+
 export function getStep4BiddersFieldIssues(bidders: Step4Bidder[]): Step4ComplianceIssue[] {
   const issues: Step4ComplianceIssue[] = [];
   if (bidders.length === 0) return issues;
@@ -1226,6 +1290,185 @@ export function loadStep4BiddersFromSteps(
 export const STEP4_PRICE_COMPARISON_REQUIRED_MSG =
   'กรุณาแนบเอกสาร "ตารางเปรียบเทียบราคาฉบับสมบูรณ์ (PDF)"';
 
+export const STEP4_COMMITTEE_REPORT_REQUIRED_MSG =
+  'กรุณาแนบเอกสาร "PDF รายงานผลการพิจารณาของคณะกรรมการ"';
+
+export const STEP4_EGP_BID_SUMMARY_REQUIRED_MSG =
+  'กรุณาแนบเอกสาร "PDF รายงานสรุปผลการเสนอราคาจากระบบ e-GP"';
+
+/** บทบาทในคณะกรรมการ — ขั้นตอนที่ 4 */
+export type Step4CommitteeMemberRole = "chair" | "member" | "member_secretary";
+
+export type Step4CommitteeMember = {
+  full_name: string;
+  position: string;
+  role: Step4CommitteeMemberRole | "";
+};
+
+export const STEP4_MIN_COMMITTEE_MEMBERS = 3;
+
+export const STEP4_COMMITTEE_ROLE_OPTIONS: Array<{
+  value: Step4CommitteeMemberRole;
+  label: string;
+}> = [
+  { value: "chair", label: "ประธานกรรมการ" },
+  { value: "member", label: "กรรมการ" },
+  { value: "member_secretary", label: "กรรมการและเลขานุการ" },
+];
+
+export const EMPTY_STEP4_COMMITTEE_MEMBER: Step4CommitteeMember = {
+  full_name: "",
+  position: "",
+  role: "",
+};
+
+export function normalizeStep4CommitteeMember(
+  raw: Step4CommitteeMember | null | undefined,
+): Step4CommitteeMember {
+  if (!raw) return { ...EMPTY_STEP4_COMMITTEE_MEMBER };
+  const role =
+    raw.role === "chair" || raw.role === "member" || raw.role === "member_secretary"
+      ? raw.role
+      : "";
+  return {
+    full_name: raw.full_name ?? "",
+    position: raw.position ?? "",
+    role,
+  };
+}
+
+/** ตัดช่องว่างหัวท้ายก่อนบันทึก/แสดงผล — ไม่ใช้ระหว่างพิมพ์เพื่อให้เว้นวรรคได้ */
+export function finalizeStep4CommitteeMember(
+  member: Step4CommitteeMember,
+): Step4CommitteeMember {
+  const normalized = normalizeStep4CommitteeMember(member);
+  return {
+    ...normalized,
+    full_name: normalized.full_name.trim(),
+    position: normalized.position.trim(),
+  };
+}
+
+export function createStep4CommitteeMemberRows(count: number): Step4CommitteeMember[] {
+  const size = Math.max(0, count);
+  return applyStep4CommitteeRoleConstraints(
+    Array.from({ length: size }, () => ({ ...EMPTY_STEP4_COMMITTEE_MEMBER })),
+  );
+}
+
+/** บังคับประธานกรรมการเพียงแถวแรก (index 0) — ตามระเบียบพัสดุ */
+export function applyStep4CommitteeRoleConstraints(
+  members: Step4CommitteeMember[],
+): Step4CommitteeMember[] {
+  return members.map((raw, index) => {
+    const member = normalizeStep4CommitteeMember(raw);
+    if (index === 0) {
+      return { ...member, role: "chair" };
+    }
+    if (member.role === "chair") {
+      return { ...member, role: "" };
+    }
+    return member;
+  });
+}
+
+/** จัดรูปแบบรายชื่อกรรมการด่าน 4 — เก็บใน evaluation_committee_text เพื่อ backward compat */
+export function formatStep4CommitteeMembersForDisplay(members: Step4CommitteeMember[]): string {
+  const lines: string[] = [];
+  let filledIndex = 0;
+  for (const raw of members) {
+    const member = finalizeStep4CommitteeMember(raw);
+    if (!member.full_name) continue;
+    const roleLabel =
+      STEP4_COMMITTEE_ROLE_OPTIONS.find((o) => o.value === member.role)?.label ?? "";
+    const displayNum = filledIndex + 1;
+    let line = `${displayNum}. ${member.full_name}`;
+    if (member.position) line += ` (${member.position})`;
+    if (roleLabel) line += ` - ${roleLabel}`;
+    lines.push(line);
+    filledIndex += 1;
+  }
+  return lines.join("\n");
+}
+
+export function normalizeStep4CommitteeMembers(
+  raw?: Step4CommitteeMember[] | null,
+  minRows = STEP4_MIN_COMMITTEE_MEMBERS,
+): Step4CommitteeMember[] {
+  const normalized = (raw ?? []).map(normalizeStep4CommitteeMember);
+  while (normalized.length < minRows) {
+    normalized.push({ ...EMPTY_STEP4_COMMITTEE_MEMBER });
+  }
+  return applyStep4CommitteeRoleConstraints(normalized);
+}
+
+export function getStep4CommitteeMembersIssues(
+  members: Step4CommitteeMember[] | undefined,
+  committeeKind: "evaluation" | "inspection",
+): Step4ComplianceIssue[] {
+  const panelId =
+    committeeKind === "evaluation"
+      ? "evaluation_committee_members"
+      : "inspection_committee_members";
+  const label =
+    committeeKind === "evaluation" ? "คณะกรรมการพิจารณาผล" : "คณะกรรมการตรวจรับ";
+  const normalized = (members ?? []).map(normalizeStep4CommitteeMember);
+  const issues: Step4ComplianceIssue[] = [];
+
+  if (normalized.length < STEP4_MIN_COMMITTEE_MEMBERS) {
+    issues.push({
+      id: panelId,
+      message: `${label} ต้องมีอย่างน้อย ${STEP4_MIN_COMMITTEE_MEMBERS} คน`,
+    });
+    return issues;
+  }
+
+  normalized.forEach((member, index) => {
+    const rowId = `${panelId}_row_${index}`;
+    const rowNo = index + 1;
+    if (!member.full_name.trim()) {
+      issues.push({
+        id: rowId,
+        message: `${label} แถวที่ ${rowNo}: กรุณาระบุชื่อ-นามสกุล`,
+      });
+    }
+    if (!member.position.trim()) {
+      issues.push({
+        id: rowId,
+        message: `${label} แถวที่ ${rowNo}: กรุณาระบุตำแหน่ง/สังกัด`,
+      });
+    }
+    if (!member.role) {
+      issues.push({
+        id: rowId,
+        message: `${label} แถวที่ ${rowNo}: กรุณาเลือกบทบาทในคณะกรรมการ`,
+      });
+    }
+  });
+
+  return issues;
+}
+
+export function normalizeStep4BidResult(bidResult: Step4BidResult): Step4BidResult {
+  const evaluationMembers = normalizeStep4CommitteeMembers(
+    bidResult.evaluation_committee_members,
+  ).map(finalizeStep4CommitteeMember);
+  const inspectionMembers = normalizeStep4CommitteeMembers(
+    bidResult.inspection_committee_members,
+  ).map(finalizeStep4CommitteeMember);
+  return {
+    ...bidResult,
+    evaluation_committee_members: evaluationMembers,
+    inspection_committee_members: inspectionMembers,
+    evaluation_committee_text:
+      bidResult.evaluation_committee_text?.trim() ||
+      formatStep4CommitteeMembersForDisplay(evaluationMembers),
+    inspection_committee_text:
+      bidResult.inspection_committee_text?.trim() ||
+      formatStep4CommitteeMembersForDisplay(inspectionMembers),
+  };
+}
+
 /** ผลการเสนอราคา / รายงานขอซื้อขอจ้าง — ขั้นตอนที่ 4 */
 export type Step4BidResult = {
   /** รายงานขอซื้อขอจ้าง — เลขที่หนังสือ */
@@ -1234,9 +1477,13 @@ export type Step4BidResult = {
   procurement_request_approval_date?: string;
   /** ระยะเวลารับซองราคา / พิจารณาผล (วันทำการ) */
   committee_review_workdays?: number | null;
-  /** รายชื่อคณะกรรมการพิจารณาผล (แก้ไขได้) */
+  /** รายชื่อคณะกรรมการพิจารณาผล — โครงสร้างอาเรย์ (step4_notes) */
+  evaluation_committee_members?: Step4CommitteeMember[];
+  /** รายชื่อคณะกรรมการตรวจรับ — โครงสร้างอาเรย์ (step4_notes) */
+  inspection_committee_members?: Step4CommitteeMember[];
+  /** @deprecated สรุปข้อความจาก evaluation_committee_members — เก็บเพื่อ backward compat */
   evaluation_committee_text?: string;
-  /** รายชื่อคณะกรรมการตรวจรับ (แก้ไขได้) */
+  /** @deprecated สรุปข้อความจาก inspection_committee_members */
   inspection_committee_text?: string;
   /** สรุปเหตุผลความจำเป็นในการคัดเลือกผู้ชนะ — แสดงเมื่อกรอกจำนวนผู้ยื่นข้อเสนอ */
   winner_selection_reason_summary?: string;
@@ -1293,7 +1540,21 @@ export type Step3ComplianceLog = {
   committee_overlap_names?: string[];
   committee_overlap_reason?: string;
 };
-export type Step4FormData = { checklist?: Step4Checklist; bidResult?: Step4BidResult };
+export type Step4NotesPayload = {
+  evaluation_committee_members: Step4CommitteeMember[];
+  inspection_committee_members: Step4CommitteeMember[];
+  /** เลขที่หนังสือรายงานผลการพิจารณา — ซิงก์ใน note เพื่อส่งต่อขั้นตอนที่ 8 */
+  evaluation_report_letter_no?: string;
+  /** วันที่หัวหน้าหน่วยงานลงนามอนุมัติผล — ซิงก์ใน note เพื่อส่งต่อขั้นตอนที่ 8 */
+  evaluation_report_approval_date?: string;
+};
+
+export type Step4FormData = {
+  checklist?: Step4Checklist;
+  bidResult?: Step4BidResult;
+  /** โครงสร้าง JSON คณะกรรมการด่าน 4 — บันทึกใน note ของ procurement_steps */
+  step4_notes?: Step4NotesPayload;
+};
 export type Step5FormData = { checklist?: Step5Checklist; announcement?: Step5Announcement };
 
 /** ข้อมูลหนังสือแจ้งทำสัญญา — ขั้นตอนที่ 7 */
@@ -1505,6 +1766,8 @@ export const EMPTY_STEP4_BID_RESULT: Required<
   procurement_request_letter_no: "",
   procurement_request_approval_date: "",
   committee_review_workdays: null,
+  evaluation_committee_members: createStep4CommitteeMemberRows(STEP4_MIN_COMMITTEE_MEMBERS),
+  inspection_committee_members: createStep4CommitteeMemberRows(STEP4_MIN_COMMITTEE_MEMBERS),
   evaluation_committee_text: "",
   inspection_committee_text: "",
   winner_selection_reason_summary: "",
@@ -1569,14 +1832,11 @@ export function stripStepFormPayload(raw: string | null | undefined): string {
 }
 
 export function formatBudgetInput(v: string): string {
-  const num = v.replace(/[^\d]/g, "");
-  if (!num) return "";
-  return new Intl.NumberFormat("th-TH").format(Number(num));
+  return formatBudgetInputFromCurrency(v);
 }
 
 export function parseBudgetInput(v: string): number {
-  const n = Number(v.replace(/[^\d]/g, ""));
-  return Number.isFinite(n) ? n : 0;
+  return parseBudgetInputFromCurrency(v);
 }
 
 /** แยกหมายเหตุผู้ใช้ กับข้อมูลฟอร์มที่เก็บใน note (metadata หลังบ้าน) */
@@ -1862,6 +2122,47 @@ export const STEP4_EVALUATION_APPROVAL_BEFORE_BID_END_MSG =
 export const STEP4_EVALUATION_APPROVAL_OVERDUE_MSG =
   "⚠️ เกินกำหนดเวลาพิจารณาผล โปรดระบุข้อมูลการขอขยายเวลา";
 
+export const STEP4_EVALUATION_APPROVAL_GATE_MSG =
+  "⚠️ กรุณาระบุเลขที่หนังสือและวันที่อนุมัติผลให้ถูกต้อง เพื่อใช้สำหรับตรวจสอบและจัดทำสัญญาในขั้นตอนที่ 8";
+
+/** ตรวจเลขที่หนังสือและวันที่อนุมัติผลพิจารณา — ต้องไม่ว่าง และวันที่ ≥ วันสิ้นสุดรับฟังความคิดเห็น (ขั้น 3) */
+export function getStep4EvaluationApprovalIssues(
+  bidResult: Step4BidResult,
+  opts: { step3PublicationEnd?: string },
+): Step4ComplianceIssue[] {
+  const approvalMemoNo = bidResult.evaluation_report_letter_no?.trim() ?? "";
+  const approvalDateValue = bidResult.evaluation_report_approval_date?.trim() ?? "";
+  const step3DateLimit = opts.step3PublicationEnd?.trim() ?? "";
+
+  console.log("📝 [APPROVAL DATA DEBUG] Validation Checked:", {
+    memoNo: approvalMemoNo,
+    approvalDate: approvalDateValue,
+    step3EndDate: step3DateLimit,
+  });
+
+  const issues: Step4ComplianceIssue[] = [];
+
+  if (!approvalMemoNo) {
+    issues.push({
+      id: "evaluation_report_letter_no",
+      message: STEP4_EVALUATION_APPROVAL_GATE_MSG,
+    });
+  }
+  if (!approvalDateValue) {
+    issues.push({
+      id: "evaluation_report_approval_date",
+      message: STEP4_EVALUATION_APPROVAL_GATE_MSG,
+    });
+  } else if (step3DateLimit && approvalDateValue < step3DateLimit) {
+    issues.push({
+      id: "evaluation_report_approval_date",
+      message: STEP4_EVALUATION_APPROVAL_GATE_MSG,
+    });
+  }
+
+  return issues;
+}
+
 /** ไทม์ไลน์ขั้นตอนที่ 4 — คำนวณจากข้อมูลขั้นตอนที่ 3 แบบลำดับขั้น */
 export type Step4Timeline = {
   /** วันที่หัวหน้าหน่วยงานอนุมัติขอซื้อขอจ้าง (ขั้นตอนที่ 3) */
@@ -2036,6 +2337,13 @@ export function todayISO(): string {
 function step4BidResultHasData(b: Step4BidResult | undefined): boolean {
   if (!b) return false;
   return !!(
+    b.procurement_request_letter_no?.trim() ||
+    b.procurement_request_approval_date?.trim() ||
+    (b.committee_review_workdays != null && b.committee_review_workdays > 0) ||
+    b.evaluation_committee_members?.some((m) => m.full_name?.trim()) ||
+    b.inspection_committee_members?.some((m) => m.full_name?.trim()) ||
+    b.evaluation_committee_text?.trim() ||
+    b.inspection_committee_text?.trim() ||
     b.egp_doc_request_count != null ||
     b.egp_bid_submission_count != null ||
     b.winning_bidder_name?.trim() ||
@@ -2044,7 +2352,8 @@ function step4BidResultHasData(b: Step4BidResult | undefined): boolean {
     b.evaluation_report_letter_no?.trim() ||
     b.evaluation_report_approval_date?.trim() ||
     b.review_extension_memo_no?.trim() ||
-    b.review_extension_approval_date?.trim()
+    b.review_extension_approval_date?.trim() ||
+    (b.bidders?.length ?? 0) > 0
   );
 }
 
@@ -2983,12 +3292,16 @@ export function isStep4CoreDocumentsReady(opts: {
   hasCommitteeOrderDoc: boolean;
   hasSupervisorOrderDoc: boolean;
   hasPriceComparisonDoc: boolean;
+  hasCommitteeReportDoc: boolean;
+  hasEgpBidSummaryDoc: boolean;
 }): boolean {
   return (
     opts.hasSignedProcurementRequestDoc &&
     opts.hasCommitteeOrderDoc &&
     opts.hasSupervisorOrderDoc &&
-    opts.hasPriceComparisonDoc
+    opts.hasPriceComparisonDoc &&
+    opts.hasCommitteeReportDoc &&
+    opts.hasEgpBidSummaryDoc
   );
 }
 
@@ -2997,13 +3310,17 @@ export function countStep4CoreDocumentsReady(opts: {
   hasCommitteeOrderDoc: boolean;
   hasSupervisorOrderDoc: boolean;
   hasPriceComparisonDoc: boolean;
+  hasCommitteeReportDoc: boolean;
+  hasEgpBidSummaryDoc: boolean;
 }): { done: number; total: number } {
   let done = 0;
   if (opts.hasSignedProcurementRequestDoc) done += 1;
   if (opts.hasCommitteeOrderDoc) done += 1;
   if (opts.hasSupervisorOrderDoc) done += 1;
   if (opts.hasPriceComparisonDoc) done += 1;
-  return { done, total: 4 };
+  if (opts.hasCommitteeReportDoc) done += 1;
+  if (opts.hasEgpBidSummaryDoc) done += 1;
+  return { done, total: 6 };
 }
 
 /** มีรายชื่อคณะกรรมการจากด่าน 2 (ชุดใหม่หรือชุดเก่า TOR/ราคากลาง) */
@@ -3133,18 +3450,24 @@ export function getStep4RequiredFormFieldIssues(
     });
   }
 
-  if (!bidResult.evaluation_committee_text?.trim()) {
-    issues.push({
-      id: "evaluation_committee_text",
-      message: "กรุณาระบุรายชื่อคณะกรรมการพิจารณาผล",
-    });
-  }
-  if (!bidResult.inspection_committee_text?.trim()) {
-    issues.push({
-      id: "inspection_committee_text",
-      message: "กรุณาระบุรายชื่อคณะกรรมการตรวจรับ",
-    });
-  }
+  issues.push(
+    ...getStep4CommitteeMembersIssues(
+      bidResult.evaluation_committee_members,
+      "evaluation",
+    ),
+  );
+  issues.push(
+    ...getStep4CommitteeMembersIssues(
+      bidResult.inspection_committee_members,
+      "inspection",
+    ),
+  );
+
+  issues.push(
+    ...getStep4EvaluationApprovalIssues(bidResult, {
+      step3PublicationEnd: opts.step3PublicationEnd,
+    }),
+  );
 
   if (!opts.responsibleName.trim()) {
     issues.push({
@@ -3172,7 +3495,7 @@ export function countStep4FormRequiredProgress(
   bidResult: Step4BidResult,
   opts: Parameters<typeof getStep4RequiredFormFieldIssues>[1],
 ): { done: number; total: number } {
-  const total = 6;
+  const total = 8;
   const formIssues = getStep4RequiredFormFieldIssues(bidResult, opts);
   return { done: Math.max(0, total - formIssues.length), total };
 }
@@ -3187,12 +3510,24 @@ export function getStep4ComplianceIssues(
     hasCommitteeOrderDoc: boolean;
     hasSupervisorOrderDoc: boolean;
     hasPriceComparisonDoc: boolean;
+    hasCommitteeReportDoc: boolean;
+    hasEgpBidSummaryDoc: boolean;
     step2MedianApprovalDate?: string;
     step3PublicationEnd?: string;
     timelineCtx?: TimelineValidationContext;
   },
   _autoStates?: Record<string, boolean>,
 ): Step4ComplianceIssue[] {
+  const isCommReportReady = opts.hasCommitteeReportDoc;
+  const isEgpSummaryReady = opts.hasEgpBidSummaryDoc;
+  console.log("📂 [AUDIT TRAIL DEBUG] Required Docs Ready:", {
+    committeeReport: isCommReportReady,
+    egpSummary: isEgpSummaryReady,
+  });
+  console.log("🛡️ [VALIDATION CHECK] Step 4 Document Status:", {
+    isStep4OrderUploaded: opts.hasCommitteeOrderDoc,
+  });
+
   const issues: Step4ComplianceIssue[] = [];
 
   if (!opts.hasSignedProcurementRequestDoc) {
@@ -3217,6 +3552,18 @@ export function getStep4ComplianceIssues(
     issues.push({
       id: "price_comparison_doc",
       message: STEP4_PRICE_COMPARISON_REQUIRED_MSG,
+    });
+  }
+  if (!isCommReportReady) {
+    issues.push({
+      id: "committee_evaluation_report_doc",
+      message: STEP4_COMMITTEE_REPORT_REQUIRED_MSG,
+    });
+  }
+  if (!isEgpSummaryReady) {
+    issues.push({
+      id: "egp_bid_summary_doc",
+      message: STEP4_EGP_BID_SUMMARY_REQUIRED_MSG,
     });
   }
 
@@ -4782,6 +5129,24 @@ export function loadStep4FormFromNote(note: string | null): Step4FormData {
   const { form } = parseStepNote(note);
   const f = form as Step4FormData;
   const c = f.checklist ?? {};
+  const rawBid = f.bidResult ?? {};
+  const fromNotes = f.step4_notes;
+  const bidResult = normalizeStep4BidResult(
+    stripAppealFieldsFromBidResult({
+      ...rawBid,
+      evaluation_committee_members:
+        rawBid.evaluation_committee_members ??
+        fromNotes?.evaluation_committee_members,
+      inspection_committee_members:
+        rawBid.inspection_committee_members ??
+        fromNotes?.inspection_committee_members,
+      evaluation_report_letter_no:
+        rawBid.evaluation_report_letter_no ?? fromNotes?.evaluation_report_letter_no,
+      evaluation_report_approval_date:
+        rawBid.evaluation_report_approval_date ??
+        fromNotes?.evaluation_report_approval_date,
+    }),
+  );
   return {
     checklist: {
       egp_summary_downloaded: !!c.egp_summary_downloaded,
@@ -4790,7 +5155,19 @@ export function loadStep4FormFromNote(note: string | null): Step4FormData {
       technical_price_reviewed: !!c.technical_price_reviewed,
       evaluation_report_submitted: !!c.evaluation_report_submitted,
     },
-    bidResult: stripAppealFieldsFromBidResult(f.bidResult),
+    bidResult,
+    step4_notes: buildStep4NotesPayload(bidResult),
+  };
+}
+
+export function buildStep4NotesPayload(bidResult: Step4BidResult): Step4NotesPayload {
+  const normalized = normalizeStep4BidResult(bidResult);
+  return {
+    evaluation_committee_members: normalized.evaluation_committee_members ?? [],
+    inspection_committee_members: normalized.inspection_committee_members ?? [],
+    evaluation_report_letter_no: normalized.evaluation_report_letter_no?.trim() ?? "",
+    evaluation_report_approval_date:
+      normalized.evaluation_report_approval_date?.trim() ?? "",
   };
 }
 
@@ -4801,6 +5178,12 @@ function stripAppealFieldsFromBidResult(bidResult?: Step4BidResult): Step4BidRes
     procurement_request_letter_no: raw.procurement_request_letter_no ?? "",
     procurement_request_approval_date: raw.procurement_request_approval_date ?? "",
     committee_review_workdays: raw.committee_review_workdays ?? null,
+    evaluation_committee_members: normalizeStep4CommitteeMembers(
+      raw.evaluation_committee_members,
+    ),
+    inspection_committee_members: normalizeStep4CommitteeMembers(
+      raw.inspection_committee_members,
+    ),
     evaluation_committee_text: raw.evaluation_committee_text ?? "",
     inspection_committee_text: raw.inspection_committee_text ?? "",
     winner_selection_reason_summary: raw.winner_selection_reason_summary ?? "",
@@ -4922,8 +5305,8 @@ export function mergeStep4BidResultFromProject(
     site_engineer_name?: string | null;
   } | null,
 ): Step4BidResult {
-  if (!project) return bidResult;
-  return {
+  if (!project) return normalizeStep4BidResult(bidResult);
+  return normalizeStep4BidResult({
     ...bidResult,
     procurement_request_letter_no:
       bidResult.procurement_request_letter_no?.trim() ||
@@ -4973,7 +5356,7 @@ export function mergeStep4BidResultFromProject(
       "",
     site_engineer_name:
       bidResult.site_engineer_name?.trim() || project.site_engineer_name || "",
-  };
+  });
 }
 
 export function serializeStepNote(userNote: string, form: StepFormData): string {

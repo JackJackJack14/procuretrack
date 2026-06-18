@@ -544,7 +544,50 @@ export function isStep4RequiredDocSatisfied(
   if (requiredName === STEP4_DOC.SIGNED_PROCUREMENT_REQUEST) {
     return hasStep4SignedProcurementRequestDoc(uploadedTypes);
   }
+  if (requiredName === STEP4_DOC.EGP_BID_SUMMARY) {
+    return hasStep4EgpBidSummaryDoc(uploadedTypes);
+  }
+  if (requiredName === STEP4_DOC.COMMITTEE_EVALUATION_REPORT) {
+    return hasStep4CommitteeReportDoc(uploadedTypes);
+  }
+  if (requiredName === STEP4_DOC.PRICE_COMPARISON_TABLE) {
+    return hasStep4PriceComparisonDoc(uploadedTypes);
+  }
+  if (requiredName === STEP2_DOC.EVALUATION_INSPECTION_ORDER) {
+    return uploadedTypes.includes(STEP2_DOC.EVALUATION_INSPECTION_ORDER);
+  }
+  if (requiredName === STEP2_DOC.SITE_SUPERVISOR_ORDER) {
+    return uploadedTypes.includes(STEP2_DOC.SITE_SUPERVISOR_ORDER);
+  }
   return uploadedTypes.includes(requiredName);
+}
+
+export type Step4OptionalAuditTrailFileRef = {
+  file_name: string;
+  storage_path: string;
+} | null;
+
+/** บันทึกสถานะหลักฐาน Audit Trail เสริม (ไม่บังคับ) ลง Console */
+export function logStep4OptionalAuditTrailDebug(
+  docs: { step_number: number | null; document_type: string; file_name: string; storage_path: string }[],
+  stepNumber: number,
+  latestUpload?: { documentType: string; fileName: string; storagePath?: string },
+): void {
+  const stepDocs = docs.filter((d) => d.step_number === stepNumber);
+  const resolveFile = (documentType: string): Step4OptionalAuditTrailFileRef => {
+    if (latestUpload?.documentType === documentType) {
+      return {
+        file_name: latestUpload.fileName,
+        storage_path: latestUpload.storagePath ?? "(pending refresh)",
+      };
+    }
+    const row = stepDocs.find((d) => d.document_type === documentType);
+    return row ? { file_name: row.file_name, storage_path: row.storage_path } : null;
+  };
+  console.log("🔍 [AUDIT TRAIL DEBUG] Optional Compliance Docs:", {
+    blacklist: resolveFile(STEP4_DOC.BLACKLIST_EVIDENCE),
+    conflict: resolveFile(STEP4_DOC.CONFLICT_EVIDENCE),
+  });
 }
 
 /** ตรวจเอกสารบังคับขั้น 2 — รองรับใบเสนอราคาแยกรายซัพพลายเออร์ */
