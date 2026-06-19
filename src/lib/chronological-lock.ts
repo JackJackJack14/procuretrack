@@ -2,12 +2,6 @@
  * Global Chronological Lock — minDate แบบ Dynamic จากด่านก่อนหน้าในฐานข้อมูล (ห้าม hard-code วันที่)
  */
 import {
-  PROJECT_TIMELINE_ESTIMATE_STEP5_WORKDAYS,
-  addWorkdays,
-  parseISODateLocal,
-  toISODate,
-} from "@/lib/workdays";
-import {
   resolvePreviousStepMilestoneEndISO,
   resolveStep1PlanPublicationDateISO,
   type StepMilestoneProject,
@@ -19,7 +13,7 @@ export type ChronologicalMinProfile =
   | "default"
   /** ขั้น 3 — วันลงนาม TOR: หลังแผนด่าน 1 และด่าน 2 */
   | "step3_tor_approval"
-  /** ขั้น 5 — ประกาศผู้ชนะ: หลังด่าน 4 + ระยะขั้นต่ำ 7 วันทำการ (e-bidding) */
+  /** ขั้น 5 — ประกาศผล: ตั้งแต่วันหัวหน้าหน่วยงานอนุมัติผล (ขั้น 4) มาตรา 66 — ไม่ใช่ระยะอุทธรณ์ +7 วัน */
   | "step5_winner_announcement";
 
 /** รวมวันขั้นต่ำ — คืนวันที่ล่าสุด (เข้มงวดสุด) หรือ undefined ถ้าไม่มี */
@@ -58,20 +52,13 @@ export function getStep3TorApprovalMinISO(ctx: TimelineValidationContext): strin
   );
 }
 
-/** ขั้น 5 — วันประกาศผู้ชนะ: หลังด่าน 4 + อย่างน้อย 7 วันทำการจากวันสิ้นสุดด่าน 4 */
+/** ขั้น 5 — วันประกาศผล: ตั้งแต่วันหัวหน้าหน่วยงานอนุมัติผล (ขั้น 4) เท่านั้น */
 export function getStep5WinnerAnnouncementMinISO(
-  ctx: TimelineValidationContext,
+  _ctx: TimelineValidationContext,
   evaluationApprovalDate?: string | null,
 ): string | undefined {
-  const prevEnd = getStepPreviousMilestoneMinISO(5, ctx);
-  let legalFloor: string | undefined;
-  if (prevEnd) {
-    const base = parseISODateLocal(prevEnd);
-    if (base) {
-      legalFloor = toISODate(addWorkdays(base, PROJECT_TIMELINE_ESTIMATE_STEP5_WORKDAYS));
-    }
-  }
-  return mergeMinDateISO(prevEnd, evaluationApprovalDate, legalFloor);
+  const step4Approval = evaluationApprovalDate?.trim() ?? "";
+  return step4Approval || undefined;
 }
 
 export function resolveChronologicalMinDateISO(input: {

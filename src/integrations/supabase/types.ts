@@ -681,6 +681,7 @@ export type Database = {
           warranty_started_at: string | null
           winner_announcement_date: string | null
           winner_announcement_no: string | null
+          winner_result_notification_date: string | null
           winning_bid_amount: number | null
           winning_bidder_name: string | null
         }
@@ -742,6 +743,7 @@ export type Database = {
           warranty_started_at?: string | null
           winner_announcement_date?: string | null
           winner_announcement_no?: string | null
+          winner_result_notification_date?: string | null
           winning_bid_amount?: number | null
           winning_bidder_name?: string | null
         }
@@ -803,6 +805,7 @@ export type Database = {
           warranty_started_at?: string | null
           winner_announcement_date?: string | null
           winner_announcement_no?: string | null
+          winner_result_notification_date?: string | null
           winning_bid_amount?: number | null
           winning_bidder_name?: string | null
         }

@@ -1,4 +1,4 @@
-import { STEP2_DOC, STEP3_DOC, STEP4_DOC } from "@/lib/step-doc-types";
+import { STEP2_DOC, STEP3_DOC, STEP4_DOC, STEP5_DOC } from "@/lib/step-doc-types";
 
 export const COMPLIANCE_TARGET_ATTR = "data-compliance-target";
 
@@ -21,6 +21,8 @@ const COMPLIANCE_ISSUE_TO_DOC_TYPE: Record<string, string> = {
   egp_bid_summary_doc: STEP4_DOC.EGP_BID_SUMMARY,
   committee_order_doc: STEP2_DOC.EVALUATION_INSPECTION_ORDER,
   supervisor_order_doc: STEP2_DOC.SITE_SUPERVISOR_ORDER,
+  egp_winner_doc: STEP5_DOC.EGP_WINNER_ANNOUNCEMENT,
+  physical_board_doc: STEP5_DOC.PHYSICAL_BOARD_ANNOUNCEMENT,
 };
 
 const DOC_TYPE_TO_COMPLIANCE_TARGET: Record<string, string> = {
@@ -37,6 +39,8 @@ const DOC_TYPE_TO_COMPLIANCE_TARGET: Record<string, string> = {
   [STEP4_DOC.EGP_BID_SUMMARY]: "egp_bid_summary_doc",
   [STEP2_DOC.EVALUATION_INSPECTION_ORDER]: "committee_order_doc",
   [STEP2_DOC.SITE_SUPERVISOR_ORDER]: "supervisor_order_doc",
+  [STEP5_DOC.EGP_WINNER_ANNOUNCEMENT]: "egp_winner_doc",
+  [STEP5_DOC.PHYSICAL_BOARD_ANNOUNCEMENT]: "physical_board_doc",
 };
 
 const ISSUE_ID_ALIASES: Record<string, string> = {

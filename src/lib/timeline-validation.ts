@@ -208,15 +208,29 @@ export function getStep5TimelineDateFields(announcement: Step5Announcement): Ste
       iso: announcement.winner_announcement_date ?? "",
       label: "วันที่ลงนามในประกาศผู้ชนะการเสนอราคา",
     },
+    {
+      id: "winner_result_notification_date",
+      iso: announcement.winner_result_notification_date ?? "",
+      label: "วันที่แจ้งผลให้ผู้เสนอราคาทราบ",
+    },
   ];
 }
 
 export function getStep6TimelineDateFields(appeal: Step6AppealState): StepDateField[] {
+  const received =
+    appeal.appeal_received_date?.trim() ||
+    appeal.appeal_report_approval_date?.trim() ||
+    "";
   return [
     {
-      id: "appeal_report_approval_date",
-      iso: appeal.appeal_report_approval_date ?? "",
-      label: "วันที่หัวหน้าหน่วยงานอนุมัติรายงานผลการพิจารณาอุทธรณ์",
+      id: "appeal_received_date",
+      iso: received,
+      label: "วันที่หน่วยงานได้รับหนังสืออุทธรณ์",
+    },
+    {
+      id: "cgd_submission_date",
+      iso: appeal.cgd_submission_date ?? "",
+      label: "วันที่ส่งเรื่องให้กรมบัญชีกลาง",
     },
   ];
 }

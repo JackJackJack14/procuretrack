@@ -18,6 +18,7 @@ import {
   type Step3Checklist,
   type Step4BidResult,
   type Step4Checklist,
+  type Step6AppealState,
 } from "@/lib/step-form";
 import type { DocItem } from "@/lib/procurement";
 import {
@@ -378,10 +379,7 @@ export type SmartChecklistAutoContext = {
   /** @deprecated ใช้ hasCommitteeEvaluationDoc */
   hasEvaluationReportDoc?: boolean;
   appealStatus?: string | null;
-  step6Appeal?: {
-    appeal_report_letter_no?: string;
-    appeal_report_approval_date?: string;
-  };
+  step6Appeal?: Step6AppealState;
   step5Announcement?: { winner_announcement_no?: string; winner_announcement_date?: string };
   step7ContractNotice?: {
     contract_notice_letter_no?: string;
@@ -503,7 +501,10 @@ export function computeAutoChecklistState(ctx: SmartChecklistAutoContext): Recor
       !evalApproval ||
       annDate >= evalApproval;
     auto.winner_announcement_recorded =
-      !!ann?.winner_announcement_no?.trim() && !!annDate && dateNotBeforeEvaluation;
+      !!ann?.winner_announcement_no?.trim() &&
+      !!annDate &&
+      !!ann?.winner_result_notification_date?.trim() &&
+      dateNotBeforeEvaluation;
     return auto;
   }
 
@@ -514,8 +515,15 @@ export function computeAutoChecklistState(ctx: SmartChecklistAutoContext): Recor
       auto.appeal_status_recorded = true;
     } else if (status === "pending") {
       auto.appeal_status_recorded =
+        !!appeal?.appeal_bidder_name?.trim() &&
+        !!(
+          appeal?.appeal_received_date?.trim() ||
+          appeal?.appeal_report_approval_date?.trim()
+        ) &&
         !!appeal?.appeal_report_letter_no?.trim() &&
-        !!appeal?.appeal_report_approval_date?.trim();
+        !!appeal?.appeal_head_opinion?.trim() &&
+        !!appeal?.cgd_submission_letter_no?.trim() &&
+        !!appeal?.appeal_committee_decision?.trim();
     } else {
       auto.appeal_status_recorded = false;
     }

@@ -1,6 +1,5 @@
 /**
- * ไทม์ไลน์โครงการ — ใช้วันที่มีผลทางระเบียบ (Effective Date) + สะสมวันทำการ (addWorkdays)
- * ไม่ใช้ Calendar Days สำหรับการพยากรณ์
+ * ไทม์ไลน์โครงการ — วันที่จากฐานข้อมูล/ฟอร์มเท่านั้น (ไม่ cascade mock)
  */
 import {
   resolveCommitteeReviewWorkdays,
@@ -10,6 +9,7 @@ import {
   resolveStepMilestoneEndISO,
   resolveStep1PlanPublicationDateISO,
   type Step3TimelineLiveAnnouncement,
+  type TimelineNotesContext,
 } from "@/lib/step-milestone-dates";
 import {
   PROJECT_TIMELINE_ESTIMATE_STEP3_WORKDAYS,
@@ -18,7 +18,6 @@ import {
   PROJECT_TIMELINE_ESTIMATE_STEP6_WORKDAYS,
   PROJECT_TIMELINE_ESTIMATE_STEP7_9_WORKDAYS_EACH,
   STEP4_COMMITTEE_REVIEW_WORKDAYS_AFTER_BID_END,
-  addWorkdays,
   parseISODateLocal,
 } from "@/lib/workdays";
 
@@ -36,6 +35,7 @@ export type ProjectTimelineProject = {
   committee_review_workdays?: number | null;
   evaluation_report_approval_date?: string | null;
   winner_announcement_date?: string | null;
+  winner_result_notification_date?: string | null;
 };
 
 export type ProjectTimelineStep = {
@@ -60,6 +60,8 @@ export type ProjectTimelineInput = {
   step3Note: string | null;
   /** Form State สดของด่าน 3 — override ค่าใน step3Note สำหรับไทม์ไลน์แบบ real-time */
   step3LiveAnnouncement?: Step3TimelineLiveAnnouncement | null;
+  /** note ด่าน 4–5 จาก procurement_steps */
+  timelineNotes?: TimelineNotesContext | null;
 };
 
 export function snapshotTimelineProject(
@@ -77,6 +79,7 @@ export function snapshotTimelineProject(
     committee_review_workdays: project.committee_review_workdays ?? null,
     evaluation_report_approval_date: project.evaluation_report_approval_date ?? null,
     winner_announcement_date: project.winner_announcement_date ?? null,
+    winner_result_notification_date: project.winner_result_notification_date ?? null,
   };
 }
 
@@ -96,6 +99,7 @@ export function buildProjectTimelineInput(
   steps: ProjectTimelineStep[],
   step3Note?: string | null,
   step3LiveAnnouncement?: Step3TimelineLiveAnnouncement | null,
+  timelineNotes?: TimelineNotesContext | null,
 ): ProjectTimelineInput {
   return {
     projectId,
@@ -103,6 +107,7 @@ export function buildProjectTimelineInput(
     steps: snapshotTimelineSteps(steps),
     step3Note: step3Note ?? null,
     step3LiveAnnouncement: step3LiveAnnouncement ?? null,
+    timelineNotes: timelineNotes ?? null,
   };
 }
 
@@ -124,11 +129,17 @@ export function getProjectTimelineInputKey(input: ProjectTimelineInput): string 
     p.committee_review_workdays ?? "",
     isoDatePart(p.evaluation_report_approval_date),
     isoDatePart(p.winner_announcement_date),
+    isoDatePart(p.winner_result_notification_date),
     input.step3Note ?? "",
     input.step3LiveAnnouncement?.publication_start ?? "",
     input.step3LiveAnnouncement?.publication_end ?? "",
     input.step3LiveAnnouncement?.procurement_request_approval_date ?? "",
     input.step3LiveAnnouncement?.committee_review_workdays ?? "",
+    input.timelineNotes?.step4Note ?? "",
+    input.timelineNotes?.step5Note ?? "",
+    input.timelineNotes?.step4Live?.evaluation_report_approval_date ?? "",
+    input.timelineNotes?.step5Live?.winner_announcement_date ?? "",
+    input.timelineNotes?.step5Live?.winner_result_notification_date ?? "",
     stepSig,
   ].join("::");
 }
@@ -145,8 +156,16 @@ export function resolveStepEffectiveDateISO(
   stepNumber: number,
   project: ProjectTimelineProject,
   step3Note?: string | null,
+  timelineNotes?: TimelineNotesContext | null,
 ): string {
-  return resolveStepMilestoneEndISO(stepNumber, project, undefined, step3Note).iso;
+  return resolveStepMilestoneEndISO(
+    stepNumber,
+    project,
+    undefined,
+    step3Note,
+    undefined,
+    timelineNotes,
+  ).iso;
 }
 
 /** ระยะวันทำการขั้นต่ำ Fastest Path — สะสมจากวันสิ้นสุดขั้นก่อนหน้า */
@@ -182,26 +201,12 @@ export function getTimelineFastPathWorkdays(
   }
 }
 
-function parseProjectCreatedDate(project: ProjectTimelineProject): Date | null {
-  const createdISO = isoDatePart(project.created_at);
-  return createdISO ? parseISODateLocal(createdISO) : null;
-}
-
-function todayLocal(): Date {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
-
 function buildProjectTimelineItemsFromInput(
   input: ProjectTimelineInput,
 ): ProjectTimelineItem[] {
-  const { project, steps, step3Note, step3LiveAnnouncement } = input;
+  const { project, steps, step3Note, step3LiveAnnouncement, timelineNotes } = input;
   const currentStep = project.current_step;
   const stepByNum = new Map(steps.map((s) => [s.step_number, s]));
-  const hasLiveStep3 = !!step3LiveAnnouncement;
-
-  let cursorEnd: Date | null = parseProjectCreatedDate(project) ?? todayLocal();
 
   return steps.map((s) => {
     const stepNum = s.step_number;
@@ -209,65 +214,22 @@ function buildProjectTimelineItemsFromInput(
     const isCurrent = stepNum === currentStep && !isDone;
     const stepRecord = stepByNum.get(stepNum);
 
-    /** ด่านถัดจากด่านปัจจุบัน — พยากรณ์สะสมจาก cursor หลังด่าน 3 เปลี่ยนแบบ real-time */
-    const forceCascadeFromCursor =
-      hasLiveStep3 && stepNum > currentStep && !isDone;
-
-    if (forceCascadeFromCursor && cursorEnd) {
-      const workdays = getTimelineFastPathWorkdays(stepNum, project, step3Note);
-      const date =
-        workdays > 0 ? addWorkdays(cursorEnd, workdays) : new Date(cursorEnd.getTime());
-      cursorEnd = date;
-      return {
-        stepNumber: stepNum,
-        date,
-        estimated: true,
-        isDone,
-        isCurrent,
-      };
-    }
-
     const resolution = resolveStepMilestoneEndISO(
       stepNum,
       project,
       stepRecord,
       step3Note,
       step3LiveAnnouncement,
+      timelineNotes,
     );
-    const hasActual = !!resolution.iso;
 
-    let date: Date | null = null;
-    let estimated = false;
-
-    const useActual =
-      hasActual &&
-      (isDone || isCurrent || stepNum < currentStep || !resolution.derived);
-
-    if (useActual) {
-      date = parseISODateLocal(resolution.iso);
-      estimated = resolution.derived && (isCurrent || stepNum >= currentStep);
-    } else if (cursorEnd) {
-      const workdays = getTimelineFastPathWorkdays(stepNum, project, step3Note);
-      if (workdays > 0) {
-        date = addWorkdays(cursorEnd, workdays);
-        estimated = true;
-      } else {
-        date = new Date(cursorEnd.getTime());
-        estimated = stepNum > currentStep;
-      }
-    }
-
-    if (date) {
-      cursorEnd = date;
-    }
-
-    const isFuture = stepNum > currentStep;
-    const showEstimate = estimated || (isFuture && !isDone);
+    const date = resolution.iso ? parseISODateLocal(resolution.iso) : null;
 
     return {
       stepNumber: stepNum,
       date,
-      estimated: showEstimate && !!date,
+      /** derived = คำนวณจาก workdays.ts (ด่าน 6–7) — ไม่ใช่ cascade mock */
+      estimated: resolution.derived && !!date,
       isDone,
       isCurrent,
     };
@@ -280,6 +242,7 @@ export function buildProjectTimelineItems(
   step3Note?: string | null,
   projectId?: string,
   step3LiveAnnouncement?: Step3TimelineLiveAnnouncement | null,
+  timelineNotes?: TimelineNotesContext | null,
 ): ProjectTimelineItem[] {
   const resolvedProjectId = projectId ?? project.id ?? "";
   return recalculateProjectTimeline(
@@ -289,6 +252,7 @@ export function buildProjectTimelineItems(
       steps,
       step3Note,
       step3LiveAnnouncement,
+      timelineNotes,
     ),
   );
 }

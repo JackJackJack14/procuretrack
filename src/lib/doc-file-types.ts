@@ -107,9 +107,13 @@ const DOC_TYPE_POLICY: Record<string, DocFilePolicyId> = {
   "ประกาศผู้ชนะการเสนอราคา (e-GP)": "screenshot_evidence",
 
   [STEP6_DOC.NO_APPEAL_EGP_SCREENSHOT]: "screenshot_evidence",
+  [STEP6_DOC.BIDDER_APPEAL_LETTER]: "pdf_only",
+  [STEP6_DOC.AGENCY_OPINION_CGD_LETTER]: "pdf_only",
+  [STEP6_DOC.COMMITTEE_DECISION_LETTER]: "pdf_only",
   [STEP6_DOC.AGENCY_APPEAL_REPORT]: "pdf_only",
   [STEP6_DOC.CGD_APPEAL_REPORT]: "pdf_only",
   [STEP6_DOC.APPEAL_RESULT_EVIDENCE]: "screenshot_evidence",
+  [STEP6_DOC.LEGACY_NO_APPEAL_EGP_SCREENSHOT]: "screenshot_evidence",
 
   [STEP7_DOC.CONTRACT_NOTICE_LETTER]: "pdf_only",
   [STEP7_DOC.CONTRACT_NOTICE_DELIVERY_PROOF]: "screenshot_evidence",

@@ -1,4 +1,5 @@
 import {
+  STEP6_CONTRACT_EARLIEST_HINT,
   STEP6_GUIDELINE_DURATION,
   STEP6_GUIDELINE_TODO,
   STEP6_GUIDELINE_WARNINGS,
@@ -66,17 +67,21 @@ export function Step6GuidelineBox({ winnerAnnouncementDate }: Props) {
               </span>
             </p>
             <p className="text-xs text-muted-foreground leading-relaxed">
-              คำนวณจากวันประกาศผลผู้ชนะใน Step 5 (
+              คำนวณจากวันที่แจ้งผลให้ผู้เสนอราคาทราบใน Step 5 (
               {formatThaiDateSlash(announcementISO)}) + 7 วันทำการ ไม่นับวันหยุดราชการ
             </p>
             {contractEarliestISO && (
-              <p className="text-xs text-muted-foreground leading-relaxed mt-1">
-                สามารถเริ่มลงนามในสัญญาได้ตั้งแต่{" "}
-                <span className="font-medium text-foreground">
-                  {formatThaiDateSlash(contractEarliestISO)}
-                </span>{" "}
-                เป็นต้นไป
-              </p>
+              <div className="mt-2">
+                <p className="text-sm font-medium text-foreground">วันที่เริ่มลงนามในสัญญาได้</p>
+                <p className="text-sm text-foreground/90 mt-1">
+                  <span className="font-medium">{formatThaiDateSlash(contractEarliestISO)}</span>
+                  <span className="text-muted-foreground">
+                    {" "}
+                    ({formatThaiDate(contractEarliestISO)})
+                  </span>
+                </p>
+                <p className="text-gray-400 text-xs mt-1">{STEP6_CONTRACT_EARLIEST_HINT}</p>
+              </div>
             )}
           </>
         ) : (

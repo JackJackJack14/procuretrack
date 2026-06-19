@@ -55,10 +55,13 @@ export const STEP_DOCS_DETAILED: DocItem[][] = [
   [
     { name: STEP5_DOC.EGP_WINNER_ANNOUNCEMENT, required: true },
     { name: STEP5_DOC.PHYSICAL_BOARD_ANNOUNCEMENT, required: true },
-    { name: STEP5_DOC.ALL_BIDDERS_RESULT_NOTICE, required: true },
+    { name: STEP5_DOC.ALL_BIDDERS_RESULT_NOTICE, required: false },
   ],
   [
     { name: STEP6_DOC.NO_APPEAL_EGP_SCREENSHOT, required: false },
+    { name: STEP6_DOC.BIDDER_APPEAL_LETTER, required: false },
+    { name: STEP6_DOC.AGENCY_OPINION_CGD_LETTER, required: false },
+    { name: STEP6_DOC.COMMITTEE_DECISION_LETTER, required: false },
     { name: STEP6_DOC.AGENCY_APPEAL_REPORT, required: false },
     { name: STEP6_DOC.CGD_APPEAL_REPORT, required: false },
   ],

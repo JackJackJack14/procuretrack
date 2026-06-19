@@ -2,12 +2,14 @@
  * วันสิ้นสุด milestone ต่อขั้น — ดึงจากฐานข้อมูล/ฟอร์ม (ไม่ hard-code วันที่)
  */
 import {
-  PROJECT_TIMELINE_ESTIMATE_STEP3_WORKDAYS,
-  bidSubmissionEndAfterPeriodISO,
-  committeeReviewDeadlineAfterBidEndISO,
+  loadStep4FormFromNote,
+  loadStep5FormFromNote,
+  mergeStep4BidResultFromProject,
+  mergeStep5FromProject,
+} from "@/lib/step-form";
+import {
   computeAppealDeadlineISO,
   computeContractNotificationDeadlineISO,
-  defaultPublicationEndISO,
 } from "@/lib/workdays";
 
 const STEP_FORM_MARKERS = ["__STEP_FORM__:", "__PROCURE_FORM__:"] as const;
@@ -20,6 +22,7 @@ export type StepMilestoneProject = {
   committee_review_workdays?: number | null;
   evaluation_report_approval_date?: string | null;
   winner_announcement_date?: string | null;
+  winner_result_notification_date?: string | null;
 };
 
 export type StepMilestoneStep = {
@@ -42,6 +45,74 @@ type Step3AnnouncementFields = {
 
 /** ฟิลด์ด่าน 3 ที่ส่งจาก Form State สด — ใช้ override ค่าใน step3Note (DB) */
 export type Step3TimelineLiveAnnouncement = Step3AnnouncementFields;
+
+export type Step4TimelineLiveFields = {
+  evaluation_report_approval_date?: string;
+};
+
+export type Step5TimelineLiveFields = {
+  winner_announcement_date?: string;
+  winner_result_notification_date?: string;
+};
+
+/** บริบท note + form สด สำหรับไทม์ไลน์ — Single Source of Truth จาก DB + override ขั้นปัจจุบัน */
+export type TimelineNotesContext = {
+  step4Note?: string | null;
+  step5Note?: string | null;
+  step4Live?: Step4TimelineLiveFields | null;
+  step5Live?: Step5TimelineLiveFields | null;
+};
+
+function pickTimelineDate(liveVal?: string, ...stored: Array<string | null | undefined>): string {
+  const fromLive = liveVal?.trim() ?? "";
+  if (fromLive) return fromLive;
+  for (const candidate of stored) {
+    const t = candidate?.trim() ?? "";
+    if (t) return t;
+  }
+  return "";
+}
+
+/** รวมวันที่ milestone จาก project columns + procurement_steps note + form สด */
+export function resolveMergedTimelineProject(
+  project: StepMilestoneProject,
+  ctx?: TimelineNotesContext | null,
+): StepMilestoneProject {
+  const step4Bid = mergeStep4BidResultFromProject(
+    loadStep4FormFromNote(ctx?.step4Note ?? null).bidResult ?? {},
+    project,
+  );
+  const step5Ann = mergeStep5FromProject(
+    loadStep5FormFromNote(ctx?.step5Note ?? null).announcement ?? {},
+    project,
+  );
+  return {
+    ...project,
+    evaluation_report_approval_date: pickTimelineDate(
+      ctx?.step4Live?.evaluation_report_approval_date,
+      step4Bid.evaluation_report_approval_date,
+      project.evaluation_report_approval_date,
+    ),
+    winner_announcement_date: pickTimelineDate(
+      ctx?.step5Live?.winner_announcement_date,
+      step5Ann.winner_announcement_date,
+      project.winner_announcement_date,
+    ),
+    winner_result_notification_date: pickTimelineDate(
+      ctx?.step5Live?.winner_result_notification_date,
+      step5Ann.winner_result_notification_date,
+      project.winner_result_notification_date,
+    ),
+  };
+}
+
+export function resolveTimelineAppealAnchorISO(project: StepMilestoneProject): string {
+  return (
+    project.winner_result_notification_date?.trim() ||
+    project.winner_announcement_date?.trim() ||
+    ""
+  );
+}
 
 export function resolveStep3AnnouncementFields(
   step3Note: string | null | undefined,
@@ -95,47 +166,6 @@ function parseStep3AnnouncementFromNote(note: string | null): Step3AnnouncementF
   }
 }
 
-function resolveCommitteeReviewWorkdaysFromContext(
-  project: StepMilestoneProject | null | undefined,
-  step3Note: string | null,
-  ann?: Step3AnnouncementFields,
-): number | null {
-  const merged = ann ?? parseStep3AnnouncementFromNote(step3Note);
-  const fromMerged = merged.committee_review_workdays;
-  if (fromMerged != null && fromMerged > 0) return fromMerged;
-  const fromProject = project?.committee_review_workdays;
-  if (fromProject != null && fromProject > 0) return fromProject;
-  return null;
-}
-
-function resolveBidPeriodStartDate(
-  project: StepMilestoneProject | null | undefined,
-  step3Note: string | null,
-  ann?: Step3AnnouncementFields,
-): string {
-  const merged = ann ?? parseStep3AnnouncementFromNote(step3Note);
-  const fromMerged = merged.procurement_request_approval_date?.trim();
-  if (fromMerged) return fromMerged;
-  const fromProject = project?.procurement_request_approval_date?.trim();
-  if (fromProject) return fromProject;
-  return "";
-}
-
-function resolveStep4CommitteeReviewDeadlineISO(
-  project: StepMilestoneProject | null | undefined,
-  step3Note: string | null,
-  ann?: Step3AnnouncementFields,
-): string {
-  const bidPeriodStartISO = resolveBidPeriodStartDate(project, step3Note, ann);
-  const bidPeriodWorkdays = resolveCommitteeReviewWorkdaysFromContext(project, step3Note, ann);
-  if (!bidPeriodStartISO || bidPeriodWorkdays == null || bidPeriodWorkdays <= 0) return "";
-  const bidSubmissionEndISO = bidSubmissionEndAfterPeriodISO(
-    bidPeriodStartISO,
-    bidPeriodWorkdays,
-  );
-  return committeeReviewDeadlineAfterBidEndISO(bidSubmissionEndISO);
-}
-
 /** วันที่ประกาศแผนจัดซื้อจัดจ้างประจำปี (ด่าน 1) */
 export function resolveStep1PlanPublicationDateISO(
   steps: StepMilestoneStep[],
@@ -147,14 +177,16 @@ export function resolveStep1PlanPublicationDateISO(
   return isoDatePart(project?.created_at);
 }
 
-/** วันสิ้นสุด milestone ของแต่ละขั้น (ISO) — จากฐานข้อมูลจริง */
+/** วันสิ้นสุด milestone ของแต่ละขั้น (ISO) — จากฐานข้อมูลจริงเท่านั้น */
 export function resolveStepMilestoneEndISO(
   stepNumber: number,
   project: StepMilestoneProject,
   stepRecord: StepMilestoneStep | undefined,
   step3Note?: string | null,
   step3Live?: Step3TimelineLiveAnnouncement | null,
+  timelineNotes?: TimelineNotesContext | null,
 ): StepMilestoneResolution {
+  const mergedProject = resolveMergedTimelineProject(project, timelineNotes);
   const ann = resolveStep3AnnouncementFields(step3Note ?? null, step3Live);
   const completedISO = isoDatePart(stepRecord?.completed_at);
   const dueISO = isoDatePart(stepRecord?.due_date ?? null);
@@ -162,12 +194,12 @@ export function resolveStepMilestoneEndISO(
   switch (stepNumber) {
     case 1: {
       if (completedISO) return { iso: completedISO, derived: false };
-      const created = isoDatePart(project.created_at);
+      const created = isoDatePart(mergedProject.created_at);
       if (created) return { iso: created, derived: false };
       return { iso: "", derived: false };
     }
     case 2: {
-      const median = project.median_price_approval_date?.trim() ?? "";
+      const median = mergedProject.median_price_approval_date?.trim() ?? "";
       if (median) return { iso: median, derived: false };
       if (completedISO) return { iso: completedISO, derived: false };
       return { iso: "", derived: false };
@@ -178,43 +210,37 @@ export function resolveStepMilestoneEndISO(
       const procApproval = ann.procurement_request_approval_date?.trim() ?? "";
       if (procApproval) return { iso: procApproval, derived: false };
       const pubStart = ann.publication_start?.trim() ?? "";
-      if (pubStart) {
-        return {
-          iso: defaultPublicationEndISO(pubStart, PROJECT_TIMELINE_ESTIMATE_STEP3_WORKDAYS),
-          derived: true,
-        };
-      }
+      if (pubStart) return { iso: pubStart, derived: false };
       if (completedISO) return { iso: completedISO, derived: false };
       return { iso: "", derived: false };
     }
     case 4: {
-      const evalDate = project.evaluation_report_approval_date?.trim() ?? "";
+      const evalDate = mergedProject.evaluation_report_approval_date?.trim() ?? "";
       if (evalDate) return { iso: evalDate, derived: false };
-      const committeeDeadline = resolveStep4CommitteeReviewDeadlineISO(
-        project,
-        step3Note ?? null,
-        ann,
-      );
-      if (committeeDeadline) return { iso: committeeDeadline, derived: true };
       if (completedISO) return { iso: completedISO, derived: false };
       return { iso: "", derived: false };
     }
     case 5: {
-      const winner = project.winner_announcement_date?.trim() ?? "";
+      const winner = mergedProject.winner_announcement_date?.trim() ?? "";
       if (winner) return { iso: winner, derived: false };
       if (completedISO) return { iso: completedISO, derived: false };
       return { iso: "", derived: false };
     }
     case 6: {
-      const winner = project.winner_announcement_date?.trim() ?? "";
-      if (winner) return { iso: computeAppealDeadlineISO(winner), derived: false };
+      const appealAnchor = resolveTimelineAppealAnchorISO(mergedProject);
+      if (appealAnchor) {
+        return { iso: computeAppealDeadlineISO(appealAnchor), derived: true };
+      }
       if (completedISO) return { iso: completedISO, derived: false };
       return { iso: "", derived: false };
     }
     case 7: {
-      const winner = project.winner_announcement_date?.trim() ?? "";
-      if (winner) {
-        return { iso: computeContractNotificationDeadlineISO(winner), derived: false };
+      const appealAnchor = resolveTimelineAppealAnchorISO(mergedProject);
+      if (appealAnchor) {
+        return {
+          iso: computeContractNotificationDeadlineISO(appealAnchor),
+          derived: true,
+        };
       }
       if (completedISO) return { iso: completedISO, derived: false };
       return { iso: "", derived: false };
@@ -237,9 +263,17 @@ export function resolvePreviousStepMilestoneEndISO(
   steps: StepMilestoneStep[],
   step3Note?: string | null,
   step3Live?: Step3TimelineLiveAnnouncement | null,
+  timelineNotes?: TimelineNotesContext | null,
 ): string {
   if (currentStepNumber <= 1) return "";
   const prev = currentStepNumber - 1;
   const stepRecord = steps.find((s) => s.step_number === prev);
-  return resolveStepMilestoneEndISO(prev, project, stepRecord, step3Note, step3Live).iso;
+  return resolveStepMilestoneEndISO(
+    prev,
+    project,
+    stepRecord,
+    step3Note,
+    step3Live,
+    timelineNotes,
+  ).iso;
 }

@@ -1052,6 +1052,28 @@ export type Step3Announcement = {
 /** สถานะการอุทธรณ์ — บันทึกในขั้นตอนที่ 6 (อุทธรณ์) */
 export type StepAppealStatus = "none" | "pending" | "";
 
+/** ผลการพิจารณาของหัวหน้าหน่วยงาน */
+export type AppealHeadOpinion = "agree" | "disagree" | "";
+
+/** ผลการวินิจฉัยคณะกรรมการพิจารณาอุทธรณ์ */
+export type AppealCommitteeDecision = "upheld" | "not_upheld" | "";
+
+export const APPEAL_HEAD_OPINION_OPTIONS: Array<{
+  value: Exclude<AppealHeadOpinion, "">;
+  label: string;
+}> = [
+  { value: "agree", label: "เห็นด้วยกับอุทธรณ์" },
+  { value: "disagree", label: "ไม่เห็นด้วยกับอุทธรณ์" },
+];
+
+export const APPEAL_COMMITTEE_DECISION_OPTIONS: Array<{
+  value: Exclude<AppealCommitteeDecision, "">;
+  label: string;
+}> = [
+  { value: "upheld", label: "อุทธรณ์ฟังขึ้น" },
+  { value: "not_upheld", label: "อุทธรณ์ฟังไม่ขึ้น" },
+];
+
 /** @deprecated ใช้ StepAppealStatus */
 export type Step4AppealStatus = StepAppealStatus;
 
@@ -1060,19 +1082,38 @@ export const APPEAL_STATUS_LABELS: Record<Exclude<StepAppealStatus, "">, string>
   pending: "ติดอุทธรณ์",
 };
 
-/** ข้อมูลอุทธรณ์ — ขั้นตอนที่ 6 */
+/** ข้อมูลอุทธรณ์ — ขั้นตอนที่ 6 (เก็บใน note JSON / step6_notes) */
 export type Step6AppealState = {
   appeal_status?: StepAppealStatus;
+  /** ชื่อผู้ประกอบการที่ยื่นอุทธรณ์ */
+  appeal_bidder_name?: string;
+  /** วันที่หน่วยงานได้รับหนังสืออุทธรณ์ */
+  appeal_received_date?: string;
+  /** เลขที่หนังสือรายงานความเห็นเสนอหัวหน้าหน่วยงาน */
   appeal_report_letter_no?: string;
-  /** วันที่หัวหน้าหน่วยงานลงนามในหนังสือผลอุทธรณ์ */
+  /** ผลการพิจารณาของหัวหน้าหน่วยงาน */
+  appeal_head_opinion?: AppealHeadOpinion;
+  /** เลขที่หนังสือส่งเรื่องให้กรมบัญชีกลาง */
+  cgd_submission_letter_no?: string;
+  /** วันที่ส่งเรื่องให้กรมบัญชีกลาง */
+  cgd_submission_date?: string;
+  /** ผลการวินิจฉัยจากคณะกรรมการพิจารณาอุทธรณ์ */
+  appeal_committee_decision?: AppealCommitteeDecision;
+  /** @deprecated ใช้ appeal_received_date */
   appeal_report_approval_date?: string;
-  /** @deprecated ใช้ appeal_report_approval_date */
+  /** @deprecated */
   appeal_consideration_status?: string;
 };
 
 export const EMPTY_STEP6_APPEAL: Required<Omit<Step6AppealState, never>> = {
   appeal_status: "",
+  appeal_bidder_name: "",
+  appeal_received_date: "",
   appeal_report_letter_no: "",
+  appeal_head_opinion: "",
+  cgd_submission_letter_no: "",
+  cgd_submission_date: "",
+  appeal_committee_decision: "",
   appeal_report_approval_date: "",
   appeal_consideration_status: "",
 };
@@ -1119,12 +1160,16 @@ export const EMPTY_STEP4_CHECKLIST: Step4Checklist = {
 /** ประกาศผู้ชนะ — ขั้นตอนที่ 5 */
 export type Step5Announcement = {
   winner_announcement_no?: string;
+  /** วันที่ประกาศผลผ่านระบบ e-GP / ลงนามในประกาศผู้ชนะ */
   winner_announcement_date?: string;
+  /** วันที่แจ้งผลให้ผู้เสนอราคาทราบ — ฐานนับระยะอุทธรณ์ 7 วันทำการ */
+  winner_result_notification_date?: string;
 };
 
 export const EMPTY_STEP5_ANNOUNCEMENT: Required<Step5Announcement> = {
   winner_announcement_no: "",
   winner_announcement_date: "",
+  winner_result_notification_date: "",
 };
 
 /** Smart Checklist — ขั้นตอนที่ 5 (manual keys เท่านั้น — auto คำนวณจากฟอร์ม) */
@@ -1557,6 +1602,14 @@ export type Step4FormData = {
 };
 export type Step5FormData = { checklist?: Step5Checklist; announcement?: Step5Announcement };
 
+/** ข้อมูลอุทธรณ์ — บันทึกใน note ของ procurement_steps (ขั้นตอนที่ 6) */
+export type Step6FormData = {
+  checklist?: Step6Checklist;
+  appeal?: Step6AppealState;
+  /** @deprecated alias — ใช้ appeal */
+  step6_notes?: Step6AppealState;
+};
+
 /** ข้อมูลหนังสือแจ้งทำสัญญา — ขั้นตอนที่ 7 */
 export type Step7ContractNotice = {
   contract_notice_letter_no: string;
@@ -1755,6 +1808,7 @@ export type StepFormData =
   | Step3FormData
   | Step4FormData
   | Step5FormData
+  | Step6FormData
   | Step7FormData
   | Step8FormData
   | Step9FormData
@@ -2357,8 +2411,18 @@ function step4BidResultHasData(b: Step4BidResult | undefined): boolean {
   );
 }
 
-export function isAppealBlocking(appeal: Pick<Step6AppealState, "appeal_status">): boolean {
-  return appeal.appeal_status === "pending";
+export function isAppealWorkflowLocked(
+  appeal: Pick<Step6AppealState, "appeal_status" | "appeal_committee_decision">,
+): boolean {
+  if (appeal.appeal_status !== "pending") return false;
+  const decision = appeal.appeal_committee_decision ?? "";
+  return !decision || decision === "upheld";
+}
+
+export function isAppealBlocking(
+  appeal: Pick<Step6AppealState, "appeal_status" | "appeal_committee_decision">,
+): boolean {
+  return isAppealWorkflowLocked(appeal);
 }
 
 /** @deprecated ใช้ isAppealBlocking */
@@ -3585,13 +3649,20 @@ export function isStep6CoreDocumentsReady(
   appealStatus: string,
   opts: {
     hasNoAppealEgpDoc: boolean;
+    hasBidderAppealLetterDoc: boolean;
+    hasAgencyOpinionCgdDoc: boolean;
     hasAgencyReportDoc: boolean;
     hasCgdReportDoc: boolean;
   },
 ): boolean {
   if (!appealStatus) return false;
-  if (appealStatus === "none") return opts.hasNoAppealEgpDoc;
-  if (appealStatus === "pending") return opts.hasAgencyReportDoc && opts.hasCgdReportDoc;
+  if (appealStatus === "none") return true;
+  if (appealStatus === "pending") {
+    const hasAgencyCgd =
+      opts.hasAgencyOpinionCgdDoc ||
+      (opts.hasAgencyReportDoc && opts.hasCgdReportDoc);
+    return opts.hasBidderAppealLetterDoc && hasAgencyCgd;
+  }
   return false;
 }
 
@@ -3599,26 +3670,50 @@ export function countStep6CoreDocumentsReady(
   appealStatus: string,
   opts: {
     hasNoAppealEgpDoc: boolean;
+    hasBidderAppealLetterDoc: boolean;
+    hasAgencyOpinionCgdDoc: boolean;
     hasAgencyReportDoc: boolean;
     hasCgdReportDoc: boolean;
   },
 ): { done: number; total: number } {
   if (!appealStatus) return { done: 0, total: 1 };
-  if (appealStatus === "none") {
-    return { done: opts.hasNoAppealEgpDoc ? 1 : 0, total: 1 };
-  }
+  if (appealStatus === "none") return { done: 1, total: 1 };
   if (appealStatus === "pending") {
     let done = 0;
-    if (opts.hasAgencyReportDoc) done += 1;
-    if (opts.hasCgdReportDoc) done += 1;
-    return { done, total: 2 };
+    const total = 2;
+    if (opts.hasBidderAppealLetterDoc) done += 1;
+    if (
+      opts.hasAgencyOpinionCgdDoc ||
+      (opts.hasAgencyReportDoc && opts.hasCgdReportDoc)
+    ) {
+      done += 1;
+    }
+    return { done, total };
   }
   return { done: 0, total: 1 };
 }
 
+export function isAppealReceivedBeforeStep5Notification(
+  receivedISO: string,
+  step5NotificationISO: string,
+): boolean {
+  return (
+    !!receivedISO?.trim() &&
+    !!step5NotificationISO?.trim() &&
+    receivedISO.trim() < step5NotificationISO.trim()
+  );
+}
+
+export const STEP6_APPEAL_RECEIVED_BEFORE_STEP5_MSG =
+  "วันที่หน่วยงานได้รับหนังสืออุทธรณ์ต้องไม่ก่อนวันที่แจ้งผลให้ผู้เสนอราคาทราบในขั้นตอนที่ 5";
+
 export function getStep6RequiredFormFieldIssues(
   appeal: Step6AppealState,
-  opts: { responsibleName: string; timelineCtx?: TimelineValidationContext },
+  opts: {
+    responsibleName: string;
+    step5NotificationDate?: string;
+    timelineCtx?: TimelineValidationContext;
+  },
 ): Step6ComplianceIssue[] {
   const issues: Step6ComplianceIssue[] = [];
   const status = appeal.appeal_status ?? "";
@@ -3632,20 +3727,62 @@ export function getStep6RequiredFormFieldIssues(
   if (!status) {
     issues.push({
       id: "appeal_status",
-      message: "กรุณาเลือกสถานะการอุทธรณ์โครงการ",
+      message: "กรุณาเลือกสถานะการอุทธรณ์ผลการจัดซื้อจัดจ้าง",
     });
   }
   if (status === "pending") {
+    if (!appeal.appeal_bidder_name?.trim()) {
+      issues.push({
+        id: "appeal_bidder_name",
+        message: "กรุณาเลือกชื่อผู้ประกอบการที่ยื่นอุทธรณ์",
+      });
+    }
+    const receivedDate =
+      appeal.appeal_received_date?.trim() ||
+      appeal.appeal_report_approval_date?.trim() ||
+      "";
+    if (!receivedDate) {
+      issues.push({
+        id: "appeal_received_date",
+        message: "กรุณาระบุวันที่หน่วยงานได้รับหนังสืออุทธรณ์",
+      });
+    } else if (
+      opts.step5NotificationDate &&
+      isAppealReceivedBeforeStep5Notification(receivedDate, opts.step5NotificationDate)
+    ) {
+      issues.push({
+        id: "appeal_received_date",
+        message: STEP6_APPEAL_RECEIVED_BEFORE_STEP5_MSG,
+      });
+    }
     if (!appeal.appeal_report_letter_no?.trim()) {
       issues.push({
         id: "appeal_report_letter_no",
-        message: "กรุณาระบุเลขที่หนังสือรายงานผลการพิจารณาอุทธรณ์",
+        message: "กรุณาระบุเลขที่หนังสือรายงานความเห็นเสนอหัวหน้าหน่วยงาน",
       });
     }
-    if (!appeal.appeal_report_approval_date?.trim()) {
+    if (!appeal.appeal_head_opinion?.trim()) {
       issues.push({
-        id: "appeal_report_approval_date",
-        message: "กรุณาระบุวันที่หัวหน้าหน่วยงานลงนามในหนังสือผลอุทธรณ์",
+        id: "appeal_head_opinion",
+        message: "กรุณาเลือกผลการพิจารณาของหัวหน้าหน่วยงาน",
+      });
+    }
+    if (!appeal.cgd_submission_letter_no?.trim()) {
+      issues.push({
+        id: "cgd_submission_letter_no",
+        message: "กรุณาระบุเลขที่หนังสือส่งเรื่องให้กรมบัญชีกลาง",
+      });
+    }
+    if (!appeal.cgd_submission_date?.trim()) {
+      issues.push({
+        id: "cgd_submission_date",
+        message: "กรุณาระบุวันที่ส่งเรื่องให้กรมบัญชีกลาง",
+      });
+    }
+    if (!appeal.appeal_committee_decision?.trim()) {
+      issues.push({
+        id: "appeal_committee_decision",
+        message: "กรุณาเลือกผลการวินิจฉัยจากคณะกรรมการพิจารณาอุทธรณ์",
       });
     }
   }
@@ -3663,10 +3800,14 @@ export function getStep6RequiredFormFieldIssues(
 
 export function countStep6FormRequiredProgress(
   appeal: Step6AppealState,
-  opts: { responsibleName: string; timelineCtx?: TimelineValidationContext },
+  opts: {
+    responsibleName: string;
+    step5NotificationDate?: string;
+    timelineCtx?: TimelineValidationContext;
+  },
 ): { done: number; total: number } {
   const status = appeal.appeal_status ?? "";
-  const total = status === "pending" ? 4 : 2;
+  const total = status === "pending" ? 9 : 2;
   const formIssues = getStep6RequiredFormFieldIssues(appeal, opts);
   return { done: Math.max(0, total - formIssues.length), total };
 }
@@ -3677,9 +3818,12 @@ export function getStep6ComplianceIssues(
   _checklist: Step6Checklist,
   opts: {
     hasNoAppealEgpDoc: boolean;
+    hasBidderAppealLetterDoc: boolean;
+    hasAgencyOpinionCgdDoc: boolean;
     hasAgencyReportDoc: boolean;
     hasCgdReportDoc: boolean;
     responsibleName: string;
+    step5NotificationDate?: string;
     stepDocs?: Array<{ document_type: string }>;
     timelineCtx?: TimelineValidationContext;
   },
@@ -3688,24 +3832,21 @@ export function getStep6ComplianceIssues(
   const issues: Step6ComplianceIssue[] = [];
   const status = appeal.appeal_status ?? "";
 
-  if (status === "none" && !opts.hasNoAppealEgpDoc) {
-    issues.push({
-      id: "no_appeal_egp_doc",
-      message:
-        "กรุณาแนบภาพแคปหน้าจอ e-GP ยืนยันไม่มีผู้ยื่นอุทธรณ์ (.pdf, .png, .jpg)",
-    });
-  }
   if (status === "pending") {
-    if (!opts.hasAgencyReportDoc) {
+    if (!opts.hasBidderAppealLetterDoc) {
       issues.push({
-        id: "agency_appeal_report_doc",
-        message: "กรุณาแนบหนังสือรายงานผลการพิจารณาอุทธรณ์ของหน่วยงาน (PDF)",
+        id: "bidder_appeal_letter_doc",
+        message: "กรุณาแนบหนังสืออุทธรณ์จากผู้ประกอบการ (PDF)",
       });
     }
-    if (!opts.hasCgdReportDoc) {
+    const hasAgencyCgd =
+      opts.hasAgencyOpinionCgdDoc ||
+      (opts.hasAgencyReportDoc && opts.hasCgdReportDoc);
+    if (!hasAgencyCgd) {
       issues.push({
-        id: "cgd_appeal_report_doc",
-        message: "กรุณาแนบหลักฐานส่งรายงานผลอุทธรณ์ให้กรมบัญชีกลาง (PDF)",
+        id: "agency_opinion_cgd_doc",
+        message:
+          "กรุณาแนบรายงานความเห็นของหน่วยงาน + หนังสือส่งกรมบัญชีกลาง (PDF)",
       });
     }
   }
@@ -3713,9 +3854,18 @@ export function getStep6ComplianceIssues(
   issues.push(
     ...getStep6RequiredFormFieldIssues(appeal, {
       responsibleName: opts.responsibleName,
+      step5NotificationDate: opts.step5NotificationDate,
       timelineCtx: opts.timelineCtx,
     }),
   );
+
+  if (isAppealWorkflowLocked(appeal)) {
+    issues.push({
+      id: "appeal_workflow_locked",
+      message:
+        "มีผู้ยื่นอุทธรณ์ — ต้องเลือกผลวินิจฉัย «อุทธรณ์ฟังไม่ขึ้น» ก่อนจึงจะไปขั้นตอนถัดไปได้",
+    });
+  }
 
   return issues;
 }
@@ -3729,6 +3879,8 @@ export function getStep6AppealComplianceIssues(
     { ...EMPTY_STEP6_CHECKLIST },
     {
       hasNoAppealEgpDoc: false,
+      hasBidderAppealLetterDoc: false,
+      hasAgencyOpinionCgdDoc: false,
       hasAgencyReportDoc: false,
       hasCgdReportDoc: false,
       responsibleName: "",
@@ -3756,6 +3908,8 @@ export function isStep6AppealReadyForNext(
     checklist ?? { ...EMPTY_STEP6_CHECKLIST },
     opts ?? {
       hasNoAppealEgpDoc: false,
+      hasBidderAppealLetterDoc: false,
+      hasAgencyOpinionCgdDoc: false,
       hasAgencyReportDoc: false,
       hasCgdReportDoc: false,
       responsibleName: "",
@@ -3780,6 +3934,44 @@ export function resolveWinnerAnnouncementDate(
   );
 }
 
+/** วันที่แจ้งผลให้ผู้เสนอราคาทราบ — ฐานนับระยะอุทธรณ์ (fallback เป็นวันประกาศผล) */
+export function resolveAppealAnchorDate(
+  project: {
+    winner_result_notification_date?: string | null;
+    winner_announcement_date?: string | null;
+  } | null,
+  step5Note?: string | null,
+): string {
+  const merged = mergeStep5FromProject(
+    loadStep5FormFromNote(step5Note ?? null).announcement ?? { ...EMPTY_STEP5_ANNOUNCEMENT },
+    project,
+  );
+  return (
+    merged.winner_result_notification_date?.trim() ||
+    merged.winner_announcement_date?.trim() ||
+    ""
+  );
+}
+
+export const STEP5_RESULT_NOTIFICATION_BEFORE_ANNOUNCEMENT_MSG =
+  "❌ วันที่แจ้งผลให้ผู้เสนอราคาทราบ ต้องไม่ก่อนวันที่ประกาศผล";
+
+export const STEP5_CONTRACT_AFTER_APPEAL_MSG = (earliestISO: string) =>
+  `⚠️ การทำสัญญาควรดำเนินการหลังวันที่ ${formatThaiDateSlash(earliestISO)} (เมื่อพ้นระยะเวลาอุทธรณ์แล้ว)`;
+
+export const STEP4_WINNER_DATA_LOCKED_MSG =
+  "🔒 ข้อมูลผู้ชนะและราคาตกลงจ้างถูกล็อกแล้ว — หากต้องการแก้ไขต้องยกเลิกประกาศผลใน e-GP และย้อนกลับไปแก้ไขขั้นตอนที่ 4";
+
+/** ล็อกข้อมูลผู้ชนะหลังผ่านขั้นตอนที่ 4 แล้ว (อยู่ขั้น 5 ขึ้นไป) */
+export function isStep4WinnerDataLocked(currentStep: number): boolean {
+  return currentStep > 4;
+}
+
+/** ล็อกข้อมูลประกาศผลหลังบันทึกขั้นตอนที่ 5 แล้ว (อยู่ขั้น 6 ขึ้นไป) */
+export function isStep5WinnerDataLocked(currentStep: number): boolean {
+  return currentStep > 5;
+}
+
 export function isStep4ReadyForNext(
   checklist: Step4Checklist,
   bidResult: Step4BidResult,
@@ -3795,27 +3987,27 @@ function buildStep5EvidenceFieldValues(announcement: Step5Announcement) {
   return {
     winner_announcement_no: announcement.winner_announcement_no,
     winner_announcement_date: announcement.winner_announcement_date,
+    winner_result_notification_date: announcement.winner_result_notification_date,
   };
 }
 
 export function isStep5CoreDocumentsReady(opts: {
   hasEgpWinnerDoc: boolean;
   hasPhysicalBoardDoc: boolean;
-  hasAllBiddersResultDoc: boolean;
 }): boolean {
-  return opts.hasEgpWinnerDoc && opts.hasPhysicalBoardDoc && opts.hasAllBiddersResultDoc;
+  return opts.hasEgpWinnerDoc && opts.hasPhysicalBoardDoc;
 }
 
 export function countStep5CoreDocumentsReady(opts: {
   hasEgpWinnerDoc: boolean;
   hasPhysicalBoardDoc: boolean;
-  hasAllBiddersResultDoc: boolean;
+  hasAllBiddersResultDoc?: boolean;
 }): { done: number; total: number } {
   let done = 0;
+  const total = 2;
   if (opts.hasEgpWinnerDoc) done += 1;
   if (opts.hasPhysicalBoardDoc) done += 1;
-  if (opts.hasAllBiddersResultDoc) done += 1;
-  return { done, total: 3 };
+  return { done, total };
 }
 
 export function getStep5RequiredFormFieldIssues(
@@ -3852,6 +4044,23 @@ export function getStep5RequiredFormFieldIssues(
       message: getStep5WinnerAnnouncementBeforeEvaluationMsg(evaluationApprovalDate),
     });
   }
+
+  if (!announcement.winner_result_notification_date?.trim()) {
+    issues.push({
+      id: "winner_result_notification_date",
+      message: "กรุณาระบุวันที่แจ้งผลให้ผู้เสนอราคาทราบ",
+    });
+  } else {
+    const notificationDate = announcement.winner_result_notification_date.trim();
+    const announcementDate = announcement.winner_announcement_date?.trim() ?? "";
+    if (announcementDate && notificationDate < announcementDate) {
+      issues.push({
+        id: "winner_result_notification_date",
+        message: STEP5_RESULT_NOTIFICATION_BEFORE_ANNOUNCEMENT_MSG,
+      });
+    }
+  }
+
   if (!opts.responsibleName.trim()) {
     issues.push({
       id: "responsible_officer",
@@ -3875,7 +4084,7 @@ export function countStep5FormRequiredProgress(
   opts: Parameters<typeof getStep5RequiredFormFieldIssues>[1],
 ): { done: number; total: number } {
   const formIssues = getStep5RequiredFormFieldIssues(announcement, opts);
-  const total = 3;
+  const total = 4;
   return { done: Math.max(0, total - formIssues.length), total };
 }
 
@@ -3886,7 +4095,6 @@ export function getStep5ComplianceIssues(
   opts: {
     hasEgpWinnerDoc: boolean;
     hasPhysicalBoardDoc: boolean;
-    hasAllBiddersResultDoc: boolean;
     evaluationApprovalDate: string;
     responsibleName: string;
     stepDocs?: Array<{ document_type: string }>;
@@ -3906,12 +4114,6 @@ export function getStep5ComplianceIssues(
     issues.push({
       id: "physical_board_doc",
       message: `กรุณาแนบเอกสาร "${STEP5_DOC.PHYSICAL_BOARD_ANNOUNCEMENT}"`,
-    });
-  }
-  if (!opts.hasAllBiddersResultDoc) {
-    issues.push({
-      id: "all_bidders_result_doc",
-      message: `กรุณาแนบเอกสาร "${STEP5_DOC.ALL_BIDDERS_RESULT_NOTICE}"`,
     });
   }
 
@@ -3981,6 +4183,8 @@ function formHasPersistedData(form: StepFormData): boolean {
   if (announcementHasData((form as Step3FormData).announcement)) return true;
   if (step4BidResultHasData((form as Step4FormData).bidResult)) return true;
   if (step5AnnouncementHasData((form as Step5FormData).announcement)) return true;
+  if (step6AppealHasData((form as Step6FormData).appeal)) return true;
+  if (step6AppealHasData((form as Step6FormData).step6_notes)) return true;
   if (step7ContractNoticeHasData((form as Step7FormData).contractNotice)) return true;
   if (step8ContractExecutionHasData((form as Step8FormData).contractExecution)) return true;
   return step9ContractScheduleHasData((form as Step9FormData).contractSchedule);
@@ -4023,6 +4227,48 @@ function step5AnnouncementHasData(announcement?: Step5Announcement): boolean {
   return !!(
     announcement.winner_announcement_no?.trim() || announcement.winner_announcement_date?.trim()
   );
+}
+
+export function step6AppealHasData(appeal?: Step6AppealState | null): boolean {
+  if (!appeal) return false;
+  return !!(
+    appeal.appeal_status === "none" ||
+    appeal.appeal_status === "pending" ||
+    appeal.appeal_bidder_name?.trim() ||
+    appeal.appeal_received_date?.trim() ||
+    appeal.appeal_report_letter_no?.trim() ||
+    appeal.appeal_head_opinion?.trim() ||
+    appeal.cgd_submission_letter_no?.trim() ||
+    appeal.cgd_submission_date?.trim() ||
+    appeal.appeal_committee_decision?.trim() ||
+    appeal.appeal_report_approval_date?.trim() ||
+    appeal.appeal_consideration_status?.trim()
+  );
+}
+
+function normalizeStep6AppealState(raw: Partial<Step6AppealState>): Step6AppealState {
+  const received =
+    raw.appeal_received_date?.trim() || raw.appeal_report_approval_date?.trim() || "";
+  const headOpinion =
+    raw.appeal_head_opinion === "agree" || raw.appeal_head_opinion === "disagree"
+      ? raw.appeal_head_opinion
+      : "";
+  const committeeDecision =
+    raw.appeal_committee_decision === "upheld" ||
+    raw.appeal_committee_decision === "not_upheld"
+      ? raw.appeal_committee_decision
+      : "";
+  return {
+    ...EMPTY_STEP6_APPEAL,
+    ...raw,
+    appeal_status:
+      raw.appeal_status === "none" || raw.appeal_status === "pending"
+        ? raw.appeal_status
+        : "",
+    appeal_received_date: received,
+    appeal_head_opinion: headOpinion,
+    appeal_committee_decision: committeeDecision,
+  };
 }
 
 function normalizeStep3Checklist(
@@ -4267,6 +4513,7 @@ export function mergeStep5FromProject(
   project: {
     winner_announcement_no?: string | null;
     winner_announcement_date?: string | null;
+    winner_result_notification_date?: string | null;
   } | null,
 ): Step5Announcement {
   if (!project) return announcement;
@@ -4278,6 +4525,10 @@ export function mergeStep5FromProject(
     winner_announcement_date:
       announcement.winner_announcement_date?.trim() ||
       project.winner_announcement_date ||
+      "",
+    winner_result_notification_date:
+      announcement.winner_result_notification_date?.trim() ||
+      project.winner_result_notification_date ||
       "",
   };
 }
@@ -5107,6 +5358,36 @@ export function loadStep8FormFromNote(note: string | null): Step8FormData {
   };
 }
 
+/** โหลดข้อมูลฟอร์มขั้นตอนที่ 6 จาก note — ไม่อ่านคอลัมน์ projects.appeal_report_approval_date */
+export function loadStep6FormFromNote(note: string | null): Step6FormData {
+  const { form } = parseStepNote(note);
+  const f = form as Step6FormData;
+  const rawAppeal = f.appeal ?? f.step6_notes ?? {};
+  const c = f.checklist ?? {};
+  return {
+    checklist: {
+      appeal_period_passed_no_objection: !!c.appeal_period_passed_no_objection,
+      appeal_agency_report_done: !!c.appeal_agency_report_done,
+      appeal_sent_to_cgd: !!c.appeal_sent_to_cgd,
+    },
+    appeal: normalizeStep6AppealState(rawAppeal),
+  };
+}
+
+/** รวมข้อมูลอุทธรณ์จาก note (หลัก) + appeal_status จาก projects (สำหรับ dashboard เท่านั้น) */
+export function mergeStep6AppealFromSources(
+  note: string | null,
+  project?: { appeal_status?: string | null } | null,
+): Step6AppealState {
+  const fromNote = loadStep6FormFromNote(note).appeal ?? { ...EMPTY_STEP6_APPEAL };
+  if (step6AppealHasData(fromNote)) return fromNote;
+  const legacyStatus =
+    project?.appeal_status === "none" || project?.appeal_status === "pending"
+      ? project.appeal_status
+      : "";
+  return { ...fromNote, appeal_status: legacyStatus as StepAppealStatus };
+}
+
 /** โหลดข้อมูลฟอร์มขั้นตอนที่ 5 จาก note */
 export function loadStep5FormFromNote(note: string | null): Step5FormData {
   const { form } = parseStepNote(note);
@@ -5245,45 +5526,31 @@ export function buildProjectStep5Fields(announcement: Step5Announcement) {
   return {
     winner_announcement_no: announcement.winner_announcement_no?.trim() || null,
     winner_announcement_date: announcement.winner_announcement_date?.trim() || null,
+    winner_result_notification_date:
+      announcement.winner_result_notification_date?.trim() || null,
   };
 }
 
-/** ฟิลด์อุทธรณ์ — บันทึกลงตาราง projects (ขั้นตอนที่ 6) */
-export function buildProjectAppealFields(appeal: Step6AppealState) {
+/** ซิงก์เฉพาะ appeal_status ไป projects — วันที่/เลขที่เก็บใน note JSON เท่านั้น */
+export function buildProjectAppealStatusSync(appeal: Step6AppealState) {
   return {
     appeal_status:
       appeal.appeal_status === "none" || appeal.appeal_status === "pending"
         ? appeal.appeal_status
         : null,
-    appeal_report_letter_no: appeal.appeal_report_letter_no?.trim() || null,
-    appeal_report_approval_date: appeal.appeal_report_approval_date?.trim() || null,
-    appeal_consideration_status: appeal.appeal_consideration_status?.trim() || null,
   };
 }
 
-/** โหลดสถานะอุทธรณ์จาก project columns */
+/** @deprecated ใช้ buildProjectAppealStatusSync — ห้ามเขียน appeal_report_approval_date ลง projects */
+export function buildProjectAppealFields(appeal: Step6AppealState) {
+  return buildProjectAppealStatusSync(appeal);
+}
+
+/** @deprecated ใช้ mergeStep6AppealFromSources(note, project) */
 export function mergeAppealFromProject(
-  project: {
-    appeal_status?: string | null;
-    appeal_report_letter_no?: string | null;
-    appeal_report_approval_date?: string | null;
-    appeal_consideration_status?: string | null;
-  } | null,
+  project: { appeal_status?: string | null } | null,
 ): Step6AppealState {
-  if (!project) return { ...EMPTY_STEP6_APPEAL };
-  const appealFromProject =
-    project.appeal_status === "none" || project.appeal_status === "pending"
-      ? project.appeal_status
-      : "";
-  return {
-    appeal_status: appealFromProject as StepAppealStatus,
-    appeal_report_letter_no: project.appeal_report_letter_no ?? "",
-    appeal_report_approval_date:
-      project.appeal_report_approval_date?.trim() ||
-      project.appeal_consideration_status?.trim() ||
-      "",
-    appeal_consideration_status: project.appeal_consideration_status ?? "",
-  };
+  return mergeStep6AppealFromSources(null, project);
 }
 
 /** รวมค่าจาก project columns เข้ากับ bidResult จาก note */

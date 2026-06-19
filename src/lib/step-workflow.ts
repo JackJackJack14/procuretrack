@@ -18,7 +18,28 @@ export function isStepForwardLocked(
   return targetStep > currentWorkflowStep;
 }
 
-/** คลิกได้: ขั้นที่ทำเสร็จแล้ว + ขั้นปัจจุบัน (ห้ามล่วงหน้า — ยกเว้นโหมด external) */
+/** ขั้นที่อยู่เหนือ activeStep — ห้ามคลิกจากแถบ Stepper (Strict Active-View Forward Lock) */
+export function isStepBeyondActiveView(
+  targetStep: number,
+  activeStep: number,
+): boolean {
+  return targetStep > activeStep;
+}
+
+/**
+ * คลิก Tab บนแถบ 10 ขั้นได้หรือไม่
+ * - มาตรฐาน: คลิกได้เฉพาะ targetStep <= workflowStep (project.current_step)
+ * - โหมด external: คลิกได้ทุก Tab (ยกเว้นนอกช่วง 1–10)
+ */
+export function canClickStepperTab(
+  targetStep: number,
+  workflowStep: number,
+  procurementPath?: string | null,
+): boolean {
+  return canNavigateToStep(targetStep, workflowStep, procurementPath);
+}
+
+/** คลิกได้ตาม workflowStep ใน DB (ไม่จำกัด activeStep) — ใช้กับ logic อื่นนอก Stepper */
 export function canNavigateToStep(
   targetStep: number,
   currentWorkflowStep: number,

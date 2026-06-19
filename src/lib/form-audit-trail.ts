@@ -21,9 +21,12 @@ import {
   isStep4CommitteeReportDocType,
   isStep5EgpWinnerDocType,
   isStep5PhysicalBoardDocType,
+  isStep6AgencyOpinionCgdDocType,
   isStep6AgencyReportDocType,
   isStep6AppealEvidenceDocType,
+  isStep6BidderAppealLetterDocType,
   isStep6CgdReportDocType,
+  isStep6CommitteeDecisionDocType,
   isStep6NoAppealEgpDocType,
 } from "@/lib/step-doc-types";
 
@@ -211,8 +214,8 @@ export const CHECKLIST_EVIDENCE_RULES: ChecklistEvidenceRule[] = [
     enforce: "always",
     binding: {
       kind: "fields",
-      fieldKeys: ["winner_announcement_no", "winner_announcement_date"],
-      message: "ข้อที่ 1: กรุณาระบุเลขที่และวันที่ลงนามในประกาศผู้ชนะ",
+      fieldKeys: ["winner_announcement_no", "winner_announcement_date", "winner_result_notification_date"],
+      message: "ข้อที่ 1: กรุณาระบุเลขที่ วันที่ประกาศผล และวันที่แจ้งผลให้ผู้เสนอราคาทราบ",
     },
   },
   {
@@ -452,6 +455,18 @@ export function hasStep5PhysicalBoardDoc(uploadedDocTypes: string[]): boolean {
 
 export function hasStep6NoAppealEgpDoc(uploadedDocTypes: string[]): boolean {
   return uploadedDocTypes.some((t) => isStep6NoAppealEgpDocType(t));
+}
+
+export function hasStep6BidderAppealLetterDoc(uploadedDocTypes: string[]): boolean {
+  return uploadedDocTypes.some((t) => isStep6BidderAppealLetterDocType(t));
+}
+
+export function hasStep6AgencyOpinionCgdDoc(uploadedDocTypes: string[]): boolean {
+  return uploadedDocTypes.some((t) => isStep6AgencyOpinionCgdDocType(t));
+}
+
+export function hasStep6CommitteeDecisionDoc(uploadedDocTypes: string[]): boolean {
+  return uploadedDocTypes.some((t) => isStep6CommitteeDecisionDocType(t));
 }
 
 export function hasStep6AgencyReportDoc(uploadedDocTypes: string[]): boolean {

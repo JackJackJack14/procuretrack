@@ -4,7 +4,7 @@ import {
   EMPTY_STEP3_CHECKLIST,
   buildProjectStep4Fields,
   buildProjectStep5Fields,
-  buildProjectAppealFields,
+  buildProjectAppealStatusSync,
   EMPTY_STEP4_BID_RESULT,
   EMPTY_STEP5_ANNOUNCEMENT,
   EMPTY_STEP6_APPEAL,
@@ -45,7 +45,7 @@ export function getStepRollbackProjectWipe(
     case 5:
       return buildProjectStep5Fields({ ...EMPTY_STEP5_ANNOUNCEMENT });
     case 6:
-      return buildProjectAppealFields({ ...EMPTY_STEP6_APPEAL });
+      return buildProjectAppealStatusSync({ ...EMPTY_STEP6_APPEAL });
     default:
       return {};
   }

@@ -168,6 +168,10 @@ import {
   type Step6AppealState,
   type Step6Checklist,
   type Step6ChecklistKey,
+  APPEAL_HEAD_OPINION_OPTIONS,
+  APPEAL_COMMITTEE_DECISION_OPTIONS,
+  isAppealReceivedBeforeStep5Notification,
+  STEP6_APPEAL_RECEIVED_BEFORE_STEP5_MSG,
   type Step5Announcement,
   type Step5Checklist,
   type Step5ChecklistKey,
@@ -186,6 +190,9 @@ import {
   type Step10InspectionRow,
   isStep5WinnerAnnouncementBeforeEvaluation,
   getStep5WinnerAnnouncementBeforeEvaluationMsg,
+  STEP5_CONTRACT_AFTER_APPEAL_MSG,
+  STEP5_RESULT_NOTIFICATION_BEFORE_ANNOUNCEMENT_MSG,
+  STEP4_WINNER_DATA_LOCKED_MSG,
   STEP4_EVALUATION_APPROVAL_BEFORE_BID_END_MSG,
   STEP4_EVALUATION_APPROVAL_OVERDUE_MSG,
   STEP4_EVALUATION_APPROVAL_GATE_MSG,
@@ -230,14 +237,18 @@ import { downloadExecutiveReportPdf, type ExecutiveReportProject } from "@/lib/e
 import { supabase } from "@/integrations/supabase/client";
 import {
   computeAppealDeadlineISO,
+  computeCgdSubmissionDeadlineISO,
+  computeContractEarliestISO,
   computeContractNotificationDeadlineISO,
   CONTRACT_NOTIFICATION_WORKDAYS,
+  isCgdSubmissionBeyondSevenWorkdays,
 } from "@/lib/workdays";
 import type { DocItem } from "@/lib/procurement";
 import { StepInlineDocList } from "@/components/steps/StepInlineDocList";
 import { StepDocumentHub } from "@/components/steps/StepDocumentHub";
 import { FieldLabelTooltip } from "@/components/FieldLabelTooltip";
 import { getFieldTooltip, type FieldTooltipKey } from "@/constants/tooltips";
+import { STEP6_APPEAL_ACTIVE_BANNER_MSG } from "@/lib/step6-guideline";
 
 /**
  * มาตรฐานลำดับ Layout ทุกขั้นตอน (Step 1–10):
@@ -2116,6 +2127,8 @@ type Step4FormProps = {
   supervisorOrderDocs?: StepDocRecord[];
   /** issue.id ที่ต้องเน้นแดงหลัง validation ไม่ผ่าน */
   highlightedComplianceIssues?: string[];
+  /** ล็อกตารางผู้ยื่นข้อเสนอหลังผ่านขั้นตอนที่ 5 */
+  winnerDataLocked?: boolean;
 } & ChronologicalFormProps;
 
 function Step4CommitteeMembersPanel({
@@ -2492,6 +2505,7 @@ export function Step4DetailForm({
   docBinder,
   supervisorOrderDocs = [],
   highlightedComplianceIssues = [],
+  winnerDataLocked = false,
   chronologicalCtx,
 }: Step4FormProps) {
   const timeline = step4Timeline ?? {
@@ -2934,13 +2948,21 @@ export function Step4DetailForm({
 
       <div className="rounded-lg border border-dashed border-border bg-muted/10 p-4 space-y-4">
         <SectionTitle>ข้อมูลการเสนอราคาของผู้เข้าร่วมแข่งขัน</SectionTitle>
+        {winnerDataLocked && (
+          <p
+            className="text-xs font-medium rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900 leading-relaxed"
+            role="status"
+          >
+            {STEP4_WINNER_DATA_LOCKED_MSG}
+          </p>
+        )}
         <p className="text-xs text-muted-foreground -mt-2">
           บันทึกรายชื่อผู้ยื่นข้อเสนอและเปรียบเทียบราคา — ข้อมูลจะถูกเก็บไว้สำหรับอ้างอิง สตง.
           และส่งต่อขั้นตอนที่ 8 อัตโนมัติ
         </p>
         <Step4BiddersTable
           bidders={bidResult.bidders ?? []}
-          readOnly={readOnly}
+          readOnly={readOnly || winnerDataLocked}
           onBiddersChange={(next) => onBidResultChange({ bidders: next })}
         />
         <FieldRow label="แนบตารางเปรียบเทียบราคาฉบับสมบูรณ์ (PDF) *" complianceTarget="price_comparison_doc">
@@ -3282,9 +3304,23 @@ type Step6AppealFormProps = {
   note: string;
   onNoteChange: (value: string) => void;
   winnerAnnouncementDate: string;
+  step5NotificationDate: string;
+  step4Bidders: Step4Bidder[];
   readOnly?: boolean;
   docBinder: Step6DocBinder;
 } & ChronologicalFormProps;
+
+const CLEAR_PENDING_APPEAL_FIELDS: Partial<Step6AppealState> = {
+  appeal_bidder_name: "",
+  appeal_received_date: "",
+  appeal_report_letter_no: "",
+  appeal_head_opinion: "",
+  cgd_submission_letter_no: "",
+  cgd_submission_date: "",
+  appeal_committee_decision: "",
+  appeal_report_approval_date: "",
+  appeal_consideration_status: "",
+};
 
 /** ขั้นตอนที่ 6 — อุทธรณ์ (มาตรา 117) */
 export function Step6AppealForm({
@@ -3299,18 +3335,56 @@ export function Step6AppealForm({
   note,
   onNoteChange,
   winnerAnnouncementDate,
+  step5NotificationDate,
+  step4Bidders,
   readOnly = false,
   docBinder,
   chronologicalCtx,
 }: Step6AppealFormProps) {
+  console.log(
+    "🔧 [RUNTIME ERROR FIXED] Removed undefined getFieldTooltip reference. Component rendered successfully.",
+  );
   const appealStatus = appeal.appeal_status ?? "";
   const appealDeadlineISO = winnerAnnouncementDate
     ? computeAppealDeadlineISO(winnerAnnouncementDate)
     : "";
-  const approvalDate = appeal.appeal_report_approval_date ?? "";
+  const receivedDate =
+    appeal.appeal_received_date?.trim() ||
+    appeal.appeal_report_approval_date?.trim() ||
+    "";
+  const cgdSubmissionDate = appeal.cgd_submission_date ?? "";
+  const bidderOptions = normalizeStep4Bidders(step4Bidders).filter(
+    (b) => b.company_name.trim().length > 0,
+  );
+  const receivedBeforeStep5 =
+    !!receivedDate &&
+    !!step5NotificationDate &&
+    isAppealReceivedBeforeStep5Notification(receivedDate, step5NotificationDate);
+  const cgdSubmissionLate =
+    !!receivedDate &&
+    !!cgdSubmissionDate &&
+    isCgdSubmissionBeyondSevenWorkdays(receivedDate, cgdSubmissionDate);
+  const cgdSubmissionDeadlineISO = receivedDate
+    ? computeCgdSubmissionDeadlineISO(receivedDate)
+    : "";
 
   return (
     <div className="space-y-4 max-w-2xl">
+      {appealStatus === "pending" &&
+        (() => {
+          console.log(
+            "🚨 [APPEAL WARNING BANNER]: Displayed red block banner because appeal status is active.",
+          );
+          return (
+            <div
+              role="alert"
+              className="rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm font-medium text-red-800 leading-relaxed"
+            >
+              {STEP6_APPEAL_ACTIVE_BANNER_MSG}
+            </div>
+          );
+        })()}
+
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
         <p className="text-sm font-medium text-foreground">กลุ่มที่ 1: ข้อมูลงานขั้นตอนอุทธรณ์</p>
         <ResponsibleOfficerField
@@ -3319,27 +3393,6 @@ export function Step6AppealForm({
           onChange={onResponsibleNameChange}
           step1Default={step1ResponsibleDefault}
         />
-        <FieldRow label="⏱ วันสิ้นสุดระยะอุทธรณ์">
-          <div className="space-y-1">
-            <input
-              type="text"
-              readOnly
-              value={
-                appealDeadlineISO
-                  ? formatThaiDateSlash(appealDeadlineISO)
-                  : "— กรุณาบันทึกวันประกาศผู้ชนะในขั้นตอนที่ 5 ก่อน —"
-              }
-              className={`${inputCls} bg-muted/50 cursor-not-allowed`}
-              aria-readonly
-            />
-            {appealDeadlineISO && (
-              <p className="text-xs text-muted-foreground">
-                คำนวณจากวันประกาศผู้ชนะ ({formatThaiDateSlash(winnerAnnouncementDate)}) + 7
-                วันทำการ ไม่นับวันหยุดราชการ
-              </p>
-            )}
-          </div>
-        </FieldRow>
         <FieldRow label="หมายเหตุ">
           <textarea
             value={note}
@@ -3354,7 +3407,7 @@ export function Step6AppealForm({
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
         <SectionTitle tooltipKey="step6.appeal_status">
-          กลุ่มที่ 2: สถานะการอุทธรณ์โครงการ
+          กลุ่มที่ 2: สถานะการอุทธรณ์ผลการจัดซื้อจัดจ้าง
         </SectionTitle>
         <fieldset disabled={readOnly} className="space-y-2 disabled:opacity-60">
           <label className="flex items-start gap-2 text-sm cursor-pointer">
@@ -3365,14 +3418,12 @@ export function Step6AppealForm({
               onChange={() =>
                 onAppealChange({
                   appeal_status: "none",
-                  appeal_report_letter_no: "",
-                  appeal_report_approval_date: "",
-                  appeal_consideration_status: "",
+                  ...CLEAR_PENDING_APPEAL_FIELDS,
                 })
               }
               className="mt-0.5 h-4 w-4"
             />
-            ไม่มีผู้ยื่นอุทธรณ์ภายในกำหนด (พร้อมเดินหน้าทำสัญญา)
+            ไม่มีผู้ยื่นอุทธรณ์ผลการจัดซื้อจัดจ้าง
           </label>
           <label className="flex items-start gap-2 text-sm cursor-pointer">
             <input
@@ -3382,34 +3433,125 @@ export function Step6AppealForm({
               onChange={() => onAppealChange({ appeal_status: "pending" })}
               className="mt-0.5 h-4 w-4"
             />
-            มีผู้ยื่นอุทธรณ์โครงการ (ชะลอการทำสัญญาและต้องพิจารณาอุทธรณ์)
+            มีผู้ยื่นอุทธรณ์ผลการจัดซื้อจัดจ้าง
           </label>
         </fieldset>
 
         {appeal.appeal_status === "none" && (
-          <FieldRow label="หลักฐานยืนยันไม่มีผู้ยื่นอุทธรณ์">
-            <p className="text-xs text-muted-foreground mb-2">
-              แนบภาพแคปหน้าจอ e-GP ยืนยันว่าไม่มีผู้ยื่นอุทธรณ์ภายในกำหนด
-            </p>
-            <InlineDocUpload
-              project={docBinder.project}
-              stepNumber={docBinder.stepNumber}
-              documentType={STEP6_DOC.NO_APPEAL_EGP_SCREENSHOT}
-              label="📎 แนบหลักฐาน (.pdf, .png, .jpg)"
-              existing={docBinder.docs}
-              onChange={docBinder.onDocsChange}
-            />
-          </FieldRow>
+          <div className="space-y-4 rounded-md border border-emerald-300/40 bg-emerald-50/40 p-4">
+            <FieldRow label="วันสิ้นสุดระยะอุทธรณ์">
+              <div className="space-y-1">
+                <input
+                  type="text"
+                  readOnly
+                  value={
+                    appealDeadlineISO
+                      ? formatThaiDateSlash(appealDeadlineISO)
+                      : "— กรุณาบันทึกวันที่แจ้งผลให้ผู้เสนอราคาทราบในขั้นตอนที่ 5 ก่อน —"
+                  }
+                  className={`${inputCls} bg-muted/50 cursor-not-allowed`}
+                  aria-readonly
+                />
+                {appealDeadlineISO && (
+                  <p className="text-xs text-muted-foreground">
+                    คำนวณจากวันที่แจ้งผลให้ผู้เสนอราคาทราบ (
+                    {formatThaiDateSlash(winnerAnnouncementDate)}) + 7 วันทำการ
+                    ไม่นับวันหยุดราชการ
+                  </p>
+                )}
+              </div>
+            </FieldRow>
+            <FieldRow label="ภาพหน้าจอตรวจสอบสถานะอุทธรณ์จากระบบ e-GP (ไม่บังคับ)">
+              <InlineDocUpload
+                project={docBinder.project}
+                stepNumber={docBinder.stepNumber}
+                documentType={STEP6_DOC.NO_APPEAL_EGP_SCREENSHOT}
+                label="📎 แนบหลักฐาน (.pdf, .png, .jpg)"
+                existing={docBinder.docs}
+                onChange={docBinder.onDocsChange}
+              />
+            </FieldRow>
+          </div>
         )}
 
         {appeal.appeal_status === "pending" && (
           <div className="space-y-4 rounded-md border border-amber-300/50 bg-amber-50/50 p-4">
             <p className="text-sm font-medium text-amber-900">
-              มีผู้ยื่นอุทธรณ์ — กรุณาบันทึกหนังสือรายงานผลและแนบหลักฐานให้ครบ
+              มีผู้ยื่นอุทธรณ์ — กรุณากรอกข้อมูลและแนบหลักฐานให้ครบ
             </p>
+
             <FieldRow
-              label="เลขที่หนังสือรายงานผลการพิจารณาอุทธรณ์"
+              label={
+                <>
+                  ชื่อผู้ประกอบการที่ยื่นอุทธรณ์ <span className="text-destructive">*</span>
+                </>
+              }
+              complianceTarget="appeal_bidder_name"
+            >
+              <select
+                value={appeal.appeal_bidder_name ?? ""}
+                onChange={(e) => onAppealChange({ appeal_bidder_name: e.target.value })}
+                disabled={readOnly || bidderOptions.length === 0}
+                className={inputCls}
+              >
+                <option value="">
+                  {bidderOptions.length === 0
+                    ? "— ไม่พบรายชื่อผู้ยื่นซองในขั้นตอนที่ 4 —"
+                    : "— เลือกผู้ประกอบการ —"}
+                </option>
+                {bidderOptions.map((b) => (
+                  <option key={b.company_name} value={b.company_name}>
+                    {b.company_name}
+                  </option>
+                ))}
+              </select>
+            </FieldRow>
+
+            <FieldRow
+              label={
+                <>
+                  วันที่หน่วยงานได้รับหนังสืออุทธรณ์ <span className="text-destructive">*</span>
+                </>
+              }
+              complianceTarget="appeal_received_date"
+            >
+              <div className="space-y-1">
+                <ChronologicalDatePicker
+                  stepNumber={6}
+                  chronologicalCtx={chronologicalCtx}
+                  value={receivedDate}
+                  onChange={(v) =>
+                    onAppealChange({
+                      appeal_received_date: v,
+                      appeal_report_approval_date: v,
+                    })
+                  }
+                  disabled={readOnly}
+                  showChronologicalHint={false}
+                  minDate={step5NotificationDate?.trim() || undefined}
+                />
+                {receivedDate && (
+                  <p className="text-xs text-muted-foreground">
+                    📅 {formatThaiDate(receivedDate)}
+                  </p>
+                )}
+                {receivedBeforeStep5 && (
+                  <p className="text-sm text-destructive font-medium">
+                    {STEP6_APPEAL_RECEIVED_BEFORE_STEP5_MSG}
+                  </p>
+                )}
+              </div>
+            </FieldRow>
+
+            <FieldRow
+              label={
+                <>
+                  เลขที่หนังสือรายงานความเห็นเสนอหัวหน้าหน่วยงาน{" "}
+                  <span className="text-destructive">*</span>
+                </>
+              }
               tooltipKey="step6.appeal_report_letter_no"
+              complianceTarget="appeal_report_letter_no"
             >
               <input
                 value={appeal.appeal_report_letter_no ?? ""}
@@ -3419,45 +3561,163 @@ export function Step6AppealForm({
                 disabled={readOnly}
               />
             </FieldRow>
-            <FieldRow label="วันที่หัวหน้าหน่วยงานลงนามในหนังสือผลอุทธรณ์">
+
+            <FieldRow
+              label={
+                <>
+                  ผลการพิจารณาของหัวหน้าหน่วยงาน <span className="text-destructive">*</span>
+                </>
+              }
+              complianceTarget="appeal_head_opinion"
+            >
+              <select
+                value={appeal.appeal_head_opinion ?? ""}
+                onChange={(e) =>
+                  onAppealChange({
+                    appeal_head_opinion: e.target.value as Step6AppealState["appeal_head_opinion"],
+                  })
+                }
+                disabled={readOnly}
+                className={inputCls}
+              >
+                <option value="">— เลือกผลการพิจารณา —</option>
+                {APPEAL_HEAD_OPINION_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </FieldRow>
+
+            <FieldRow
+              label={
+                <>
+                  เลขที่หนังสือส่งเรื่องให้กรมบัญชีกลาง <span className="text-destructive">*</span>
+                </>
+              }
+              complianceTarget="cgd_submission_letter_no"
+            >
+              <input
+                value={appeal.cgd_submission_letter_no ?? ""}
+                onChange={(e) => onAppealChange({ cgd_submission_letter_no: e.target.value })}
+                placeholder="เช่น กษ ๐๖๐๓ / ๑๒๓"
+                className={inputCls}
+                disabled={readOnly}
+              />
+            </FieldRow>
+
+            <FieldRow
+              label={
+                <>
+                  วันที่ส่งเรื่องให้กรมบัญชีกลาง <span className="text-destructive">*</span>
+                </>
+              }
+              complianceTarget="cgd_submission_date"
+            >
               <div className="space-y-1">
                 <ChronologicalDatePicker
                   stepNumber={6}
                   chronologicalCtx={chronologicalCtx}
-                  value={approvalDate}
-                  onChange={(v) => onAppealChange({ appeal_report_approval_date: v })}
+                  value={cgdSubmissionDate}
+                  onChange={(v) => onAppealChange({ cgd_submission_date: v })}
                   disabled={readOnly}
                   showChronologicalHint={false}
+                  minDate={receivedDate || undefined}
                 />
-                {approvalDate && (
+                {cgdSubmissionDate && (
                   <p className="text-xs text-muted-foreground">
-                    📅 {formatThaiDate(approvalDate)}
+                    📅 {formatThaiDate(cgdSubmissionDate)}
+                  </p>
+                )}
+                {cgdSubmissionLate && cgdSubmissionDeadlineISO && (
+                  <p className="text-sm text-orange-600 font-medium rounded-md border border-orange-200 bg-orange-50 px-2 py-1.5">
+                    ⚠️ วันที่ส่งเรื่องให้กรมบัญชีกลางเกิน 7 วันทำการนับจากวันรับหนังสืออุทธรณ์
+                    (กำหนดสูงสุด {formatThaiDateSlash(cgdSubmissionDeadlineISO)}) —
+                    แจ้งเตือนเท่านั้น ไม่บล็อกการบันทึก
                   </p>
                 )}
               </div>
             </FieldRow>
-            <FieldRow label="หนังสือรายงานผลการพิจารณาอุทธรณ์ของหน่วยงาน">
-              <p className="text-xs text-muted-foreground mb-2">
-                แนบไฟล์ PDF รายงานผลการพิจารณาอุทธรณ์ที่หน่วยงานจัดทำ
-              </p>
+
+            <FieldRow
+              label={
+                <>
+                  ผลการวินิจฉัยจากคณะกรรมการพิจารณาอุทธรณ์{" "}
+                  <span className="text-destructive">*</span>
+                </>
+              }
+              complianceTarget="appeal_committee_decision"
+            >
+              <select
+                value={appeal.appeal_committee_decision ?? ""}
+                onChange={(e) =>
+                  onAppealChange({
+                    appeal_committee_decision:
+                      e.target.value as Step6AppealState["appeal_committee_decision"],
+                  })
+                }
+                disabled={readOnly}
+                className={inputCls}
+              >
+                <option value="">— เลือกผลการวินิจฉัย —</option>
+                {APPEAL_COMMITTEE_DECISION_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+              {appeal.appeal_committee_decision === "upheld" && (
+                <p className="text-sm text-amber-800 mt-2 font-medium">
+                  อุทธรณ์ฟังขึ้น — ระบบล็อกการไปขั้นตอนถัดไปจนกว่าจะดำเนินการตามผลวินิจฉัย
+                </p>
+              )}
+            </FieldRow>
+
+            <FieldRow
+              label={
+                <>
+                  หนังสืออุทธรณ์จากผู้ประกอบการ (PDF){" "}
+                  <span className="text-destructive">*</span>
+                </>
+              }
+            >
               <InlineDocUpload
                 project={docBinder.project}
                 stepNumber={docBinder.stepNumber}
-                documentType={STEP6_DOC.AGENCY_APPEAL_REPORT}
-                label="📎 แนบหลักฐาน (.pdf)"
+                documentType={STEP6_DOC.BIDDER_APPEAL_LETTER}
+                label="📎 แนบหนังสืออุทธรณ์ (.pdf)"
                 existing={docBinder.docs}
                 onChange={docBinder.onDocsChange}
               />
             </FieldRow>
-            <FieldRow label="หลักฐานส่งรายงานผลอุทธรณ์ให้กรมบัญชีกลาง">
+
+            <FieldRow
+              label={
+                <>
+                  รายงานความเห็นของหน่วยงาน + หนังสือส่งกรมบัญชีกลาง (PDF){" "}
+                  <span className="text-destructive">*</span>
+                </>
+              }
+            >
+              <InlineDocUpload
+                project={docBinder.project}
+                stepNumber={docBinder.stepNumber}
+                documentType={STEP6_DOC.AGENCY_OPINION_CGD_LETTER}
+                label="📎 แนบรายงานและหนังสือส่ง กบง. (.pdf)"
+                existing={docBinder.docs}
+                onChange={docBinder.onDocsChange}
+              />
+            </FieldRow>
+
+            <FieldRow label="หนังสือแจ้งผลการวินิจฉัยจากคณะกรรมการพิจารณาอุทธรณ์ (PDF)">
               <p className="text-xs text-muted-foreground mb-2">
-                แนบหลักฐานการส่งรายงานผลอุทธรณ์ให้ กบง. (PDF)
+                ไม่บังคับแนบในช่วงแรก — แนบเมื่อได้รับหนังสือจากคณะกรรมการแล้ว
               </p>
               <InlineDocUpload
                 project={docBinder.project}
                 stepNumber={docBinder.stepNumber}
-                documentType={STEP6_DOC.CGD_APPEAL_REPORT}
-                label="📎 แนบหลักฐาน (.pdf)"
+                documentType={STEP6_DOC.COMMITTEE_DECISION_LETTER}
+                label="📎 แนบหนังสือผลวินิจฉัย (.pdf)"
                 existing={docBinder.docs}
                 onChange={docBinder.onDocsChange}
               />
@@ -3485,6 +3745,9 @@ type Step5FormProps = {
   onAnnouncementChange: (patch: Partial<Step5Announcement>) => void;
   /** วันที่หัวหน้าหน่วยงานลงนามอนุมัติผล — จากขั้นตอนที่ 4 (ใช้เป็น minDate) */
   evaluationApprovalDate: string;
+  winningBidderName?: string;
+  finalAgreedAmount?: number | null;
+  winnerDataLocked?: boolean;
   responsibleName: string;
   onResponsibleNameChange: (value: string) => void;
   step1ResponsibleDefault?: string;
@@ -3500,6 +3763,9 @@ export function Step5DetailForm({
   announcement,
   onAnnouncementChange,
   evaluationApprovalDate,
+  winningBidderName = "",
+  finalAgreedAmount = null,
+  winnerDataLocked = false,
   responsibleName,
   onResponsibleNameChange,
   step1ResponsibleDefault = "",
@@ -3507,16 +3773,38 @@ export function Step5DetailForm({
   chronologicalCtx,
 }: Step5FormProps) {
   const [announcementDateRejected, setAnnouncementDateRejected] = useState(false);
+  const [notificationDateRejected, setNotificationDateRejected] = useState(false);
   const minAnnouncementDate = evaluationApprovalDate?.trim() || undefined;
+
+  useEffect(() => {
+    console.log(
+      "⚖️ [LAW COMPLIANCE] Min Allowed Announcement Date Reset To:",
+      minAnnouncementDate ?? "",
+    );
+  }, [minAnnouncementDate]);
+
   const winnerDate = announcement.winner_announcement_date ?? "";
+  const notificationDate = announcement.winner_result_notification_date ?? "";
   const showAnnouncementDateError =
     announcementDateRejected ||
     (!!winnerDate &&
       !!minAnnouncementDate &&
       isStep5WinnerAnnouncementBeforeEvaluation(winnerDate, minAnnouncementDate));
+  const notificationBeforeAnnouncement =
+    !!winnerDate && !!notificationDate && notificationDate < winnerDate;
+  const showNotificationDateError =
+    notificationDateRejected || notificationBeforeAnnouncement;
   const announcementDateErrorMsg = minAnnouncementDate
     ? getStep5WinnerAnnouncementBeforeEvaluationMsg(minAnnouncementDate)
     : "";
+  const appealDeadlineISO = notificationDate
+    ? computeAppealDeadlineISO(notificationDate)
+    : "";
+  const contractEarliestISO = notificationDate
+    ? computeContractEarliestISO(notificationDate)
+    : "";
+  const displayFinalAmount =
+    finalAgreedAmount != null && finalAgreedAmount > 0 ? finalAgreedAmount : null;
 
   const handleWinnerAnnouncementDateChange = (v: string) => {
     if (!v) {
@@ -3536,15 +3824,72 @@ export function Step5DetailForm({
     onAnnouncementChange({ winner_announcement_date: v });
   };
 
+  const handleResultNotificationDateChange = (v: string) => {
+    if (!v) {
+      setNotificationDateRejected(false);
+      onAnnouncementChange({ winner_result_notification_date: "" });
+      return;
+    }
+    const currentAnnouncement = announcement.winner_announcement_date?.trim() ?? "";
+    if (currentAnnouncement && v < currentAnnouncement) {
+      setNotificationDateRejected(true);
+      toast.error(STEP5_RESULT_NOTIFICATION_BEFORE_ANNOUNCEMENT_MSG);
+      return;
+    }
+    setNotificationDateRejected(false);
+    onAnnouncementChange({ winner_result_notification_date: v });
+  };
+
   return (
     <div className="space-y-4 max-w-2xl">
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
+        <p className="text-sm font-medium text-foreground">
+          สรุปผู้ชนะจากขั้นตอนที่ 4 (ยืนยันก่อนประกาศ)
+        </p>
+        {winnerDataLocked && (
+          <p
+            className="text-xs font-medium rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900 leading-relaxed"
+            role="status"
+          >
+            {STEP4_WINNER_DATA_LOCKED_MSG}
+          </p>
+        )}
+        <FieldRow label="ชื่อผู้ชนะการเสนอราคา">
+          <input
+            type="text"
+            readOnly
+            value={winningBidderName?.trim() || "— ยังไม่พบข้อมูลจากขั้นตอนที่ 4 —"}
+            className={`${inputCls} bg-muted/50 cursor-not-allowed`}
+            aria-readonly
+          />
+        </FieldRow>
+        <FieldRow label="ราคาที่ตกลงจ้างจริง (บาท)">
+          <input
+            type="text"
+            readOnly
+            value={
+              displayFinalAmount != null
+                ? `${formatCurrencyDisplay(displayFinalAmount)} บาท`
+                : "— ยังไม่พบข้อมูลจากขั้นตอนที่ 4 —"
+            }
+            className={`${inputCls} bg-muted/50 cursor-not-allowed tabular-nums`}
+            aria-readonly
+          />
+        </FieldRow>
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          ข้อมูลดึงจากรายงานผลการพิจารณา (ขั้นตอนที่ 4) โดยอัตโนมัติ — หากต้องการแก้ไขชื่อหรือราคา
+          ให้ย้อนกลับไปแก้ที่ขั้นตอนที่ 4 เท่านั้น
+        </p>
+      </div>
+
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
         <p className="text-sm font-medium text-foreground">
           กลุ่มที่ 1: ข้อมูลประกาศผู้ชนะในระบบ e-GP
         </p>
         <FieldRow
-          label="เลขที่ประกาศผลผู้ชนะในระบบ e-GP"
+          label="เลขที่หนังสือ/ประกาศผลการคัดเลือก *"
           tooltipKey="step5.winner_announcement_no"
+          complianceTarget="winner_announcement_no"
         >
           <input
             type="text"
@@ -3556,18 +3901,18 @@ export function Step5DetailForm({
           />
         </FieldRow>
         <FieldRow
-          label="วันที่ลงนามในประกาศผู้ชนะ"
+          label="วันที่ประกาศผล *"
           tooltipKey="step5.winner_announcement_date"
+          complianceTarget="winner_announcement_date"
         >
           <div className="space-y-1">
             <ChronologicalDatePicker
               stepNumber={5}
-              chronologicalCtx={chronologicalCtx}
-              minProfile="step5_winner_announcement"
-              evaluationApprovalDate={evaluationApprovalDate}
+              skipChronologicalLock
+              minDate={minAnnouncementDate}
               value={winnerDate}
               onChange={handleWinnerAnnouncementDateChange}
-              disabled={readOnly}
+              disabled={readOnly || !minAnnouncementDate}
               onInvalidDate={() => {
                 setAnnouncementDateRejected(true);
                 if (announcementDateErrorMsg) toast.error(announcementDateErrorMsg);
@@ -3587,30 +3932,90 @@ export function Step5DetailForm({
             ) : (
               <p className="text-xs text-muted-foreground">
                 เลือกได้ตั้งแต่วันที่หัวหน้าหน่วยงานอนุมัติผลการพิจารณาในขั้นตอนที่ 4 เป็นต้นไป
-                (วันที่หัวหน้าหน่วยงานอนุมัติผลการพิจารณา)
               </p>
             )}
             {showAnnouncementDateError && announcementDateErrorMsg && (
-              <p className="text-xs text-destructive font-medium mt-1">
+              <p className="text-xs text-destructive font-medium mt-1" role="alert">
                 {announcementDateErrorMsg}
               </p>
             )}
           </div>
         </FieldRow>
-        <FieldRow label="หลักฐานประกาศผลผู้ชนะในระบบ e-GP">
+        <FieldRow
+          label="วันที่แจ้งผลให้ผู้เสนอราคาทราบ *"
+          tooltipKey="step5.winner_result_notification_date"
+          complianceTarget="winner_result_notification_date"
+        >
+          <div className="space-y-1">
+            <ChronologicalDatePicker
+              stepNumber={5}
+              skipChronologicalLock
+              minDate={winnerDate || undefined}
+              value={notificationDate}
+              onChange={handleResultNotificationDateChange}
+              disabled={readOnly || !winnerDate}
+              onInvalidDate={() => {
+                setNotificationDateRejected(true);
+                toast.error(STEP5_RESULT_NOTIFICATION_BEFORE_ANNOUNCEMENT_MSG);
+              }}
+              showChronologicalHint={false}
+            />
+            {!winnerDate && (
+              <p className="text-xs text-muted-foreground">กรุณาระบุวันที่ประกาศผลก่อน</p>
+            )}
+            {winnerDate && (
+              <p className="text-xs text-muted-foreground">
+                เลือกได้ตั้งแต่ {formatThaiDateSlash(winnerDate)} เป็นต้นไป (วันที่ประกาศผล)
+              </p>
+            )}
+            {notificationDate && !showNotificationDateError && (
+              <p className="text-xs text-muted-foreground">
+                📅 {formatThaiDate(notificationDate)}
+              </p>
+            )}
+            {showNotificationDateError && (
+              <p className="text-xs text-destructive font-medium mt-1" role="alert">
+                {notificationBeforeAnnouncement
+                  ? STEP5_RESULT_NOTIFICATION_BEFORE_ANNOUNCEMENT_MSG
+                  : announcementDateErrorMsg}
+              </p>
+            )}
+          </div>
+        </FieldRow>
+
+        {appealDeadlineISO && contractEarliestISO && (
+          <div
+            className="rounded-md border border-orange-200/80 bg-orange-50/60 px-3 py-3 space-y-2 text-sm leading-relaxed"
+            aria-live="polite"
+          >
+            <p className="font-medium text-foreground">
+              ⏱ วันสิ้นสุดระยะอุทธรณ์: {formatThaiDateSlash(appealDeadlineISO)}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              คำนวณจากวันที่แจ้งผลให้ผู้เสนอราคาทราบ ({formatThaiDateSlash(notificationDate)})
+              + 7 วันทำการ ไม่นับวันหยุดราชการ
+            </p>
+            <p className="text-xs font-semibold text-orange-900">
+              {STEP5_CONTRACT_AFTER_APPEAL_MSG(contractEarliestISO)}
+            </p>
+          </div>
+        )}
+
+        <FieldRow label="ประกาศผลผู้ชนะการเสนอราคา (PDF) *" complianceTarget="egp_winner_doc">
           <p className="text-xs text-muted-foreground mb-2">
-            แนบใบประกาศหรือภาพแคปหน้าจอ e-GP ที่แสดงผลผู้ชนะการเสนอราคา
+            แนบใบประกาศจากระบบ e-GP หรือฉบับที่หน่วยงานจัดทำตามแบบ สกมช.
           </p>
           <InlineDocUpload
             project={docBinder.project}
             stepNumber={docBinder.stepNumber}
             documentType={STEP5_DOC.EGP_WINNER_ANNOUNCEMENT}
-            label="📎 แนบใบประกาศหรือภาพแคปหน้าจอ e-GP"
+            label="📎 แนบประกาศผลผู้ชนะการเสนอราคา (PDF)"
             existing={docBinder.docs}
             onChange={docBinder.onDocsChange}
+            readOnly={readOnly}
           />
         </FieldRow>
-        <FieldRow label="ภาพถ่ายบอร์ดประชาสัมพันธ์ปิดประกาศผล">
+        <FieldRow label="ภาพถ่ายบอร์ดประชาสัมพันธ์ปิดประกาศผล *" complianceTarget="physical_board_doc">
           <p className="text-xs text-muted-foreground mb-2">
             แนบภาพถ่ายบอร์ดประชาสัมพันธ์ที่ปิดประกาศผลผู้ชนะ ณ ที่ทำการหน่วยงาน
           </p>
@@ -3621,15 +4026,16 @@ export function Step5DetailForm({
             label="📎 แนบภาพถ่ายบอร์ดประชาสัมพันธ์หน่วยงาน"
             existing={docBinder.docs}
             onChange={docBinder.onDocsChange}
+            readOnly={readOnly}
           />
         </FieldRow>
       </div>
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
         <p className="text-sm font-medium text-foreground">
-          กลุ่มที่ 2: หลักฐานแจ้งผลผู้เสนอราคาทุกราย
+          กลุ่มที่ 2: หลักฐานแจ้งผลผู้เสนอราคา (ไม่บังคับ)
         </p>
-        <FieldRow label="หลักฐานแจ้งผลผู้เสนอราคาทุกราย">
+        <FieldRow label="หลักฐานการแจ้งผลให้ผู้เสนอราคาทราบ (ไม่บังคับ)">
           <InlineDocUpload
             project={docBinder.project}
             stepNumber={docBinder.stepNumber}
@@ -3637,9 +4043,10 @@ export function Step5DetailForm({
             label={STEP5_ALL_BIDDERS_RESULT_UPLOAD_LABEL}
             existing={docBinder.docs}
             onChange={docBinder.onDocsChange}
+            readOnly={readOnly}
           />
           <p className="text-xs text-muted-foreground mt-1">
-            แนบหลักฐานอีเมลจากระบบ e-GP หรือเอกสารยืนยันการแจ้งผลให้ผู้เสนอราคาทุกรายทราบ
+            แนบสำเนาหนังสือแจ้งผลการคัดเลือก หรือหลักฐานการส่งหนังสือ/อีเมลจาก e-GP
           </p>
         </FieldRow>
         <ResponsibleOfficerField

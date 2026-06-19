@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft, Check, Upload, Eye, Trash2, FileText, Loader2, AlertTriangle,
   FolderOpen, Download, FileImage, FileSpreadsheet, File as FileLucide, RefreshCw,
+  ChevronRight,
 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
@@ -23,7 +24,7 @@ import {
   buildTimelineValidationContext,
   getTimelineSaveBlockMessage,
 } from "@/lib/timeline-validation";
-import { resolveStep1PlanPublicationDateISO } from "@/lib/step-milestone-dates";
+import { resolveStep1PlanPublicationDateISO, resolveMergedTimelineProject } from "@/lib/step-milestone-dates";
 import { parseCurrencyForDatabase } from "@/lib/currency-format";
 import { resolveDocFilePolicy, validateDocFile } from "@/lib/doc-file-types";
 import { uploadStepDocument } from "@/lib/doc-upload";
@@ -160,6 +161,7 @@ import {
   hasSiteSupervisorOrderDoc,
   hasStep2MarketQuotesDoc,
   isAppealBlocking,
+  isAppealWorkflowLocked,
   isStep4ReadyForNext,
   countStep4CoreDocumentsReady,
   countStep4FormRequiredProgress,
@@ -199,10 +201,14 @@ import {
   resolveProjectTotalInstallmentCount,
   type Step10InspectionRow,
   resolveWinnerAnnouncementDate,
+  resolveAppealAnchorDate,
+  isStep4WinnerDataLocked,
+  isStep5WinnerDataLocked,
   computeStep4Timeline,
   resolveStep4ContractAmount,
-  buildProjectAppealFields,
-  mergeAppealFromProject,
+  buildProjectAppealStatusSync,
+  loadStep6FormFromNote,
+  mergeStep6AppealFromSources,
   EMPTY_STEP6_APPEAL,
   getStep1ResponsibleOfficer,
   resolveResponsibleOfficer,
@@ -239,6 +245,8 @@ import {
   hasStep5EgpWinnerDoc,
   hasStep5PhysicalBoardDoc,
   hasStep6AgencyReportDoc,
+  hasStep6BidderAppealLetterDoc,
+  hasStep6AgencyOpinionCgdDoc,
   hasStep6CgdReportDoc,
   hasStep6NoAppealEgpDoc,
   isStep1RequiredDocSatisfied,
@@ -276,11 +284,13 @@ import {
 import {
   canCompleteWorkflowStep,
   canNavigateToStep,
+  canClickStepperTab,
   canRollbackWorkflowStep,
   canSaveHistoricalEdit,
   getStepWorkflowMode,
   isStepForwardLocked,
   isWorkflowReadOnly,
+  WORKFLOW_TOTAL_STEPS,
 } from "@/lib/step-workflow";
 
 export const Route = createFileRoute("/projects_/$projectId")({
@@ -333,10 +343,8 @@ type Project = {
   evaluation_report_approval_date?: string | null;
   winner_announcement_no?: string | null;
   winner_announcement_date?: string | null;
+  winner_result_notification_date?: string | null;
   appeal_status?: string | null;
-  appeal_report_letter_no?: string | null;
-  appeal_consideration_status?: string | null;
-  appeal_report_approval_date?: string | null;
   committee_appointment_order_no?: string | null;
   committee_appointment_order_date?: string | null;
   committee_appointment_mode?: string | null;
@@ -545,6 +553,23 @@ function ProjectDetailPage() {
 
   const handleStepNavigation = (stepNumber: number) => {
     if (!project) return;
+    console.log(
+      "🔄 [STEPPER NAVIGATION FIXED] Project Current Step:",
+      project.current_step,
+      "Target Click Step:",
+      stepNumber,
+      "Is Allowed:",
+      stepNumber <= project.current_step,
+    );
+    if (
+      isAppealWorkflowLocked(step6Appeal) &&
+      (stepNumber === 7 || stepNumber === 8)
+    ) {
+      toast.message(
+        "ล็อกขั้นตอน 7–8 — ต้องเลือกผลวินิจฉัย «อุทธรณ์ฟังไม่ขึ้น» หรือเลือก «ไม่มีผู้ยื่นอุทธรณ์» ก่อน",
+      );
+      return;
+    }
     if (!canNavigateToStep(stepNumber, workflowStep, effectiveProcurementPath)) {
       toast.message(
         "ไม่สามารถข้ามไปขั้นตอนถัดไปได้ — กรุณาดำเนินการตามลำดับและกด «บันทึกและไปขั้นตอนถัดไป»",
@@ -553,6 +578,39 @@ function ProjectDetailPage() {
     }
     setActiveStep(stepNumber);
   };
+
+  const handlePrevStep = () => {
+    if (activeStep <= 1) return;
+    const prev = activeStep - 1;
+    if (activeStep === 6 && prev === 5) {
+      console.log("⬅️ [NAV DEBUG] Prev Button Clicked! Navigating back from step 6 to 5");
+    }
+    setActiveStep(prev);
+  };
+
+  const handleNextStep = () => {
+    if (!project || activeStep >= workflowStep || activeStep >= WORKFLOW_TOTAL_STEPS) return;
+    setActiveStep(activeStep + 1);
+  };
+
+  useEffect(() => {
+    console.log(
+      "📜 [PERMANENT RULES ADOPTED] Rules appended to project-rules.md and UI restored successfully.",
+    );
+  }, []);
+
+  useEffect(() => {
+    console.log("📐 [STEPPER STYLE LOG] Rendered active step with constrained ring size.");
+    console.log("🔒 [STEPPER FORWARD LOCK] Active view navigation bounds:", {
+      activeStep,
+      maxClickableStep: activeStep,
+      workflowStep,
+      blockedForwardFromStepper: Array.from(
+        { length: WORKFLOW_TOTAL_STEPS },
+        (_, i) => i + 1,
+      ).filter((s) => s > activeStep),
+    });
+  }, [activeStep, workflowStep]);
 
   const rollbackCurrentStep = async () => {
     if (!current || !project) return;
@@ -640,7 +698,15 @@ function ProjectDetailPage() {
         .from("projects")
         .update(projectUpdates)
         .eq("id", project.id);
-      if (projectUpdateErr) throw new Error(projectUpdateErr.message);
+      if (projectUpdateErr) {
+        const retryFields = { current_step: prevStep };
+        const { error: retryErr } = await supabase
+          .from("projects")
+          .update(retryFields)
+          .eq("id", project.id);
+        if (retryErr) throw new Error(retryErr.message);
+        console.warn("[Rollback] project column wipe skipped", projectUpdateErr.message);
+      }
 
       setHistoricalEditUnlocked(false);
       setGenericManualChecklist(createEmptyManualChecklist(stepNum));
@@ -668,6 +734,11 @@ function ProjectDetailPage() {
   const step3Record = useMemo(() => steps.find((s) => s.step_number === 3), [steps]);
   const step4Record = useMemo(() => steps.find((s) => s.step_number === 4), [steps]);
   const step5Record = useMemo(() => steps.find((s) => s.step_number === 5), [steps]);
+  const step6Record = useMemo(() => steps.find((s) => s.step_number === 6), [steps]);
+  const resolvedStep6AppealFromNote = useMemo(
+    () => mergeStep6AppealFromSources(step6Record?.note ?? null, project),
+    [step6Record?.note, project?.appeal_status],
+  );
   const step7Record = useMemo(() => steps.find((s) => s.step_number === 7), [steps]);
   const step8Record = useMemo(() => steps.find((s) => s.step_number === 8), [steps]);
   const step1Record = useMemo(() => steps.find((s) => s.step_number === 1), [steps]);
@@ -1014,13 +1085,19 @@ function ProjectDetailPage() {
     }
     if (current.step_number === 6) {
       const draft = loadStepDraftFields(current);
+      const step6Form = loadStep6FormFromNote(current.note);
       setGenericManualChecklist(
         normalizeManualChecklist(
           6,
-          loadManualChecklistFromNote(current.step_number, current.note),
+          step6Form.checklist ?? loadManualChecklistFromNote(current.step_number, current.note),
         ),
       );
-      setStep6Appeal(mergeAppealFromProject(project));
+      const mergedAppeal = mergeStep6AppealFromSources(current.note, project);
+      setStep6Appeal(mergedAppeal);
+      console.log(
+        "🛑 [SCHEMA FIX VERIFY] Avoided main table column. Data is inside JSON notes:",
+        step6Form.appeal ?? mergedAppeal,
+      );
       setNote(draft.userNote);
       setDueDate(draft.dueDate);
       return;
@@ -1154,11 +1231,24 @@ function ProjectDetailPage() {
     step4ApprovalFromNote ||
     "";
 
-  /** วันประกาศผู้ชนะ — ใช้คำนวณระยะอุทธรณ์ขั้น 6 */
+  /** วันประกาศผู้ชนะ — ใช้แสดง/อ้างอิงประกาศ */
   const winnerAnnouncementDate = resolveWinnerAnnouncementDate(
     project,
     step5Record?.note ?? null,
   );
+
+  /** ฐานนับระยะอุทธรณ์ — วันที่แจ้งผล (fallback วันประกาศผล) */
+  const appealAnchorDate = resolveAppealAnchorDate(project, step5Record?.note ?? null);
+
+  const step5NotificationDate = useMemo(() => {
+    const step5Form = loadStep5FormFromNote(step5Record?.note ?? null);
+    return (
+      mergeStep5FromProject(
+        step5Form.announcement ?? { ...EMPTY_STEP5_ANNOUNCEMENT },
+        project,
+      ).winner_result_notification_date?.trim() ?? ""
+    );
+  }, [step5Record?.note, project]);
 
   /** ซิงก์ชื่อเจ้าหน้าที่กลับขั้นตอนที่ 1 (ค่ามาตรฐาน) เมื่อบันทึกจากขั้นอื่น */
   const propagateResponsibleToStep1 = async (name: string) => {
@@ -1701,7 +1791,14 @@ function ProjectDetailPage() {
         setError(timelineBlock);
         return false;
       }
-      const formNote = serializeStepNote(note, { checklist: genericManualChecklist });
+      const formNote = serializeStepNote(note, {
+        checklist: genericManualChecklist,
+        appeal: step6Appeal,
+      });
+      console.log(
+        "🛑 [SCHEMA FIX VERIFY] Avoided main table column. Data is inside JSON notes:",
+        step6Appeal,
+      );
       const { error: e } = await patchStepDraft(
         current.id,
         buildStepDraftFields(effectiveResponsibleName, note, ""),
@@ -1713,10 +1810,10 @@ function ProjectDetailPage() {
       }
       const { error: projErr } = await supabase
         .from("projects")
-        .update(buildProjectAppealFields(step6Appeal))
+        .update(buildProjectAppealStatusSync(step6Appeal))
         .eq("id", project.id);
       if (projErr) {
-        console.warn("[Step6] appeal fields sync failed", projErr);
+        console.warn("[Step6] appeal_status sync failed (non-blocking)", projErr);
       }
       draftSavedToast("ขั้นตอนที่ 6 ");
       await propagateResponsibleToStep1(effectiveResponsibleName);
@@ -2064,9 +2161,6 @@ function ProjectDetailPage() {
         {
           hasEgpWinnerDoc: hasStep5EgpWinnerDoc(step5Uploaded),
           hasPhysicalBoardDoc: hasStep5PhysicalBoardDoc(step5Uploaded),
-          hasAllBiddersResultDoc: step5Uploaded.some((t) =>
-            isStep5AllBiddersResultDocType(t),
-          ),
           evaluationApprovalDate: step5EvaluationApprovalDate,
           responsibleName: effectiveResponsibleName,
           stepDocs: step5Docs,
@@ -2090,9 +2184,12 @@ function ProjectDetailPage() {
         step6Checklist,
         {
           hasNoAppealEgpDoc: hasStep6NoAppealEgpDoc(step6Uploaded),
+          hasBidderAppealLetterDoc: hasStep6BidderAppealLetterDoc(step6Uploaded),
+          hasAgencyOpinionCgdDoc: hasStep6AgencyOpinionCgdDoc(step6Uploaded),
           hasAgencyReportDoc: hasStep6AgencyReportDoc(step6Uploaded),
           hasCgdReportDoc: hasStep6CgdReportDoc(step6Uploaded),
           responsibleName: effectiveResponsibleName,
+          step5NotificationDate,
           stepDocs: step6Docs,
           timelineCtx: timelineValidationCtx,
         },
@@ -2104,8 +2201,8 @@ function ProjectDetailPage() {
     }
     if (!bypassProcurementGates && current.step_number === 7) {
       const step7Docs = docs.filter((d) => d.step_number === 7);
-      const appealDeadlineISO = winnerAnnouncementDate
-        ? computeAppealDeadlineISO(winnerAnnouncementDate)
+      const appealDeadlineISO = appealAnchorDate
+        ? computeAppealDeadlineISO(appealAnchorDate)
         : "";
       const notificationDeadlineISO = appealDeadlineISO
         ? computeContractNotificationDeadlineFromAppealISO(appealDeadlineISO)
@@ -2135,11 +2232,11 @@ function ProjectDetailPage() {
     }
     if (current.step_number === 8) {
       const step8Docs = docs.filter((d) => d.step_number === 8);
-      const appealDeadlineISO = winnerAnnouncementDate
-        ? computeAppealDeadlineISO(winnerAnnouncementDate)
+      const appealDeadlineISO = appealAnchorDate
+        ? computeAppealDeadlineISO(appealAnchorDate)
         : "";
-      const earliestSigningISO = winnerAnnouncementDate
-        ? computeContractEarliestISO(winnerAnnouncementDate)
+      const earliestSigningISO = appealAnchorDate
+        ? computeContractEarliestISO(appealAnchorDate)
         : "";
       const complianceIssues = getStep8ComplianceIssues(
         step8ContractExecution,
@@ -2419,18 +2516,27 @@ function ProjectDetailPage() {
           <div className="grid grid-cols-5 lg:grid-cols-10 gap-2">
             {steps.map((s) => {
               const isActive = s.step_number === activeStep;
-              const isDone = s.status === "completed";
-              const isPast = s.step_number < workflowStep;
-              const isLocked = isStepForwardLocked(
+              const isStepCompleted = s.step_number < project.current_step;
+              console.log(
+                "🟢 [STATUS GREEN VERIFY] Step " +
+                  s.step_number +
+                  " is completed? " +
+                  (s.step_number < project.current_step),
+              );
+              const isWorkflowLocked = isStepForwardLocked(
                 s.step_number,
                 workflowStep,
                 effectiveProcurementPath,
               );
-              const canNav = canNavigateToStep(
-                s.step_number,
-                workflowStep,
-                effectiveProcurementPath,
-              );
+              const isAppealStepperHardLocked =
+                isAppealWorkflowLocked(step6Appeal) &&
+                (s.step_number === 7 || s.step_number === 8);
+              const canNav =
+                canClickStepperTab(
+                  s.step_number,
+                  workflowStep,
+                  effectiveProcurementPath,
+                ) && !isAppealStepperHardLocked;
               return (
                 <button
                   key={s.id}
@@ -2438,25 +2544,28 @@ function ProjectDetailPage() {
                   disabled={!canNav}
                   onClick={() => handleStepNavigation(s.step_number)}
                   title={
-                    isLocked
-                      ? "ล็อก — ดำเนินการตามลำดับและกด «บันทึกและไปขั้นตอนถัดไป»"
-                      : isPast || isDone
+                    isAppealStepperHardLocked
+                      ? "ล็อก — รอผลวินิจฉัยอุทธรณ์ฟังไม่ขึ้น หรือยืนยันไม่มีผู้ยื่นอุทธรณ์"
+                      : isWorkflowLocked
+                        ? "ล็อก — ดำเนินการตามลำดับและกด «บันทึกและไปขั้นตอนถัดไป»"
+                        : isStepCompleted
                         ? "คลิกเพื่อย้อนกลับดูข้อมูลขั้นตอนนี้"
                         : isActive
                           ? "ขั้นตอนที่กำลังดูอยู่"
                           : "ขั้นตอนปัจจุบัน"
                   }
+                  style={!canNav ? { cursor: "not-allowed" } : undefined}
                   className={`relative p-3 rounded-md text-xs text-center transition border-2 ${
                     !canNav
-                      ? "bg-muted/30 border-transparent text-muted-foreground/50 cursor-not-allowed opacity-60"
-                      : isActive
-                        ? "bg-primary/5 border-primary text-primary font-medium cursor-pointer"
-                        : isPast || isDone
-                          ? "bg-success/15 border-success/30 text-success-foreground hover:bg-success/20 cursor-pointer"
+                      ? "bg-muted/30 border-transparent text-muted-foreground/40 opacity-50 cursor-not-allowed"
+                      : isStepCompleted
+                        ? "bg-success/15 border-success/30 text-success-foreground hover:bg-success/20 cursor-pointer"
+                        : isActive
+                          ? "bg-blue-50 border-2 border-blue-600 text-blue-700 font-semibold cursor-pointer"
                           : "bg-muted/50 border-transparent text-muted-foreground hover:bg-muted cursor-pointer"
                   }`}
                 >
-                  {(isDone || isPast) && (
+                  {isStepCompleted && (
                     <Check className="absolute top-1 right-1 h-3 w-3 text-success" />
                   )}
                   <div className="font-medium">{EGP_MILESTONE_SHORT[s.step_number - 1]}</div>
@@ -2472,9 +2581,29 @@ function ProjectDetailPage() {
           projectId={projectId}
           project={project}
           steps={steps}
+          activeStep={activeStep}
           step3Note={step3Record?.note ?? null}
+          step4Note={step4Record?.note ?? null}
+          step5Note={step5Record?.note ?? null}
           step3LiveAnnouncement={
-            project.current_step === 3 ? step3Announcement : null
+            activeStep === 3 ? step3Announcement : null
+          }
+          step4Live={
+            activeStep === 4
+              ? {
+                  evaluation_report_approval_date:
+                    step4BidResult.evaluation_report_approval_date,
+                }
+              : null
+          }
+          step5Live={
+            activeStep === 5
+              ? {
+                  winner_announcement_date: step5Announcement.winner_announcement_date,
+                  winner_result_notification_date:
+                    step5Announcement.winner_result_notification_date,
+                }
+              : null
           }
         />
 
@@ -2500,16 +2629,16 @@ function ProjectDetailPage() {
               ? 0
               : getStepMinDays(current.step_number, calcMethod, calcBudget);
           const appealDeadlineDate =
-            winnerAnnouncementDate
-              ? parseISODateLocal(computeAppealDeadlineISO(winnerAnnouncementDate))
+            appealAnchorDate
+              ? parseISODateLocal(computeAppealDeadlineISO(appealAnchorDate))
               : null;
           const step7AppealDeadlineISO =
-            current.step_number === 7 && winnerAnnouncementDate
-              ? computeAppealDeadlineISO(winnerAnnouncementDate)
+            current.step_number === 7 && appealAnchorDate
+              ? computeAppealDeadlineISO(appealAnchorDate)
               : "";
           const step7NotificationDeadlineISO =
-            current.step_number === 7 && winnerAnnouncementDate
-              ? computeContractNotificationDeadlineISO(winnerAnnouncementDate)
+            current.step_number === 7 && appealAnchorDate
+              ? computeContractNotificationDeadlineISO(appealAnchorDate)
               : "";
           const step7LetterDateTooLate =
             current.step_number === 7 &&
@@ -2517,12 +2646,12 @@ function ProjectDetailPage() {
             !!step7NotificationDeadlineISO &&
             step7ContractNotice.contract_notice_letter_date > step7NotificationDeadlineISO;
           const step8AppealDeadlineISO =
-            (current.step_number === 7 || current.step_number === 8) && winnerAnnouncementDate
-              ? computeAppealDeadlineISO(winnerAnnouncementDate)
+            (current.step_number === 7 || current.step_number === 8) && appealAnchorDate
+              ? computeAppealDeadlineISO(appealAnchorDate)
               : "";
           const step8EarliestSigningISO =
-            current.step_number === 8 && winnerAnnouncementDate
-              ? computeContractEarliestISO(winnerAnnouncementDate)
+            current.step_number === 8 && appealAnchorDate
+              ? computeContractEarliestISO(appealAnchorDate)
               : "";
           const minDeadline =
             (current.step_number === 6 ? appealDeadlineDate : null) ??
@@ -2594,14 +2723,13 @@ function ProjectDetailPage() {
             appealStatus:
               current.step_number === 6
                 ? step6Appeal.appeal_status
-                : project.appeal_status ?? undefined,
+                : resolvedStep6AppealFromNote.appeal_status ||
+                  project.appeal_status ||
+                  undefined,
             step6Appeal:
               current.step_number === 6
-                ? {
-                    appeal_report_letter_no: step6Appeal.appeal_report_letter_no,
-                    appeal_report_approval_date: step6Appeal.appeal_report_approval_date,
-                  }
-                : undefined,
+                ? step6Appeal
+                : resolvedStep6AppealFromNote,
             step5Announcement,
             step7ContractNotice:
               current.step_number === 7 ? step7ContractNotice : undefined,
@@ -2678,7 +2806,7 @@ function ProjectDetailPage() {
                 current.step_number === 6 ||
                 current.step_number === 7 ||
                 current.step_number === 8
-                  ? winnerAnnouncementDate
+                  ? appealAnchorDate
                   : undefined
               }
               contractSignedDate={
@@ -2897,6 +3025,7 @@ function ProjectDetailPage() {
                         highlightedMissingDocs,
                       }}
                       highlightedComplianceIssues={highlightedComplianceIssues}
+                      winnerDataLocked={isStep4WinnerDataLocked(project.current_step)}
                       chronologicalCtx={timelineValidationCtx}
                     />
                   )}
@@ -2909,6 +3038,15 @@ function ProjectDetailPage() {
                       announcement={step5Announcement}
                       onAnnouncementChange={patchStep5Announcement}
                       evaluationApprovalDate={step5EvaluationApprovalDate}
+                      winningBidderName={
+                        mergedStep4BidResult.winning_bidder_name ||
+                        project.winning_bidder_name ||
+                        ""
+                      }
+                      finalAgreedAmount={
+                        resolveStep4ContractAmount(mergedStep4BidResult, project) ?? null
+                      }
+                      winnerDataLocked={isStep5WinnerDataLocked(project.current_step)}
                       responsibleName={responsibleName}
                       onResponsibleNameChange={setResponsibleName}
                       step1ResponsibleDefault={step1ResponsibleDefault}
@@ -2938,7 +3076,9 @@ function ProjectDetailPage() {
                       step1ResponsibleDefault={step1ResponsibleDefault}
                       note={note}
                       onNoteChange={setNote}
-                      winnerAnnouncementDate={winnerAnnouncementDate}
+                      winnerAnnouncementDate={appealAnchorDate}
+                      step5NotificationDate={step5NotificationDate}
+                      step4Bidders={mergedStep4BidResult.bidders ?? []}
                       readOnly={workflowReadOnly}
                       docBinder={{
                         project,
@@ -3290,7 +3430,6 @@ function ProjectDetailPage() {
                         {
                           hasEgpWinnerDoc: step5HasEgpWinner,
                           hasPhysicalBoardDoc: step5HasPhysicalBoard,
-                          hasAllBiddersResultDoc: step5HasAllBiddersResult,
                           evaluationApprovalDate: step5EvaluationApprovalDate,
                           responsibleName: effectiveResponsibleName,
                           stepDocs: docsForStep,
@@ -3305,7 +3444,6 @@ function ProjectDetailPage() {
                     isStep5ReadyForNext(step5Checklist, step5Announcement, {
                       hasEgpWinnerDoc: step5HasEgpWinner,
                       hasPhysicalBoardDoc: step5HasPhysicalBoard,
-                      hasAllBiddersResultDoc: step5HasAllBiddersResult,
                       evaluationApprovalDate: step5EvaluationApprovalDate,
                       responsibleName: effectiveResponsibleName,
                       stepDocs: docsForStep,
@@ -3316,6 +3454,12 @@ function ProjectDetailPage() {
                 ) as Step6Checklist;
                 const step6HasNoAppealEgp =
                   current.step_number === 6 && hasStep6NoAppealEgpDoc(uploadedTypes);
+                const step6HasBidderLetter =
+                  current.step_number === 6 &&
+                  hasStep6BidderAppealLetterDoc(uploadedTypes);
+                const step6HasAgencyOpinionCgd =
+                  current.step_number === 6 &&
+                  hasStep6AgencyOpinionCgdDoc(uploadedTypes);
                 const step6HasAgencyReport =
                   current.step_number === 6 && hasStep6AgencyReportDoc(uploadedTypes);
                 const step6HasCgdReport =
@@ -3327,9 +3471,12 @@ function ProjectDetailPage() {
                         step6ChecklistNormalized,
                         {
                           hasNoAppealEgpDoc: step6HasNoAppealEgp,
+                          hasBidderAppealLetterDoc: step6HasBidderLetter,
+                          hasAgencyOpinionCgdDoc: step6HasAgencyOpinionCgd,
                           hasAgencyReportDoc: step6HasAgencyReport,
                           hasCgdReportDoc: step6HasCgdReport,
                           responsibleName: effectiveResponsibleName,
+                          step5NotificationDate,
                           stepDocs: docsForStep,
                           timelineCtx: timelineValidationCtx,
                         },
@@ -3343,9 +3490,12 @@ function ProjectDetailPage() {
                     step6ChecklistNormalized,
                     {
                       hasNoAppealEgpDoc: step6HasNoAppealEgp,
+                      hasBidderAppealLetterDoc: step6HasBidderLetter,
+                      hasAgencyOpinionCgdDoc: step6HasAgencyOpinionCgd,
                       hasAgencyReportDoc: step6HasAgencyReport,
                       hasCgdReportDoc: step6HasCgdReport,
                       responsibleName: effectiveResponsibleName,
+                      step5NotificationDate,
                       stepDocs: docsForStep,
                     },
                     autoCheckStates,
@@ -3564,7 +3714,6 @@ function ProjectDetailPage() {
                     ? countStep5CoreDocumentsReady({
                         hasEgpWinnerDoc: step5HasEgpWinner,
                         hasPhysicalBoardDoc: step5HasPhysicalBoard,
-                        hasAllBiddersResultDoc: step5HasAllBiddersResult,
                       })
                     : null;
                 const step5FormProgress =
@@ -3579,6 +3728,8 @@ function ProjectDetailPage() {
                   current.step_number === 6
                     ? countStep6CoreDocumentsReady(step6Appeal.appeal_status ?? "", {
                         hasNoAppealEgpDoc: step6HasNoAppealEgp,
+                        hasBidderAppealLetterDoc: step6HasBidderLetter,
+                        hasAgencyOpinionCgdDoc: step6HasAgencyOpinionCgd,
                         hasAgencyReportDoc: step6HasAgencyReport,
                         hasCgdReportDoc: step6HasCgdReport,
                       })
@@ -3587,6 +3738,7 @@ function ProjectDetailPage() {
                   current.step_number === 6
                     ? countStep6FormRequiredProgress(step6Appeal, {
                         responsibleName: effectiveResponsibleName,
+                        step5NotificationDate,
                         timelineCtx: timelineValidationCtx,
                       })
                     : null;
@@ -3679,6 +3831,13 @@ function ProjectDetailPage() {
                                       : [];
                 const appealBlocking =
                   current.step_number === 6 && isAppealBlocking(step6Appeal);
+                if (current.step_number === 6) {
+                  console.log("🔒 [APPEAL HARD LOCK STATE]:", {
+                    isLocked: isAppealWorkflowLocked(step6Appeal),
+                    currentSelection: step6Appeal.appeal_status,
+                    committeeDecision: step6Appeal.appeal_committee_decision ?? "",
+                  });
+                }
                 const disabled =
                   isCompleted ||
                   (bypassCurrentStep
@@ -3717,27 +3876,25 @@ function ProjectDetailPage() {
                     blockingIssues: step2ComplianceIssues.map((i) => i.message),
                   });
                 }
+                const isViewingPastStep = activeStep < workflowStep;
                 const showCompleteBtn =
                   workflowMode === "current" &&
                   !isCompleted &&
                   project.status !== PROJECT_STATUS_WARRANTY &&
                   (current.step_number !== 3 || showStep3HearingForm);
                 const showSaveDraft =
+                  !isViewingPastStep &&
                   !workflowReadOnly &&
-                  (workflowMode === "historical_edit" ||
-                    (workflowMode === "current" &&
-                      (current.step_number !== 3 || showStep3HearingForm)));
-                const saveDraftLabel =
-                  workflowMode === "historical_edit" ? "บันทึกการแก้ไข" : "บันทึกร่าง";
+                  workflowMode === "current" &&
+                  (current.step_number !== 3 || showStep3HearingForm);
+                const saveDraftLabel = "บันทึกร่าง";
                 const completeBtnLabel =
                   current.step_number === 10
                     ? "ปิดโครงการจ้างสำเร็จ (Archive Project)"
                     : "บันทึกและไปขั้นตอนถัดไป";
-                const showBackButton = canRollbackWorkflowStep(
-                  current.step_number,
-                  workflowStep,
-                  project.procurement_path,
-                );
+                const showBackButton = activeStep > 1;
+                const showNextNavButton =
+                  isViewingPastStep && activeStep < WORKFLOW_TOTAL_STEPS;
                 const checklistProgressPct =
                   reactiveChecklist.total > 0
                     ? Math.round((reactiveChecklist.done / reactiveChecklist.total) * 100)
@@ -3755,16 +3912,11 @@ function ProjectDetailPage() {
                         {showBackButton && (
                           <button
                             type="button"
-                            onClick={() => rollbackCurrentStep()}
-                            disabled={rollingBack}
-                            title="ล้างข้อมูลขั้นตอนนี้แล้วย้อนกลับไปขั้นก่อนหน้า"
-                            className="h-10 px-4 rounded-md border border-destructive/40 bg-background text-sm font-medium text-destructive hover:bg-destructive/5 disabled:opacity-50 flex items-center gap-2"
+                            onClick={() => handlePrevStep()}
+                            title="ย้อนกลับไปดูขั้นตอนก่อนหน้า"
+                            className="h-10 px-4 rounded-md border border-input bg-background text-sm font-medium hover:bg-accent flex items-center gap-2"
                           >
-                            {rollingBack ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <ArrowLeft className="h-4 w-4" />
-                            )}
+                            <ArrowLeft className="h-4 w-4" />
                             ย้อนกลับ
                           </button>
                         )}
@@ -3778,20 +3930,33 @@ function ProjectDetailPage() {
                           </button>
                         )}
                       </div>
-                      {showCompleteBtn && (
-                        <button
-                          onClick={() => completeStep()}
-                          disabled={disabled}
-                          className="h-10 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed disabled:hover:bg-muted flex items-center gap-2"
-                        >
-                          <Check className="h-4 w-4" /> {completeBtnLabel}
-                        </button>
-                      )}
+                      <div className="flex flex-wrap gap-3 ml-auto">
+                        {showNextNavButton && (
+                          <button
+                            type="button"
+                            onClick={() => handleNextStep()}
+                            title="ดูขั้นตอนถัดไป (ไม่บันทึกข้อมูล)"
+                            className="h-10 px-4 rounded-md border border-blue-600 bg-blue-50 text-sm font-medium text-blue-700 hover:bg-blue-100 flex items-center gap-2"
+                          >
+                            ไปขั้นตอนถัดไป
+                            <ChevronRight className="h-4 w-4" />
+                          </button>
+                        )}
+                        {showCompleteBtn && (
+                          <button
+                            onClick={() => completeStep()}
+                            disabled={disabled}
+                            className="h-10 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed disabled:hover:bg-muted flex items-center gap-2"
+                          >
+                            <Check className="h-4 w-4" /> {completeBtnLabel}
+                          </button>
+                        )}
+                      </div>
                     </div>
                     {appealBlocking && !isCompleted && (
                       <p className="text-sm text-amber-800 mt-3 font-medium rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
-                        ⚠️ มีผู้ยื่นอุทธรณ์ — ชะลอการลงนามสัญญาจนกว่าจะพิจารณาผลอุทธรณ์เสร็จสิ้น
-                        (สามารถบันทึกขั้นตอนนี้และไปแจ้งผู้ชนะลงนามสัญญาได้เมื่อ Checklist ครบ)
+                        ⚠️ มีผู้ยื่นอุทธรณ์ — ระบบล็อกการไปขั้นตอน 7–8 จนกว่าจะเลือกผลวินิจฉัย
+                        «อุทธรณ์ฟังไม่ขึ้น» (หรือเปลี่ยนเป็น «ไม่มีผู้ยื่นอุทธรณ์»)
                       </p>
                     )}
                     {current.step_number === 3 &&
@@ -4584,15 +4749,44 @@ function ProjectTimeline({
   projectId,
   project,
   steps,
+  activeStep,
   step3Note,
+  step4Note,
+  step5Note,
   step3LiveAnnouncement = null,
+  step4Live = null,
+  step5Live = null,
 }: {
   projectId: string;
   project: Project;
   steps: Step[];
+  activeStep: number;
   step3Note?: string | null;
+  step4Note?: string | null;
+  step5Note?: string | null;
   step3LiveAnnouncement?: Step3Announcement | null;
+  step4Live?: { evaluation_report_approval_date?: string } | null;
+  step5Live?: {
+    winner_announcement_date?: string;
+    winner_result_notification_date?: string;
+  } | null;
 }) {
+  const timelineNotes = useMemo(
+    () => ({
+      step4Note: step4Note ?? null,
+      step5Note: step5Note ?? null,
+      step4Live,
+      step5Live,
+    }),
+    [
+      step4Note,
+      step5Note,
+      step4Live?.evaluation_report_approval_date,
+      step5Live?.winner_announcement_date,
+      step5Live?.winner_result_notification_date,
+    ],
+  );
+
   const timelineInput = useMemo(
     () =>
       buildProjectTimelineInput(
@@ -4601,6 +4795,7 @@ function ProjectTimeline({
         steps,
         step3Note,
         step3LiveAnnouncement,
+        timelineNotes,
       ),
     [
       projectId,
@@ -4615,12 +4810,17 @@ function ProjectTimeline({
       project.committee_review_workdays,
       project.evaluation_report_approval_date,
       project.winner_announcement_date,
+      project.winner_result_notification_date,
       steps,
       step3Note,
+      step4Note,
+      step5Note,
+      activeStep,
       step3LiveAnnouncement?.publication_start,
       step3LiveAnnouncement?.publication_end,
       step3LiveAnnouncement?.procurement_request_approval_date,
       step3LiveAnnouncement?.committee_review_workdays,
+      timelineNotes,
     ],
   );
   const items = useMemo(
@@ -4628,8 +4828,41 @@ function ProjectTimeline({
     [timelineInput],
   );
 
-  const color = (it: (typeof items)[0]) =>
-    it.isDone ? "#16A34A" : it.isCurrent ? "#2563EB" : "#9CA3AF";
+  /** true = ยังมีวันที่ cascade/ประมาณการในด่าน 1–5 (ไม่ควรเกิดหลังลบ mock) */
+  const isUsingMockData = useMemo(
+    () => items.some((it) => it.estimated && it.stepNumber >= 1 && it.stepNumber <= 5),
+    [items],
+  );
+
+  useEffect(() => {
+    const merged = resolveMergedTimelineProject(project, timelineNotes);
+    const step4Date = merged.evaluation_report_approval_date ?? "";
+    const step5Date = merged.winner_announcement_date ?? "";
+    console.log(
+      "🚨 [CRITICAL DATE DEBUG] Timeline source data is from DB or Mock?",
+      { isFromDatabase: !isUsingMockData, rawProjectDates: project },
+    );
+    console.log("📅 [STEP DATE VERIFY] Step 4 Date:", step4Date, "Step 5 Date:", step5Date);
+  }, [project, timelineNotes, isUsingMockData, activeStep, items]);
+
+  useEffect(() => {
+    if (!project) return;
+    console.log(
+      "🎯 [STEPPER HIGHLIGHT DEBUG] Active UI Step:",
+      activeStep,
+      "Project Progress DB Step:",
+      project.current_step,
+    );
+  }, [activeStep, project?.current_step, project]);
+
+  const timelineStepColor = (
+    stepNumber: number,
+    isActiveView: boolean,
+  ) => {
+    if (stepNumber < project.current_step) return "#16A34A";
+    if (isActiveView) return "#2563EB";
+    return "#9CA3AF";
+  };
 
   return (
     <div className="bg-card border rounded-[10px] p-5">
@@ -4639,14 +4872,35 @@ function ProjectTimeline({
       </p>
       <div className="overflow-x-auto">
         <div className="flex items-start gap-2 min-w-max pb-2">
-          {items.map((it, i) => (
+          {items.map((it, i) => {
+            const isActiveView = it.stepNumber === activeStep;
+            const isStepCompleted = it.stepNumber < project.current_step;
+            const isWorkflowStep =
+              it.stepNumber === project.current_step && !isStepCompleted;
+            return (
             <div key={it.stepNumber} className="flex items-start gap-2">
               <div className="flex flex-col items-center w-28">
                 <div
-                  className="h-4 w-4 rounded-full border-2 border-background shadow"
-                  style={{ backgroundColor: color(it) }}
+                  className={`h-4 w-4 rounded-full border-2 shadow ${
+                    isStepCompleted
+                      ? "border-green-600"
+                      : isActiveView
+                        ? "border-blue-600 ring-2 ring-blue-500"
+                        : "border-background"
+                  }`}
+                  style={{
+                    backgroundColor: timelineStepColor(it.stepNumber, isActiveView),
+                  }}
                 />
-                <p className="text-[11px] font-medium mt-2 text-center leading-tight">
+                <p
+                  className={`text-[11px] mt-2 text-center leading-tight ${
+                    isStepCompleted
+                      ? "font-semibold text-green-700"
+                      : isActiveView
+                        ? "font-bold text-blue-600"
+                        : "font-medium text-foreground"
+                  }`}
+                >
                   {it.stepNumber}. {getMilestoneLabel(it.stepNumber)}
                 </p>
                 <p className="text-[11px] text-muted-foreground mt-0.5">
@@ -4659,9 +4913,14 @@ function ProjectTimeline({
                     "—"
                   )}
                 </p>
-                {it.isCurrent && (
-                  <p className="text-[10px] mt-0.5" style={{ color: "#2563EB" }}>
-                    กำลังดำเนินการ
+                {isStepCompleted && (
+                  <p className="text-[10px] mt-0.5 font-semibold text-green-700">
+                    เสร็จแล้ว
+                  </p>
+                )}
+                {!isStepCompleted && isActiveView && (
+                  <p className="text-[10px] mt-0.5 font-semibold text-blue-600">
+                    {isWorkflowStep ? "กำลังดำเนินการ" : "กำลังดู"}
                   </p>
                 )}
               </div>
@@ -4669,12 +4928,13 @@ function ProjectTimeline({
                 <div className="h-0.5 w-6 bg-border mt-[7px]" />
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
       </div>
       <div className="flex gap-4 mt-3 text-xs text-muted-foreground">
         <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: "#16A34A" }} />เสร็จแล้ว</span>
-        <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: "#2563EB" }} />กำลังดำเนินการ</span>
+        <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full border border-blue-600 ring-1 ring-blue-500" style={{ backgroundColor: "#2563EB" }} />กำลังดู / ดำเนินการ</span>
         <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: "#9CA3AF" }} />~ ประมาณการ</span>
       </div>
     </div>

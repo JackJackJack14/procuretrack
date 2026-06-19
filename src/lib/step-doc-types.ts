@@ -193,29 +193,58 @@ export function isStep5AllBiddersResultDocType(documentType: string): boolean {
 /** ประเภทเอกสารขั้นตอนที่ 6 — หลักฐานตามเคสอุทธรณ์ */
 export const STEP6_DOC = {
   /** เคสไม่มีผู้ยื่นอุทธรณ์ — แคปหน้าจอ e-GP */
-  NO_APPEAL_EGP_SCREENSHOT: "ภาพแคปหน้าจอ e-GP ยืนยันไม่มีผู้ยื่นอุทธรณ์",
-  /** เคสมีผู้ยื่นอุทธรณ์ — รายงานหน่วยงาน */
+  NO_APPEAL_EGP_SCREENSHOT: "ภาพหน้าจอตรวจสอบสถานะอุทธรณ์จากระบบ e-GP",
+  /** เคสมีผู้ยื่นอุทธรณ์ — หนังสือจากผู้ประกอบการ */
+  BIDDER_APPEAL_LETTER: "หนังสืออุทธรณ์จากผู้ประกอบการ (PDF)",
+  /** เคสมีผู้ยื่นอุทธรณ์ — รายงานหน่วยงาน + ส่ง กบง. รวมไฟล์เดียว */
+  AGENCY_OPINION_CGD_LETTER:
+    "รายงานความเห็นของหน่วยงาน + หนังสือส่งกรมบัญชีกลาง (PDF)",
+  /** เคสมีผู้ยื่นอุทธรณ์ — ผลวินิจฉัยคณะกรรมการ (ไม่บังคับช่วงแรก) */
+  COMMITTEE_DECISION_LETTER:
+    "หนังสือแจ้งผลการวินิจฉัยจากคณะกรรมการพิจารณาอุทธรณ์ (PDF)",
+  /** @deprecated เคสมีผู้ยื่นอุทธรณ์ — รายงานหน่วยงาน */
   AGENCY_APPEAL_REPORT: "หนังสือรายงานผลการพิจารณาอุทธรณ์ของหน่วยงาน (PDF)",
-  /** เคสมีผู้ยื่นอุทธรณ์ — ส่ง กบง. */
+  /** @deprecated เคสมีผู้ยื่นอุทธรณ์ — ส่ง กบง. */
   CGD_APPEAL_REPORT: "หลักฐานส่งรายงานผลอุทธรณ์ให้กรมบัญชีกลาง (PDF)",
   /** @deprecated ชื่อเก่าใน DB */
   APPEAL_RESULT_EVIDENCE:
     "หลักฐานรายงานผลการอุทธรณ์หรือภาพแคปหน้าจอ e-GP (ไม่มีผู้ยื่นอุทธรณ์)",
+  /** @deprecated ชื่อเก่าใน DB */
+  LEGACY_NO_APPEAL_EGP_SCREENSHOT: "ภาพแคปหน้าจอ e-GP ยืนยันไม่มีผู้ยื่นอุทธรณ์",
 } as const;
 
 export function isStep6NoAppealEgpDocType(documentType: string): boolean {
   return (
     documentType === STEP6_DOC.NO_APPEAL_EGP_SCREENSHOT ||
+    documentType === STEP6_DOC.LEGACY_NO_APPEAL_EGP_SCREENSHOT ||
     documentType === STEP6_DOC.APPEAL_RESULT_EVIDENCE
   );
 }
 
+export function isStep6BidderAppealLetterDocType(documentType: string): boolean {
+  return documentType === STEP6_DOC.BIDDER_APPEAL_LETTER;
+}
+
+export function isStep6AgencyOpinionCgdDocType(documentType: string): boolean {
+  return documentType === STEP6_DOC.AGENCY_OPINION_CGD_LETTER;
+}
+
+export function isStep6CommitteeDecisionDocType(documentType: string): boolean {
+  return documentType === STEP6_DOC.COMMITTEE_DECISION_LETTER;
+}
+
 export function isStep6AgencyReportDocType(documentType: string): boolean {
-  return documentType === STEP6_DOC.AGENCY_APPEAL_REPORT;
+  return (
+    documentType === STEP6_DOC.AGENCY_APPEAL_REPORT ||
+    documentType === STEP6_DOC.AGENCY_OPINION_CGD_LETTER
+  );
 }
 
 export function isStep6CgdReportDocType(documentType: string): boolean {
-  return documentType === STEP6_DOC.CGD_APPEAL_REPORT;
+  return (
+    documentType === STEP6_DOC.CGD_APPEAL_REPORT ||
+    documentType === STEP6_DOC.AGENCY_OPINION_CGD_LETTER
+  );
 }
 
 /** ประเภทเอกสารขั้นตอนที่ 7 — แจ้งให้ผู้ชนะมาลงนามในสัญญา (ข้อ 161) */
