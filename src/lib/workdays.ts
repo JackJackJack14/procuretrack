@@ -287,6 +287,9 @@ export const APPEAL_PERIOD_WORKDAYS = 7;
 /** ระยะออกหนังสือแจ้งทำสัญญา — ระเบียบกระทรวงการคลังฯ ข้อ 161 */
 export const CONTRACT_NOTIFICATION_WORKDAYS = 5;
 
+/** ระยะลงนามสัญญาหลังผู้รับจ้างได้รับหนังสือเชิญ — ขั้นตอนที่ 7 */
+export const STEP7_CONTRACT_SIGNING_DEADLINE_WORKDAYS = 15;
+
 /**
  * ไทม์ไลน์โครงการ — ระยะขั้นต่ำ Fastest Path สำหรับด่านที่ยังไม่มีวันที่จริง (วันทำการ)
  * ใช้กับ addWorkdays() เท่านั้น — ห้ามบวก Calendar Days
@@ -424,6 +427,16 @@ export function computeContractNotificationDeadlineFromAppealISO(
   const start = parseISODateLocal(appealDeadlineISO?.trim() ?? "");
   if (!start || CONTRACT_NOTIFICATION_WORKDAYS < 1) return "";
   return toISODate(addWorkdays(start, CONTRACT_NOTIFICATION_WORKDAYS));
+}
+
+/**
+ * กำหนดวันสุดท้ายที่ต้องมาลงนาม — วันที่ผู้รับจ้างได้รับหนังสือเชิญ + 15 วันทำการ
+ * (ไม่นับวันได้รับ — ใช้ addWorkdays เหมือน defaultPublicationEndISO)
+ */
+export function computeStep7ContractSigningDeadlineISO(receivedDateISO: string): string {
+  const start = parseISODateLocal(receivedDateISO?.trim() ?? "");
+  if (!start || STEP7_CONTRACT_SIGNING_DEADLINE_WORKDAYS < 1) return "";
+  return toISODate(addWorkdays(start, STEP7_CONTRACT_SIGNING_DEADLINE_WORKDAYS));
 }
 
 /** วันที่ออกหนังสือแจ้งเกินเดดไลน์ข้อ 161 */

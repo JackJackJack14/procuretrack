@@ -1,3 +1,5 @@
+import { Step1GuidelineBox } from "@/components/Step1GuidelineBox";
+import { Step2GuidelineBox } from "@/components/Step2GuidelineBox";
 import { Step3GuidelineBox } from "@/components/Step3GuidelineBox";
 import { Step4GuidelineBox } from "@/components/Step4GuidelineBox";
 import { Step5GuidelineBox } from "@/components/Step5GuidelineBox";
@@ -26,6 +28,16 @@ type Props = {
   contractSignedDate?: string | null;
   /** ขั้นตอนที่ 10 — วันสิ้นสุดสัญญาจริงจาก Step 9 */
   contractEndDate?: string | null;
+  /** ขั้นตอนที่ 3 — วันเริ่มเผยแพร่ร่างประกาศ (ไทม์ไลน์การ์ดที่ 2) */
+  step3PublicationStartDate?: string | null;
+  /** ขั้นตอนที่ 8 — วันเส้นตายการลงนามจากขั้นตอนที่ 7 */
+  step7SigningDeadlineISO?: string | null;
+  /** ขั้นตอนที่ 8 — วันที่เริ่มลงนามในสัญญาได้จากขั้นตอนที่ 6/7 */
+  step8EarliestSigningISO?: string | null;
+  /** ขั้นตอนที่ 8 — วันที่ลงนามสัญญาจริงจากฟอร์ม (ไทม์ไลน์ dynamic) */
+  step8ContractSignedDate?: string | null;
+  /** ขั้นตอนที่ 8 — วันที่ผู้ประกอบการได้รับหนังสือเชิญจากขั้นตอนที่ 7 */
+  step7ContractorReceivedISO?: string | null;
   /** ขั้นตอนที่ 3 — ข้ามการฟังคำวิจารณ์ */
   onSkipStep3?: (reason: Step3SkipReason) => void;
   onProceedStep3Hearing?: () => void;
@@ -44,12 +56,25 @@ export function GuidelineBox({
   winnerAnnouncementDate,
   contractSignedDate,
   contractEndDate,
+  step3PublicationStartDate,
+  step7SigningDeadlineISO,
+  step8EarliestSigningISO,
+  step8ContractSignedDate,
+  step7ContractorReceivedISO,
   onSkipStep3,
   onProceedStep3Hearing,
   step3HearingProceed,
   step3Skipping,
   readOnly = false,
 }: Props) {
+  if (stepNumber === 1) {
+    return <Step1GuidelineBox />;
+  }
+
+  if (stepNumber === 2) {
+    return <Step2GuidelineBox />;
+  }
+
   if (stepNumber === 3) {
     return (
       <Step3GuidelineBox
@@ -59,6 +84,7 @@ export function GuidelineBox({
         hearingProceed={step3HearingProceed}
         skipping={step3Skipping}
         readOnly={readOnly}
+        publicationStartDate={step3PublicationStartDate}
       />
     );
   }
@@ -80,7 +106,14 @@ export function GuidelineBox({
   }
 
   if (stepNumber === 8) {
-    return <Step8GuidelineBox winnerAnnouncementDate={winnerAnnouncementDate} />;
+    return (
+      <Step8GuidelineBox
+        earliestSigningISO={step8EarliestSigningISO}
+        contractSignedDate={step8ContractSignedDate}
+        step7SigningDeadlineISO={step7SigningDeadlineISO}
+        step7ContractorReceivedISO={step7ContractorReceivedISO}
+      />
+    );
   }
 
   if (stepNumber === 9) {

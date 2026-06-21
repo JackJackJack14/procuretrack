@@ -183,6 +183,7 @@ import {
   buildProjectStep8Fields,
   getStep8ComplianceIssues,
   isStep8ReadyForNext,
+  countStep8FormRequiredProgress,
   type Step8ContractExecution,
   EMPTY_STEP9_CONTRACT_SCHEDULE,
   loadStep9FormFromNote,
@@ -267,7 +268,7 @@ import {
 import { STEP2_DOC, STEP3_DOC } from "@/lib/step-doc-types";
 import {
   isStep5AllBiddersResultDocType,
-  isStep7DraftContractDocType,
+  isStep7ContractNoticeLetterDocType,
 } from "@/lib/step-doc-types";
 import {
   getStep3HearingTier,
@@ -740,6 +741,14 @@ function ProjectDetailPage() {
     [step6Record?.note, project?.appeal_status],
   );
   const step7Record = useMemo(() => steps.find((s) => s.step_number === 7), [steps]);
+  const step7SigningDeadlineISO = useMemo(() => {
+    const form = loadStep7FormFromNote(step7Record?.note ?? null);
+    return form.contractNotice?.contract_signing_deadline?.trim() ?? "";
+  }, [step7Record?.note]);
+  const step7ContractorReceivedISO = useMemo(() => {
+    const form = loadStep7FormFromNote(step7Record?.note ?? null);
+    return form.contractNotice?.contractor_received_date?.trim() ?? "";
+  }, [step7Record?.note]);
   const step8Record = useMemo(() => steps.find((s) => s.step_number === 8), [steps]);
   const step1Record = useMemo(() => steps.find((s) => s.step_number === 1), [steps]);
   const step1ResponsibleDefault = useMemo(
@@ -1898,7 +1907,6 @@ function ProjectDetailPage() {
     const formNote =
       current.step_number === 7
         ? serializeStepNote(note, {
-            checklist: genericManualChecklist,
             contractNotice: step7ContractNotice,
           })
         : current.step_number === 8
@@ -2214,16 +2222,12 @@ function ProjectDetailPage() {
           responsibleName: effectiveResponsibleName,
           appealDeadlineISO,
           notificationDeadlineISO,
-          hasDraftContractDoc: step7Docs.some((d) =>
-            isStep7DraftContractDocType(d.document_type),
+          hasContractNoticeLetterDoc: step7Docs.some((d) =>
+            isStep7ContractNoticeLetterDocType(d.document_type),
           ),
           stepDocs: step7Docs,
           timelineCtx: timelineValidationCtx,
         },
-        computeAutoChecklistState({
-          stepNumber: 7,
-          step7ContractNotice,
-        }),
       );
       if (complianceIssues.length > 0) {
         failStepCompliance(complianceIssues[0].message, complianceIssues[0].id);
@@ -2242,16 +2246,12 @@ function ProjectDetailPage() {
         step8ContractExecution,
         genericManualChecklist,
         {
-          responsibleName: effectiveResponsibleName,
           earliestSigningISO,
           appealDeadlineISO,
+          step7SigningDeadlineISO: step7SigningDeadlineISO,
           stepDocs: step8Docs,
           timelineCtx: timelineValidationCtx,
         },
-        computeAutoChecklistState({
-          stepNumber: 8,
-          step8ContractExecution,
-        }),
       );
       if (complianceIssues.length > 0) {
         failStepCompliance(complianceIssues[0].message, complianceIssues[0].id);
@@ -2826,6 +2826,25 @@ function ProjectDetailPage() {
               }
               step3HearingProceed={!!step3Announcement.hearing_proceed}
               step3Skipping={step3Skipping}
+              step3PublicationStartDate={
+                current.step_number === 3
+                  ? step3Announcement.publication_start
+                  : undefined
+              }
+              step7SigningDeadlineISO={
+                current.step_number === 8 ? step7SigningDeadlineISO : undefined
+              }
+              step8EarliestSigningISO={
+                current.step_number === 8 ? step8EarliestSigningISO : undefined
+              }
+              step8ContractSignedDate={
+                current.step_number === 8
+                  ? step8ContractExecution.contract_signed_date
+                  : undefined
+              }
+              step7ContractorReceivedISO={
+                current.step_number === 8 ? step7ContractorReceivedISO : undefined
+              }
             />
             )}
           <div className="bg-card border rounded-[10px]">
@@ -3091,12 +3110,17 @@ function ProjectDetailPage() {
                   )}
                   {current.step_number === 7 && (
                     <Step7ContractNoticeForm
-                      manualChecklist={genericManualChecklist}
-                      onManualChange={setGenericManualCheck}
-                      autoCheckStates={autoCheckStates}
                       contractNotice={step7ContractNotice}
                       onContractNoticeChange={(patch) =>
                         setStep7ContractNotice((prev) => ({ ...prev, ...patch }))
+                      }
+                      winningBidderName={
+                        mergedStep4BidResult.winning_bidder_name ||
+                        project.winning_bidder_name ||
+                        ""
+                      }
+                      winningProjectAmount={
+                        resolveStep4ContractAmount(mergedStep4BidResult, project) ?? null
                       }
                       appealDeadlineISO={step7AppealDeadlineISO}
                       notificationDeadlineISO={step7NotificationDeadlineISO}
@@ -3118,14 +3142,20 @@ function ProjectDetailPage() {
                   )}
                   {current.step_number === 8 && (
                     <Step8ContractGuaranteeForm
-                      manualChecklist={genericManualChecklist}
-                      onManualChange={setGenericManualCheck}
-                      autoCheckStates={autoCheckStates}
                       contractExecution={step8ContractExecution}
                       defaultContractAmountFromStep4={step4ContractAmountDefault}
                       onContractExecutionChange={(patch) =>
                         setStep8ContractExecution((prev) => ({ ...prev, ...patch }))
                       }
+                      winningBidderName={
+                        mergedStep4BidResult.winning_bidder_name ||
+                        project.winning_bidder_name ||
+                        ""
+                      }
+                      winningContractAmount={
+                        resolveStep4ContractAmount(mergedStep4BidResult, project) ?? null
+                      }
+                      step7SigningDeadlineISO={step7SigningDeadlineISO}
                       earliestSigningISO={step8EarliestSigningISO}
                       appealDeadlineISO={step8AppealDeadlineISO}
                       readOnly={workflowReadOnly}
@@ -3135,11 +3165,6 @@ function ProjectDetailPage() {
                         docs: docsForStep,
                         onDocsChange: invalidateAll,
                       }}
-                      responsibleName={responsibleName}
-                      onResponsibleNameChange={setResponsibleName}
-                      step1ResponsibleDefault={step1ResponsibleDefault}
-                      note={note}
-                      onNoteChange={setNote}
                       chronologicalCtx={timelineValidationCtx}
                     />
                   )}
@@ -3500,9 +3525,9 @@ function ProjectDetailPage() {
                     },
                     autoCheckStates,
                   );
-                const step7HasDraftContractDoc =
+                const step7HasContractNoticeLetterDoc =
                   current.step_number === 7 &&
-                  docsForStep.some((d) => isStep7DraftContractDocType(d.document_type));
+                  docsForStep.some((d) => isStep7ContractNoticeLetterDocType(d.document_type));
                 const step7ComplianceIssues =
                   current.step_number === 7
                     ? getStep7ComplianceIssues(
@@ -3512,11 +3537,10 @@ function ProjectDetailPage() {
                           responsibleName: effectiveResponsibleName,
                           appealDeadlineISO: step7AppealDeadlineISO,
                           notificationDeadlineISO: step7NotificationDeadlineISO,
-                          hasDraftContractDoc: step7HasDraftContractDoc,
+                          hasContractNoticeLetterDoc: step7HasContractNoticeLetterDoc,
                           stepDocs: docsForStep,
                           timelineCtx: timelineValidationCtx,
                         },
-                        autoCheckStates,
                       )
                     : [];
                 const step7Ready =
@@ -3528,10 +3552,9 @@ function ProjectDetailPage() {
                       responsibleName: effectiveResponsibleName,
                       appealDeadlineISO: step7AppealDeadlineISO,
                       notificationDeadlineISO: step7NotificationDeadlineISO,
-                      hasDraftContractDoc: step7HasDraftContractDoc,
+                      hasContractNoticeLetterDoc: step7HasContractNoticeLetterDoc,
                       stepDocs: docsForStep,
                     },
-                    autoCheckStates,
                   );
                 const step8ComplianceIssues =
                   current.step_number === 8
@@ -3539,13 +3562,12 @@ function ProjectDetailPage() {
                         step8ContractExecution,
                         genericManualChecklist,
                         {
-                          responsibleName: effectiveResponsibleName,
                           earliestSigningISO: step8EarliestSigningISO,
                           appealDeadlineISO: step8AppealDeadlineISO,
+                          step7SigningDeadlineISO,
                           stepDocs: docsForStep,
                           timelineCtx: timelineValidationCtx,
                         },
-                        autoCheckStates,
                       )
                     : [];
                 const step8Ready =
@@ -3554,12 +3576,11 @@ function ProjectDetailPage() {
                     step8ContractExecution,
                     genericManualChecklist,
                     {
-                      responsibleName: effectiveResponsibleName,
                       earliestSigningISO: step8EarliestSigningISO,
                       appealDeadlineISO: step8AppealDeadlineISO,
+                      step7SigningDeadlineISO,
                       stepDocs: docsForStep,
                     },
-                    autoCheckStates,
                   );
                 const step9ComplianceIssues =
                   current.step_number === 9
@@ -3637,7 +3658,8 @@ function ProjectDetailPage() {
                   current.step_number === 2 ||
                   current.step_number === 4 ||
                   current.step_number === 5 ||
-                  current.step_number === 6
+                  current.step_number === 6 ||
+                  current.step_number === 8
                     ? []
                     : current.step_number === 10
                       ? getStep10ChecklistItems(
@@ -3750,6 +3772,14 @@ function ProjectDetailPage() {
                   current.step_number === 3 && showStep3HearingForm && step3ComplianceOpts
                     ? countStep3FormRequiredProgress(step3ComplianceOpts.announcement)
                     : null;
+                const step8FormProgress =
+                  current.step_number === 8
+                    ? countStep8FormRequiredProgress(step8ContractExecution, {
+                        earliestSigningISO: step8EarliestSigningISO,
+                        step7SigningDeadlineISO,
+                        stepDocs: docsForStep,
+                      })
+                    : null;
                 const reactiveChecklist =
                   step1CoreDocsProgress != null && step1FormProgress != null
                     ? {
@@ -3793,7 +3823,14 @@ function ProjectDetailPage() {
                                   total: step6CoreDocsProgress.total + step6FormProgress.total,
                                   effective: {},
                                 }
-                              : checklistItemsForStep.length > 0
+                              : step8FormProgress != null
+                                ? {
+                                    allDone: step8Ready,
+                                    done: step8FormProgress.done,
+                                    total: step8FormProgress.total,
+                                    effective: {},
+                                  }
+                                : checklistItemsForStep.length > 0
                       ? computeReactiveChecklistEffective(
                           current.step_number,
                           checklistItemsForStep,

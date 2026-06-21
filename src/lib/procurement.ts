@@ -67,8 +67,7 @@ export const STEP_DOCS_DETAILED: DocItem[][] = [
   ],
   [
     { name: STEP7_DOC.CONTRACT_NOTICE_LETTER, required: true },
-    { name: STEP7_DOC.CONTRACT_NOTICE_DELIVERY_PROOF, required: true },
-    { name: STEP7_DOC.DRAFT_CONTRACT, required: true },
+    { name: STEP7_DOC.CONTRACT_NOTICE_DELIVERY_PROOF, required: false },
   ],
   [
     { name: STEP8_DOC.GUARANTEE_VERIFICATION, required: true },

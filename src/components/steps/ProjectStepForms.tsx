@@ -59,7 +59,9 @@ import {
   STEP4_COMMITTEE_REPORT_UPLOAD_LABEL,
   STEP6_DOC,
   STEP7_DOC,
-  STEP7_DRAFT_CONTRACT_UPLOAD_LABEL,
+  STEP7_CONTRACT_NOTICE_LETTER_UPLOAD_LABEL,
+  STEP7_CONTRACT_NOTICE_DELIVERY_PROOF_UPLOAD_LABEL,
+  STEP8_DOC,
   STEP9_DOC,
 } from "@/lib/step-doc-types";
 import {
@@ -178,8 +180,12 @@ import {
   type Step7ContractNotice,
   type Step8ContractExecution,
   type Step8GuaranteeType,
-  STEP8_GUARANTEE_TYPE_OPTIONS,
+  STEP8_GUARANTEE_TYPE_UI_OPTIONS,
   computeRecommendedGuaranteeAmount,
+  isStep8GuaranteeBelowMinimum,
+  isStep8SignedOutsideAllowedRange,
+  hasStep8SignedContractDoc,
+  hasStep8GuaranteeVerificationDoc,
   computeStep9ContractEndDateISO,
   syncStep9WorkStartDate,
   sanitizeStep9WorkStartAgainstSignedDate,
@@ -197,6 +203,8 @@ import {
   STEP4_EVALUATION_APPROVAL_OVERDUE_MSG,
   STEP4_EVALUATION_APPROVAL_GATE_MSG,
   STEP7_NOTIFICATION_DEADLINE_EXCEEDED_MSG,
+  STEP7_RECEIVED_BEFORE_LETTER_MSG,
+  isStep7ContractorReceivedDateChronoValid,
 } from "@/lib/step-form";
 import {
   computeStep9EgpDeadlineISO,
@@ -233,14 +241,23 @@ import {
 } from "@/lib/procurement-path";
 import { ProvinceSearchSelect } from "@/components/ProvinceSearchSelect";
 import { hasStep1PlanPublicationDoc, STEP1_EGP_PLAN_PUBLICATION_DOCUMENT_TYPE } from "@/lib/checklist-inline-evidence";
+import {
+  STEP8_FORM_HEADER,
+  STEP9_FORM_HEADER,
+  STEP10_FORM_HEADER,
+  getSmartChecklistStepLabel,
+} from "@/lib/egp-milestones";
 import { downloadExecutiveReportPdf, type ExecutiveReportProject } from "@/lib/executive-report-pdf";
 import { supabase } from "@/integrations/supabase/client";
 import {
   computeAppealDeadlineISO,
   computeCgdSubmissionDeadlineISO,
   computeContractEarliestISO,
+  computeContractEarliestFromAppealDeadlineISO,
   computeContractNotificationDeadlineISO,
+  computeStep7ContractSigningDeadlineISO,
   CONTRACT_NOTIFICATION_WORKDAYS,
+  STEP7_CONTRACT_SIGNING_DEADLINE_WORKDAYS,
   isCgdSubmissionBeyondSevenWorkdays,
 } from "@/lib/workdays";
 import type { DocItem } from "@/lib/procurement";
@@ -249,6 +266,10 @@ import { StepDocumentHub } from "@/components/steps/StepDocumentHub";
 import { FieldLabelTooltip } from "@/components/FieldLabelTooltip";
 import { getFieldTooltip, type FieldTooltipKey } from "@/constants/tooltips";
 import { STEP6_APPEAL_ACTIVE_BANNER_MSG } from "@/lib/step6-guideline";
+import {
+  STEP8_GUARANTEE_BELOW_MINIMUM_MSG,
+  STEP8_SIGNED_OUTSIDE_RANGE_MSG,
+} from "@/lib/step8-guideline";
 
 /**
  * มาตรฐานลำดับ Layout ทุกขั้นตอน (Step 1–10):
@@ -261,7 +282,7 @@ import { STEP6_APPEAL_ACTIVE_BANNER_MSG } from "@/lib/step6-guideline";
 const inputCls =
   "w-full h-10 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring";
 
-/** บริบทล็อกวันที่ข้ามด่าน — ส่งจากหน้าโครงการ */
+/** บริบทล็อกวันที่ข้ามขั้นตอน — ส่งจากหน้าโครงการ */
 export type ChronologicalFormProps = {
   chronologicalCtx?: TimelineValidationContext | null;
 };
@@ -2877,7 +2898,7 @@ export function Step4DetailForm({
           คำสั่งแต่งตั้งคณะกรรมการ (ข้อ 22) *
         </p>
         <p className="text-xs text-muted-foreground">
-          แนบไฟล์ PDF คำสั่งแต่งตั้งคณะกรรมการพิจารณาผลและตรวจรับพัสดุฉบับจริงในขั้นตอนนี้ — เอกสารบังคับเพื่อผ่านด่าน
+          แนบไฟล์ PDF คำสั่งแต่งตั้งคณะกรรมการพิจารณาผลและตรวจรับพัสดุฉบับจริงในขั้นตอนนี้ — เอกสารบังคับเพื่อผ่านขั้นตอนนี้
         </p>
         <InlineDocUpload
           project={docBinder.project}
@@ -4081,7 +4102,7 @@ function GenericStepChecklistPanel({
   return (
     <SmartChecklist
       stepNumber={stepNumber}
-      stepLabel={`ขั้นตอนที่ ${stepNumber}`}
+      stepLabel={getSmartChecklistStepLabel(stepNumber)}
       items={items}
       manualChecklist={manualChecklist}
       autoStates={autoCheckStates}
@@ -4115,7 +4136,7 @@ function Step10ChecklistPanel({
   return (
     <SmartChecklist
       stepNumber={10}
-      stepLabel="ขั้นตอนที่ 10"
+      stepLabel={STEP10_FORM_HEADER}
       items={items}
       manualChecklist={manualChecklist}
       autoStates={autoCheckStates}
@@ -4151,11 +4172,10 @@ type GenericStepDetailFormProps = {
 } & ChronologicalFormProps;
 
 type Step7ContractNoticeFormProps = {
-  manualChecklist: Record<string, boolean>;
-  onManualChange: (key: string, checked: boolean) => void;
-  autoCheckStates: Record<string, boolean>;
   contractNotice: Step7ContractNotice;
   onContractNoticeChange: (patch: Partial<Step7ContractNotice>) => void;
+  winningBidderName: string;
+  winningProjectAmount: number | null;
   appealDeadlineISO: string;
   notificationDeadlineISO: string;
   letterDateTooLate?: boolean;
@@ -4170,11 +4190,10 @@ type Step7ContractNoticeFormProps = {
 
 /** ขั้นตอนที่ 7 — แจ้งให้ผู้ชนะมาลงนามในสัญญา (ข้อ 161) */
 export function Step7ContractNoticeForm({
-  manualChecklist,
-  onManualChange,
-  autoCheckStates,
   contractNotice,
   onContractNoticeChange,
+  winningBidderName,
+  winningProjectAmount,
   appealDeadlineISO,
   notificationDeadlineISO,
   letterDateTooLate,
@@ -4187,33 +4206,113 @@ export function Step7ContractNoticeForm({
   onNoteChange,
   chronologicalCtx,
 }: Step7ContractNoticeFormProps) {
-  const letterDate = contractNotice?.contract_notice_letter_date ?? "";
+  console.log(
+    "🛠️ [STEP 7 MASTER SEED]: Checklist removed. Infographic UI rendered. Chrono Validation Active.",
+  );
+
+  const [receivedDateRejected, setReceivedDateRejected] = useState(false);
+
+  const contractNoticeLetterDate = contractNotice?.contract_notice_letter_date ?? "";
+  const contractorReceivedDate = contractNotice?.contractor_received_date ?? "";
+  const signingDeadline = contractNotice?.contract_signing_deadline ?? "";
+  const minLetterDateISO = appealDeadlineISO
+    ? computeContractEarliestFromAppealDeadlineISO(appealDeadlineISO)
+    : "";
+
+  const isChronoValid = isStep7ContractorReceivedDateChronoValid(
+    contractNoticeLetterDate,
+    contractorReceivedDate,
+  );
+  const showReceivedChronoError =
+    receivedDateRejected ||
+    (!!contractNoticeLetterDate &&
+      !!contractorReceivedDate &&
+      contractorReceivedDate < contractNoticeLetterDate);
+
+  console.log("⏳ [STEP 7 CHRONO VALIDATION]:", {
+    letterDate: contractNoticeLetterDate,
+    receivedDate: contractorReceivedDate,
+    isValid: isChronoValid,
+  });
+
+  const handleLetterDateChange = (v: string) => {
+    onContractNoticeChange({ contract_notice_letter_date: v });
+    if (v && contractorReceivedDate && contractorReceivedDate < v) {
+      setReceivedDateRejected(true);
+      toast.error(STEP7_RECEIVED_BEFORE_LETTER_MSG);
+    } else {
+      setReceivedDateRejected(false);
+    }
+  };
+
+  const handleContractorReceivedDateChange = (v: string) => {
+    if (!v) {
+      setReceivedDateRejected(false);
+      onContractNoticeChange({ contractor_received_date: "" });
+      return;
+    }
+    const chronoValid = isStep7ContractorReceivedDateChronoValid(contractNoticeLetterDate, v);
+    console.log("⏳ [STEP 7 CHRONO VALIDATION]:", {
+      letterDate: contractNoticeLetterDate,
+      receivedDate: v,
+      isValid: chronoValid,
+    });
+    if (contractNoticeLetterDate && v < contractNoticeLetterDate) {
+      setReceivedDateRejected(true);
+      toast.error(STEP7_RECEIVED_BEFORE_LETTER_MSG);
+      return;
+    }
+    setReceivedDateRejected(false);
+    const autoDeadline = computeStep7ContractSigningDeadlineISO(v);
+    onContractNoticeChange({
+      contractor_received_date: v,
+      contract_signing_deadline: autoDeadline,
+    });
+  };
 
   return (
     <div className="space-y-4 max-w-2xl">
-      <SmartChecklist
-        stepNumber={7}
-        stepLabel="ขั้นตอนที่ 7"
-        items={getSmartChecklistItems(7)}
-        manualChecklist={manualChecklist ?? {}}
-        autoStates={autoCheckStates ?? {}}
-        onManualChange={onManualChange}
-        readOnly={readOnly}
-        docBinder={docBinder}
-      />
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
+        <p className="text-sm font-medium text-foreground">
+          สรุปผู้ชนะจากขั้นตอนก่อนหน้า (อ่านอย่างเดียว)
+        </p>
+        <FieldRow label="ชื่อผู้ชนะการเสนอราคา">
+          <input
+            type="text"
+            readOnly
+            value={winningBidderName?.trim() || "— ยังไม่พบข้อมูลจากขั้นตอนก่อนหน้า —"}
+            className={`${inputCls} bg-muted/50 cursor-not-allowed`}
+            aria-readonly
+          />
+        </FieldRow>
+        <FieldRow label="มูลค่าโครงการที่ชนะ (บาท)">
+          <input
+            type="text"
+            readOnly
+            value={
+              winningProjectAmount != null
+                ? `${formatCurrencyDisplay(winningProjectAmount)} บาท`
+                : "— ยังไม่พบข้อมูลจากขั้นตอนก่อนหน้า —"
+            }
+            className={`${inputCls} bg-muted/50 cursor-not-allowed tabular-nums`}
+            aria-readonly
+          />
+        </FieldRow>
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          ข้อมูลดึงจากขั้นตอนที่ 4–5 โดยอัตโนมัติ — หากต้องการแก้ไข ให้ย้อนกลับไปแก้ที่ขั้นตอนก่อนหน้า
+        </p>
+      </div>
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-5">
         <p className="text-sm font-medium text-foreground">
-          ข้อมูลหนังสือแจ้งทำสัญญา — ขั้นตอนที่ 7
+          ข้อมูลหนังสือเชิญลงนามในสัญญา — ขั้นตอนที่ 7
         </p>
 
         <div className="space-y-4">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-            กลุ่มที่ 1: ข้อมูลหนังสือราชการภายใน
-          </p>
           <FieldRow
-            label="เลขที่หนังสือแจ้งให้ผู้ชนะมาลงนามในสัญญา"
+            label="เลขที่หนังสือเชิญลงนามในสัญญา *"
             tooltipKey="step7.contract_notice_letter_no"
+            complianceTarget="contract_notice_letter_no"
           >
             <input
               type="text"
@@ -4226,32 +4325,36 @@ export function Step7ContractNoticeForm({
               placeholder="เช่น อว 1234.5/ว 1234"
             />
           </FieldRow>
-          <FieldRow label="วันที่ออกหนังสือแจ้ง" tooltipKey="step7.contract_notice_letter_date">
+          <FieldRow
+            label="วันที่ในหนังสือเชิญลงนาม *"
+            tooltipKey="step7.contract_notice_letter_date"
+            complianceTarget="contract_notice_letter_date"
+          >
             <div className="space-y-1">
               <ChronologicalDatePicker
                 stepNumber={7}
                 chronologicalCtx={chronologicalCtx}
-                additionalMinDates={[appealDeadlineISO]}
-                value={letterDate}
-                onChange={(v) => onContractNoticeChange({ contract_notice_letter_date: v })}
+                minDate={minLetterDateISO}
+                value={contractNoticeLetterDate}
+                onChange={handleLetterDateChange}
                 disabled={readOnly}
                 onInvalidDate={() =>
                   toast.error(
-                    appealDeadlineISO
-                      ? `วันที่ออกหนังสือแจ้งต้องไม่ก่อนวันสิ้นสุดระยะอุทธรณ์ (${formatThaiDateSlash(appealDeadlineISO)})`
-                      : "วันที่ออกหนังสือแจ้งไม่ถูกต้อง",
+                    minLetterDateISO
+                      ? `วันที่ในหนังสือเชิญลงนามต้องไม่ก่อนวันพ้นกำหนดอุทธรณ์ (${formatThaiDateSlash(minLetterDateISO)})`
+                      : "วันที่ในหนังสือเชิญลงนามไม่ถูกต้อง",
                   )
                 }
                 showChronologicalHint={false}
               />
-              {letterDate && (
+              {contractNoticeLetterDate && (
                 <p className="text-xs text-muted-foreground">
-                  📅 {formatThaiDate(letterDate)}
+                  📅 {formatThaiDate(contractNoticeLetterDate)}
                 </p>
               )}
-              {appealDeadlineISO && (
+              {minLetterDateISO && (
                 <p className="text-xs text-muted-foreground">
-                  วันที่เลือกได้ตั้งแต่ {formatThaiDateSlash(appealDeadlineISO)} (วันสิ้นสุดอุทธรณ์)
+                  เลือกได้ตั้งแต่ {formatThaiDateSlash(minLetterDateISO)} (หลังพ้นกำหนดอุทธรณ์)
                 </p>
               )}
               {letterDateTooLate && notificationDeadlineISO && (
@@ -4261,31 +4364,107 @@ export function Step7ContractNoticeForm({
               )}
             </div>
           </FieldRow>
-        </div>
-
-        <div className="space-y-4 pt-1 border-t border-border/60">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-            กลุ่มที่ 2: ร่างสัญญาและหลักฐาน
-          </p>
-          <FieldRow label="ไฟล์ร่างสัญญาจ้างก่อสร้าง">
-            <InlineDocUpload
-              project={docBinder.project}
-              stepNumber={docBinder.stepNumber}
-              documentType={STEP7_DOC.DRAFT_CONTRACT}
-              label={STEP7_DRAFT_CONTRACT_UPLOAD_LABEL}
-              existing={docBinder.docs}
-              onChange={docBinder.onDocsChange}
-            />
-            <p className="text-xs text-muted-foreground mt-1">
-              แนบร่างสัญญาขั้นสุดท้ายที่ตรวจทานแล้ว พร้อมนัดหมายผู้ชนะมาลงนาม
-            </p>
+          <FieldRow
+            label="วันที่ผู้ประกอบการได้รับหนังสือเชิญ *"
+            complianceTarget="contractor_received_date"
+          >
+            <div className="space-y-1">
+              <ChronologicalDatePicker
+                stepNumber={7}
+                chronologicalCtx={chronologicalCtx}
+                minDate={contractNoticeLetterDate || undefined}
+                additionalMinDates={[contractNoticeLetterDate]}
+                value={contractorReceivedDate}
+                onChange={handleContractorReceivedDateChange}
+                onInvalidDate={() => {
+                  setReceivedDateRejected(true);
+                  toast.error(STEP7_RECEIVED_BEFORE_LETTER_MSG);
+                }}
+                disabled={readOnly || !contractNoticeLetterDate}
+                showChronologicalHint={false}
+                className={
+                  showReceivedChronoError
+                    ? `${inputCls} border-destructive focus:ring-destructive`
+                    : inputCls
+                }
+              />
+              {!contractNoticeLetterDate && (
+                <p className="text-xs text-muted-foreground">
+                  กรุณาระบุวันที่ในหนังสือเชิญลงนามก่อน
+                </p>
+              )}
+              {contractNoticeLetterDate && (
+                <p className="text-xs text-muted-foreground">
+                  เลือกได้ตั้งแต่ {formatThaiDateSlash(contractNoticeLetterDate)} (วันที่ออกหนังสือเชิญชวน)
+                </p>
+              )}
+              {contractorReceivedDate && !showReceivedChronoError && (
+                <p className="text-xs text-muted-foreground">
+                  📅 {formatThaiDate(contractorReceivedDate)}
+                </p>
+              )}
+              {showReceivedChronoError && (
+                <p className="text-xs text-destructive font-semibold mt-1" role="alert">
+                  {STEP7_RECEIVED_BEFORE_LETTER_MSG}
+                </p>
+              )}
+            </div>
+          </FieldRow>
+          <FieldRow
+            label="กำหนดวันสุดท้ายที่ต้องมาลงนาม *"
+            complianceTarget="contract_signing_deadline"
+          >
+            <div className="space-y-1">
+              <ChronologicalDatePicker
+                stepNumber={7}
+                chronologicalCtx={chronologicalCtx}
+                value={signingDeadline}
+                onChange={(v) => onContractNoticeChange({ contract_signing_deadline: v })}
+                disabled={readOnly}
+                showChronologicalHint={false}
+              />
+              {signingDeadline && (
+                <p className="text-xs text-muted-foreground">
+                  📅 {formatThaiDate(signingDeadline)}
+                </p>
+              )}
+              {contractorReceivedDate && (
+                <p className="text-xs text-muted-foreground">
+                  ระบบคำนวณอัตโนมัติ +{STEP7_CONTRACT_SIGNING_DEADLINE_WORKDAYS} วันทำการจากวันที่ได้รับหนังสือเชิญ
+                  — แก้ไขได้ด้วยตนเองในกรณีโครงการเร่งด่วน
+                </p>
+              )}
+            </div>
           </FieldRow>
         </div>
 
         <div className="space-y-4 pt-1 border-t border-border/60">
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-            กลุ่มที่ 3: ข้อมูลผู้ดูแลและบันทึกเพิ่มเติม
+            เอกสารหลักฐาน
           </p>
+          <FieldRow label="หนังสือแจ้งให้มาลงนามในสัญญา *">
+            <InlineDocUpload
+              project={docBinder.project}
+              stepNumber={docBinder.stepNumber}
+              documentType={STEP7_DOC.CONTRACT_NOTICE_LETTER}
+              label={STEP7_CONTRACT_NOTICE_LETTER_UPLOAD_LABEL}
+              existing={docBinder.docs}
+              onChange={docBinder.onDocsChange}
+            />
+          </FieldRow>
+          <FieldRow label="หลักฐานการส่ง/ใบตอบรับไปรษณีย์">
+            <InlineDocUpload
+              project={docBinder.project}
+              stepNumber={docBinder.stepNumber}
+              documentType={STEP7_DOC.CONTRACT_NOTICE_DELIVERY_PROOF}
+              label={STEP7_CONTRACT_NOTICE_DELIVERY_PROOF_UPLOAD_LABEL}
+              existing={docBinder.docs}
+              onChange={docBinder.onDocsChange}
+            />
+          </FieldRow>
+        </div>
+
+        <div className="space-y-4 pt-1 border-t border-border/60">
           <ResponsibleOfficerField
             stepNumber={7}
             value={responsibleName}
@@ -4308,122 +4487,218 @@ export function Step7ContractNoticeForm({
 }
 
 type Step8ContractGuaranteeFormProps = {
-  manualChecklist: Record<string, boolean>;
-  onManualChange: (key: string, checked: boolean) => void;
-  autoCheckStates: Record<string, boolean>;
   contractExecution: Step8ContractExecution;
   /** ราคาที่ตกลงซื้อหรือจ้างจริงจากขั้นตอนที่ 4 — ใช้เป็นค่าเริ่มต้นเมื่อยังไม่มีมูลค่าสัญญา */
   defaultContractAmountFromStep4?: number | null;
   onContractExecutionChange: (patch: Partial<Step8ContractExecution>) => void;
+  winningBidderName: string;
+  winningContractAmount: number | null;
+  step7SigningDeadlineISO: string;
   earliestSigningISO: string;
   appealDeadlineISO: string;
   readOnly?: boolean;
   docBinder: SmartChecklistDocBinder;
-  responsibleName: string;
-  onResponsibleNameChange: (value: string) => void;
-  step1ResponsibleDefault?: string;
-  note: string;
-  onNoteChange: (value: string) => void;
 } & ChronologicalFormProps;
 
-/** ขั้นตอนที่ 8 — ตรวจสอบหลักประกันสัญญาและจัดทำสัญญา */
+/** ขั้นตอนที่ 8 — ตรวจสอบหลักประกันและลงนามในสัญญา */
 export function Step8ContractGuaranteeForm({
-  manualChecklist,
-  onManualChange,
-  autoCheckStates,
   contractExecution,
   defaultContractAmountFromStep4 = null,
   onContractExecutionChange,
+  winningBidderName,
+  winningContractAmount,
+  step7SigningDeadlineISO,
   earliestSigningISO,
   appealDeadlineISO,
   readOnly,
   docBinder,
-  responsibleName,
-  onResponsibleNameChange,
-  step1ResponsibleDefault = "",
-  note,
-  onNoteChange,
   chronologicalCtx,
 }: Step8ContractGuaranteeFormProps) {
+  console.log(
+    "🛡️ [ขั้นตอนที่ 8 สตง. COMPLIANT]: Terminologies, Stamp Duty Warnings, Security Calc, and Date Validation Locks deployed successfully.",
+  );
+
   const signedDate = contractExecution?.contract_signed_date ?? "";
   const storedContractAmount = contractExecution?.contract_amount;
   const effectiveContractAmount =
     storedContractAmount != null && storedContractAmount > 0
       ? storedContractAmount
-      : defaultContractAmountFromStep4 != null && defaultContractAmountFromStep4 > 0
-        ? defaultContractAmountFromStep4
-        : null;
+      : winningContractAmount != null && winningContractAmount > 0
+        ? winningContractAmount
+        : defaultContractAmountFromStep4 != null && defaultContractAmountFromStep4 > 0
+          ? defaultContractAmountFromStep4
+          : null;
   const recommendedGuarantee = computeRecommendedGuaranteeAmount(effectiveContractAmount);
-  const showStep4SourceHint =
-    defaultContractAmountFromStep4 != null &&
-    defaultContractAmountFromStep4 > 0 &&
-    effectiveContractAmount === defaultContractAmountFromStep4;
+  const guaranteeAmount = contractExecution?.guarantee_amount ?? null;
+  const showGuaranteeWarning = isStep8GuaranteeBelowMinimum(
+    guaranteeAmount,
+    effectiveContractAmount,
+  );
+  const showDeadlineHardBlock = isStep8SignedOutsideAllowedRange(
+    signedDate,
+    earliestSigningISO,
+    step7SigningDeadlineISO,
+  );
+  const uploadedDocTypes = docBinder.docs.map((d) => d.document_type);
+  const hasSignedContractDoc = hasStep8SignedContractDoc(uploadedDocTypes);
+  const hasGuaranteeDoc = hasStep8GuaranteeVerificationDoc(uploadedDocTypes);
 
   useEffect(() => {
     if (readOnly) return;
     if (storedContractAmount != null && storedContractAmount > 0) return;
-    if (defaultContractAmountFromStep4 == null || defaultContractAmountFromStep4 <= 0) return;
-    onContractExecutionChange({ contract_amount: defaultContractAmountFromStep4 });
+    const seed =
+      winningContractAmount != null && winningContractAmount > 0
+        ? winningContractAmount
+        : defaultContractAmountFromStep4;
+    if (seed == null || seed <= 0) return;
+    onContractExecutionChange({ contract_amount: seed });
   }, [
     readOnly,
     storedContractAmount,
+    winningContractAmount,
     defaultContractAmountFromStep4,
     onContractExecutionChange,
   ]);
+
   return (
     <div className="space-y-4 max-w-2xl">
-      <SmartChecklist
-        stepNumber={8}
-        stepLabel="ขั้นตอนที่ 8"
-        items={getSmartChecklistItems(8)}
-        manualChecklist={manualChecklist ?? {}}
-        autoStates={autoCheckStates ?? {}}
-        onManualChange={onManualChange}
-        readOnly={readOnly}
-        docBinder={docBinder}
-      />
+      {showDeadlineHardBlock && (
+        <div
+          role="alert"
+          className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700 leading-relaxed"
+        >
+          {STEP8_SIGNED_OUTSIDE_RANGE_MSG}
+        </div>
+      )}
+
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
+        <p className="text-sm font-medium text-foreground">
+          ข้อมูลคู่สัญญาจากขั้นตอนก่อนหน้า (อ่านอย่างเดียว)
+        </p>
+        <FieldRow label="ชื่อผู้เสนอราคาที่ชนะการเสนอราคา">
+          <input
+            type="text"
+            readOnly
+            value={winningBidderName?.trim() || "— ยังไม่พบข้อมูลจากขั้นตอนก่อนหน้า —"}
+            className={`${inputCls} bg-muted/50 cursor-not-allowed`}
+            aria-readonly
+          />
+        </FieldRow>
+        <FieldRow label="วงเงินราคาที่ตกลงซื้อจ้าง (บาท)">
+          <input
+            type="text"
+            readOnly
+            value={
+              effectiveContractAmount != null
+                ? `${formatCurrencyDisplay(effectiveContractAmount)} บาท`
+                : "— ยังไม่พบข้อมูลจากขั้นตอนก่อนหน้า —"
+            }
+            className={`${inputCls} bg-muted/50 cursor-not-allowed tabular-nums`}
+            aria-readonly
+          />
+        </FieldRow>
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          ข้อมูลดึงจากขั้นตอนที่ 4–5 โดยอัตโนมัติ — กรอบเวลาลงนามดูได้จากไทม์ไลน์ด้านบน
+        </p>
+      </div>
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-5">
-        <p className="text-sm font-medium text-foreground">
-          ข้อมูลลงนามสัญญาและหลักประกัน — ขั้นตอนที่ 8
-        </p>
+        <p className="text-sm font-medium text-foreground">{STEP8_FORM_HEADER}</p>
 
         <div className="space-y-4">
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-            กลุ่มที่ 1: ข้อมูลการลงนามสัญญา
+            ระบบคำนวณหลักประกันสัญญา
           </p>
-          <FieldRow label="เลขที่สัญญา" tooltipKey="step8.contract_no">
-            <input
-              type="text"
-              value={contractExecution?.contract_no ?? ""}
-              onChange={(e) => onContractExecutionChange({ contract_no: e.target.value })}
+          <FieldRow label="ประเภทหลักประกัน *">
+            <select
+              value={contractExecution?.guarantee_type ?? ""}
+              onChange={(e) =>
+                onContractExecutionChange({
+                  guarantee_type: e.target.value as Step8GuaranteeType,
+                })
+              }
               disabled={readOnly}
               className={inputCls}
-              placeholder="เช่น XX/๒๕๖๙"
-            />
+            >
+              <option value="">— เลือกประเภทหลักประกัน —</option>
+              {STEP8_GUARANTEE_TYPE_UI_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
           </FieldRow>
-          <FieldRow label="วันที่ลงนามในสัญญา" tooltipKey="step8.contract_signed_date">
+          <FieldRow label="มูลค่าหลักประกันสัญญา (บาท) *">
+            <div className="space-y-2">
+              <CurrencyInput
+                value={guaranteeAmount}
+                onChange={(amount) =>
+                  onContractExecutionChange({
+                    guarantee_amount:
+                      amount != null && amount > 0 ? amount : null,
+                  })
+                }
+                readOnly={readOnly}
+                className={inputCls}
+                showFormattedHint
+              />
+              {recommendedGuarantee != null && (
+                <p className="text-xs text-muted-foreground">
+                  ยอดขั้นต่ำตามระเบียบ (5%): {formatBaht(recommendedGuarantee)} บาท
+                </p>
+              )}
+              {showGuaranteeWarning && (
+                <div
+                  role="alert"
+                  className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 leading-relaxed"
+                >
+                  {STEP8_GUARANTEE_BELOW_MINIMUM_MSG}
+                </div>
+              )}
+            </div>
+          </FieldRow>
+        </div>
+
+        <div className="space-y-4 pt-1 border-t border-border/60">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+            ตรวจจับวันลงนามสัญญา
+          </p>
+          <FieldRow label="วันที่ลงนามสัญญาจริง *" tooltipKey="step8.contract_signed_date">
             <div className="space-y-1">
               <ChronologicalDatePicker
                 stepNumber={8}
                 chronologicalCtx={chronologicalCtx}
+                skipChronologicalLock
+                minDate={earliestSigningISO || undefined}
+                maxDate={step7SigningDeadlineISO || undefined}
                 additionalMinDates={[earliestSigningISO]}
                 value={signedDate}
                 onChange={(v) => onContractExecutionChange({ contract_signed_date: v })}
                 disabled={readOnly}
-                onInvalidDate={() =>
-                  toast.error(
-                    earliestSigningISO
-                      ? `วันที่ลงนามในสัญญาต้องไม่ก่อนวันที่ ${formatThaiDateSlash(earliestSigningISO)}`
-                      : "วันที่ลงนามในสัญญาไม่ถูกต้อง",
-                  )
-                }
+                onInvalidDate={() => {
+                  if (
+                    earliestSigningISO &&
+                    step7SigningDeadlineISO
+                  ) {
+                    toast.error(
+                      `วันที่ลงนามสัญญาจริงต้องอยู่ระหว่าง ${formatThaiDateSlash(earliestSigningISO)} ถึง ${formatThaiDateSlash(step7SigningDeadlineISO)}`,
+                    );
+                  } else {
+                    toast.error("วันที่ลงนามในสัญญาไม่ถูกต้อง");
+                  }
+                }}
                 showChronologicalHint={false}
               />
               {signedDate && (
                 <p className="text-xs text-muted-foreground">📅 {formatThaiDate(signedDate)}</p>
               )}
-              {earliestSigningISO && (
+              {earliestSigningISO && step7SigningDeadlineISO && (
+                <p className="text-xs text-muted-foreground">
+                  ล็อกช่วงวันที่: {formatThaiDateSlash(earliestSigningISO)} ถึง{" "}
+                  {formatThaiDateSlash(step7SigningDeadlineISO)}
+                </p>
+              )}
+              {earliestSigningISO && !step7SigningDeadlineISO && (
                 <p className="text-xs text-muted-foreground">
                   เลือกได้ตั้งแต่ {formatThaiDateSlash(earliestSigningISO)} เป็นต้นไป
                   {appealDeadlineISO && (
@@ -4436,109 +4711,37 @@ export function Step8ContractGuaranteeForm({
               )}
             </div>
           </FieldRow>
-          <FieldRow label="มูลค่าสัญญาจัดซื้อจัดจ้างจริง (บาท)">
-            <div className="space-y-1">
-              <CurrencyInput
-                value={effectiveContractAmount}
-                onChange={(contract_amount) =>
-                  onContractExecutionChange({
-                    contract_amount: contract_amount != null && contract_amount > 0 ? contract_amount : null,
-                  })
-                }
-                readOnly={readOnly}
-                className={inputCls}
-                showFormattedHint
-              />
-              {effectiveContractAmount != null && effectiveContractAmount > 0 && (
-                <p className="text-xs text-muted-foreground">
-                  {formatBaht(effectiveContractAmount)} บาท
-                  {showStep4SourceHint && (
-                    <span className="block mt-0.5">
-                      ดึงจากราคาที่ตกลงซื้อหรือจ้างจริง (ขั้นตอนที่ 4) — แก้ไขได้หากมีการต่อรองราคาก่อนลงนาม
-                    </span>
-                  )}
-                </p>
-              )}
-            </div>
-          </FieldRow>
         </div>
 
         <div className="space-y-4 pt-1 border-t border-border/60">
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-            กลุ่มที่ 2: รายละเอียดหลักประกันสัญญา (Contract Security)
+            หลักฐานการลงนามและหลักประกัน (บังคับ)
           </p>
-          <FieldRow label="ประเภทหลักประกัน">
-            <select
-              value={contractExecution?.guarantee_type ?? ""}
-              onChange={(e) =>
-                onContractExecutionChange({
-                  guarantee_type: e.target.value as Step8GuaranteeType,
-                })
-              }
-              disabled={readOnly}
-              className={inputCls}
-            >
-              <option value="">— เลือกประเภทหลักประกัน —</option>
-              {STEP8_GUARANTEE_TYPE_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-          </FieldRow>
-          <FieldRow label="มูลค่าหลักประกันสัญญา (บาท)">
-            <div className="space-y-1">
-              <CurrencyInput
-                value={contractExecution?.guarantee_amount ?? null}
-                onChange={(guarantee_amount) =>
-                  onContractExecutionChange({
-                    guarantee_amount:
-                      guarantee_amount != null && guarantee_amount > 0 ? guarantee_amount : null,
-                  })
-                }
-                readOnly={readOnly}
-                className={inputCls}
-                showFormattedHint
-              />
-              {recommendedGuarantee != null && (
-                <p className="text-xs text-muted-foreground">
-                  💡 แนะนำขั้นต่ำตามระเบียบ: {formatBaht(recommendedGuarantee)} บาท (5% ของมูลค่าสัญญา)
-                </p>
-              )}
-            </div>
-          </FieldRow>
-          <FieldRow label="เลขที่เอกสารหลักประกัน" tooltipKey="step8.guarantee_document_no">
-            <input
-              type="text"
-              value={contractExecution?.guarantee_document_no ?? ""}
-              onChange={(e) =>
-                onContractExecutionChange({ guarantee_document_no: e.target.value })
-              }
-              disabled={readOnly}
-              className={inputCls}
-              placeholder="เช่น เลขที่หนังสือ BG"
+          <FieldRow label="ร่างสัญญาฉบับลงนามแล้ว (PDF) *">
+            <InlineDocUpload
+              project={docBinder.project}
+              stepNumber={docBinder.stepNumber}
+              documentType={STEP8_DOC.SIGNED_CONTRACT}
+              label="📎 อัปโหลดร่างสัญญาฉบับลงนามแล้ว (PDF)"
+              existing={docBinder.docs}
+              onChange={docBinder.onDocsChange}
             />
+            {hasSignedContractDoc && (
+              <p className="text-xs text-emerald-700 mt-1">✓ อัปโหลดร่างสัญญาฉบับลงนามแล้ว</p>
+            )}
           </FieldRow>
-        </div>
-
-        <div className="space-y-4 pt-1 border-t border-border/60">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-            กลุ่มที่ 3: ข้อมูลผู้บันทึก
-          </p>
-          <ResponsibleOfficerField
-            stepNumber={8}
-            value={responsibleName}
-            onChange={onResponsibleNameChange}
-            step1Default={step1ResponsibleDefault}
-          />
-          <FieldRow label="หมายเหตุ">
-            <textarea
-              value={note}
-              onChange={(e) => onNoteChange(e.target.value)}
-              rows={4}
-              disabled={readOnly}
-              className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
+          <FieldRow label="ไฟล์หลักประกันสัญญา (PDF) *">
+            <InlineDocUpload
+              project={docBinder.project}
+              stepNumber={docBinder.stepNumber}
+              documentType={STEP8_DOC.GUARANTEE_VERIFICATION}
+              label="📎 อัปโหลดไฟล์หลักประกันสัญญา (PDF)"
+              existing={docBinder.docs}
+              onChange={docBinder.onDocsChange}
             />
+            {hasGuaranteeDoc && (
+              <p className="text-xs text-emerald-700 mt-1">✓ อัปโหลดไฟล์หลักประกันสัญญาแล้ว</p>
+            )}
           </FieldRow>
         </div>
       </div>
@@ -4866,9 +5069,7 @@ export function Step9DetailForm({
       />
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-5">
-        <p className="text-sm font-medium text-foreground">
-          ข้อมูลสาระสำคัญสัญญา — ขั้นตอนที่ 9
-        </p>
+        <p className="text-sm font-medium text-foreground">{STEP9_FORM_HEADER}</p>
 
         <div className="space-y-4">
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
@@ -5259,6 +5460,10 @@ export function Step10DetailForm({
         readOnly={genericProps.readOnly || isWarrantyPhase}
         docBinder={genericProps.docBinder}
       />
+
+      <div className="rounded-lg border border-border bg-muted/20 p-4">
+        <p className="text-sm font-medium text-foreground">{STEP10_FORM_HEADER}</p>
+      </div>
 
       <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 flex flex-wrap items-center justify-between gap-3">
         <div>

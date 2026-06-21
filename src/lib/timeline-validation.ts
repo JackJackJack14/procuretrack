@@ -240,7 +240,17 @@ export function getStep7TimelineDateFields(contractNotice: Step7ContractNotice):
     {
       id: "contract_notice_letter_date",
       iso: contractNotice.contract_notice_letter_date ?? "",
-      label: "วันที่ออกหนังสือแจ้งให้ผู้ชนะมาลงนามในสัญญา",
+      label: "วันที่ในหนังสือเชิญลงนาม",
+    },
+    {
+      id: "contractor_received_date",
+      iso: contractNotice.contractor_received_date ?? "",
+      label: "วันที่ผู้ประกอบการได้รับหนังสือเชิญ",
+    },
+    {
+      id: "contract_signing_deadline",
+      iso: contractNotice.contract_signing_deadline ?? "",
+      label: "กำหนดวันสุดท้ายที่ต้องมาลงนาม",
     },
   ];
 }

@@ -6,15 +6,24 @@ import {
   parseBudgetInput as parseBudgetInputFromCurrency,
   stripCurrencyToNumber,
 } from "@/lib/currency-format";
-import { STEP2_DOC, STEP3_DOC, STEP4_DOC, STEP5_DOC, STEP6_DOC, STEP7_DOC, countStep2MarketQuoteDocsUploaded, hasStep2MarketQuotesDoc } from "@/lib/step-doc-types";
+import {
+  STEP2_DOC,
+  STEP3_DOC,
+  STEP4_DOC,
+  STEP5_DOC,
+  STEP6_DOC,
+  STEP7_DOC,
+  STEP8_DOC,
+  STEP8_DOC_LEGACY,
+  countStep2MarketQuoteDocsUploaded,
+  hasStep2MarketQuotesDoc,
+} from "@/lib/step-doc-types";
 import {
   buildEffectiveChecklist,
   computeAutoChecklistState,
   getSmartChecklistItems,
   getStep6ChecklistItems,
   STEP5_CHECKLIST_ITEMS,
-  STEP7_CHECKLIST_ITEMS,
-  STEP8_CHECKLIST_ITEMS,
   STEP9_CHECKLIST_ITEMS,
   getStep10ChecklistItems,
 } from "@/lib/smart-checklist";
@@ -1614,6 +1623,8 @@ export type Step6FormData = {
 export type Step7ContractNotice = {
   contract_notice_letter_no: string;
   contract_notice_letter_date: string;
+  contractor_received_date: string;
+  contract_signing_deadline: string;
 };
 
 export type Step7FormData = {
@@ -1624,6 +1635,8 @@ export type Step7FormData = {
 export const EMPTY_STEP7_CONTRACT_NOTICE: Step7ContractNotice = {
   contract_notice_letter_no: "",
   contract_notice_letter_date: "",
+  contractor_received_date: "",
+  contract_signing_deadline: "",
 };
 
 /** ประเภทหลักประกันสัญญา — ขั้นตอนที่ 8 */
@@ -1642,6 +1655,16 @@ export const STEP8_GUARANTEE_TYPE_OPTIONS: Array<{
   { value: "cashier_check", label: "เช็คที่ธนาคารเซ็นสั่งจ่าย" },
   { value: "bank_guarantee", label: "หนังสือค้ำประกันธนาคาร (BG)" },
   { value: "finance_guarantee", label: "หนังสือค้ำประกันของบริษัทเงินทุน" },
+];
+
+/** ตัวเลือกประเภทหลักประกันในฟอร์มขั้นตอนที่ 8 (UI) */
+export const STEP8_GUARANTEE_TYPE_UI_OPTIONS: Array<{
+  value: Exclude<Step8GuaranteeType, "">;
+  label: string;
+}> = [
+  { value: "cash", label: "เงินสด" },
+  { value: "cashier_check", label: "แคชเชียร์เช็ค" },
+  { value: "bank_guarantee", label: "หนังสือค้ำประกันธนาคาร (LG)" },
 ];
 
 export function step8GuaranteeTypeLabel(code: Step8GuaranteeType): string {
@@ -4206,7 +4229,10 @@ function step9ContractScheduleHasData(schedule?: Step9ContractSchedule): boolean
 function step7ContractNoticeHasData(notice?: Step7ContractNotice): boolean {
   if (!notice) return false;
   return !!(
-    notice.contract_notice_letter_no?.trim() || notice.contract_notice_letter_date?.trim()
+    notice.contract_notice_letter_no?.trim() ||
+    notice.contract_notice_letter_date?.trim() ||
+    notice.contractor_received_date?.trim() ||
+    notice.contract_signing_deadline?.trim()
   );
 }
 
@@ -4538,45 +4564,55 @@ export type Step7ComplianceIssue = { id: string; message: string };
 export const STEP7_NOTIFICATION_DEADLINE_EXCEEDED_MSG = (deadlineISO: string) =>
   `❌ วันที่ออกหนังสือแจ้งเกิน ${CONTRACT_NOTIFICATION_WORKDAYS} วันทำการตามระเบียบข้อ 161 (เดดไลน์: ${formatThaiDateSlash(deadlineISO)})`;
 
-/** ตรวจความพร้อมก่อนไปขั้นถัดไป — ขั้นตอนที่ 7 (3/3 Checklist + หนังสือแจ้งทำสัญญา) */
+export const STEP7_RECEIVED_BEFORE_LETTER_MSG =
+  "❌ วันที่ได้รับหนังสือเชิญ ห้ามเกิดก่อนวันที่ออกหนังสือเชิญชวน";
+
+/** วันที่ได้รับหนังสือเชิญอยู่ก่อนวันที่ในหนังสือเชิญลงนามหรือไม่ */
+export function isStep7ContractorReceivedBeforeLetterDate(
+  letterDateISO: string,
+  receivedDateISO: string,
+): boolean {
+  const letter = letterDateISO?.trim() ?? "";
+  const received = receivedDateISO?.trim() ?? "";
+  if (!letter || !received) return false;
+  return received < letter;
+}
+
+/** ความสัมพันธ์เชิงเวลาระหว่างวันที่ในหนังสือ vs วันที่ได้รับ — ผ่านเมื่อยังไม่กรอกหรือ received ≥ letter */
+export function isStep7ContractorReceivedDateChronoValid(
+  letterDateISO: string,
+  receivedDateISO: string,
+): boolean {
+  return !isStep7ContractorReceivedBeforeLetterDate(letterDateISO, receivedDateISO);
+}
+
+/** ตรวจความพร้อมก่อนไปขั้นถัดไป — ขั้นตอนที่ 7 (ฟอร์มมาตรฐาน + หนังสือแจ้งทำสัญญา) */
 export function getStep7ComplianceIssues(
   contractNotice: Step7ContractNotice,
-  manualChecklist: Record<string, boolean> | null | undefined,
+  _manualChecklist: Record<string, boolean> | null | undefined,
   opts: {
     responsibleName: string;
     appealDeadlineISO: string;
     notificationDeadlineISO: string;
-    hasDraftContractDoc: boolean;
+    hasContractNoticeLetterDoc: boolean;
     stepDocs?: Array<{ document_type: string }>;
     timelineCtx?: TimelineValidationContext;
   },
-  autoStates?: Record<string, boolean>,
+  _autoStates?: Record<string, boolean>,
 ): Step7ComplianceIssue[] {
   const issues: Step7ComplianceIssue[] = [];
-  const auto =
-    autoStates ??
-    computeAutoChecklistState({
-      stepNumber: 7,
-      step7ContractNotice: contractNotice,
-    });
-  const effective = buildEffectiveChecklist(
-    7,
-    manualChecklist,
-    auto,
-    opts.stepDocs,
-  );
 
   if (!contractNotice?.contract_notice_letter_no?.trim()) {
     issues.push({
       id: "contract_notice_letter_no",
-      message: "กรุณาระบุเลขที่หนังสือแจ้งให้ผู้ชนะมาลงนามในสัญญา",
+      message: "กรุณาระบุเลขที่หนังสือเชิญลงนามในสัญญา",
     });
   }
   const letterDate = contractNotice?.contract_notice_letter_date?.trim() ?? "";
   if (!letterDate) {
     issues.push({
       id: "contract_notice_letter_date",
-      message: "กรุณาระบุวันที่ออกหนังสือแจ้ง",
+      message: "กรุณาระบุวันที่ในหนังสือเชิญลงนาม",
     });
   }
   const appealEnd = opts.appealDeadlineISO?.trim() ?? "";
@@ -4587,7 +4623,7 @@ export function getStep7ComplianceIssues(
   ) {
     issues.push({
       id: "contract_notice_letter_date_min",
-      message: `วันที่ออกหนังสือแจ้งต้องไม่ก่อนวันพ้นระยะอุทธรณ์ (7 วันทำการจากวันประกาศผล — ลงนามได้ตั้งแต่ ${formatThaiDateSlash(
+      message: `วันที่ในหนังสือเชิญลงนามต้องไม่ก่อนวันพ้นกำหนดอุทธรณ์ (ลงนามได้ตั้งแต่ ${formatThaiDateSlash(
         computeContractEarliestFromAppealDeadlineISO(appealEnd),
       )})`,
     });
@@ -4603,23 +4639,34 @@ export function getStep7ComplianceIssues(
       message: STEP7_NOTIFICATION_DEADLINE_EXCEEDED_MSG(notificationDeadline),
     });
   }
-  if (!opts.hasDraftContractDoc) {
+  const receivedDate = contractNotice?.contractor_received_date?.trim() ?? "";
+  if (!receivedDate) {
     issues.push({
-      id: "draft_contract_doc",
-      message: `กรุณาแนบเอกสาร "${STEP7_DOC.DRAFT_CONTRACT}"`,
+      id: "contractor_received_date",
+      message: "กรุณาระบุวันที่ผู้ประกอบการได้รับหนังสือเชิญ",
+    });
+  } else if (
+    letterDate &&
+    isStep7ContractorReceivedBeforeLetterDate(letterDate, receivedDate)
+  ) {
+    issues.push({
+      id: "contractor_received_date_before_letter",
+      message: STEP7_RECEIVED_BEFORE_LETTER_MSG,
     });
   }
-
-  STEP7_CHECKLIST_ITEMS.forEach((item, index) => {
-    if (!effective[item.key]) {
-      const prefix =
-        item.mode === "auto" ? "ระบบตรวจพบยังไม่ครบ (Auto)" : "ยังไม่ได้แนบหลักฐาน";
-      issues.push({
-        id: `checklist-${item.key}`,
-        message: `${prefix} ข้อที่ ${index + 1}: ${item.label}`,
-      });
-    }
-  });
+  const signingDeadline = contractNotice?.contract_signing_deadline?.trim() ?? "";
+  if (!signingDeadline) {
+    issues.push({
+      id: "contract_signing_deadline",
+      message: "กรุณาระบุกำหนดวันสุดท้ายที่ต้องมาลงนาม",
+    });
+  }
+  if (!opts.hasContractNoticeLetterDoc) {
+    issues.push({
+      id: "contract_notice_letter_doc",
+      message: `กรุณาแนบเอกสาร "${STEP7_DOC.CONTRACT_NOTICE_LETTER}"`,
+    });
+  }
 
   if (!opts.responsibleName.trim()) {
     issues.push({
@@ -4745,41 +4792,124 @@ export function computeRecommendedGuaranteeAmount(
   return Math.round(contractAmount * 0.05 * 100) / 100;
 }
 
+export function isStep8GuaranteeBelowMinimum(
+  guaranteeAmount: number | null | undefined,
+  contractAmount: number | null | undefined,
+): boolean {
+  const minimum = computeRecommendedGuaranteeAmount(contractAmount);
+  if (minimum == null) return false;
+  if (guaranteeAmount == null || !Number.isFinite(guaranteeAmount) || guaranteeAmount <= 0) {
+    return false;
+  }
+  return guaranteeAmount < minimum;
+}
+
+export function isStep8SignedPastDeadline(
+  signedDateISO: string,
+  step7SigningDeadlineISO: string,
+): boolean {
+  const signed = signedDateISO?.trim() ?? "";
+  const deadline = step7SigningDeadlineISO?.trim() ?? "";
+  if (!signed || !deadline) return false;
+  return signed > deadline;
+}
+
+export function isStep8SignedBeforeEarliest(
+  signedDateISO: string,
+  earliestSigningISO: string,
+): boolean {
+  const signed = signedDateISO?.trim() ?? "";
+  const earliest = earliestSigningISO?.trim() ?? "";
+  if (!signed || !earliest) return false;
+  return signed < earliest;
+}
+
+export function isStep8SignedOutsideAllowedRange(
+  signedDateISO: string,
+  earliestSigningISO: string,
+  step7SigningDeadlineISO: string,
+): boolean {
+  return (
+    isStep8SignedBeforeEarliest(signedDateISO, earliestSigningISO) ||
+    isStep8SignedPastDeadline(signedDateISO, step7SigningDeadlineISO)
+  );
+}
+
+export function hasStep8SignedContractDoc(documentTypes: string[]): boolean {
+  return documentTypes.some(
+    (t) => t === STEP8_DOC.SIGNED_CONTRACT || t === STEP8_DOC_LEGACY.SIGNED,
+  );
+}
+
+export function hasStep8GuaranteeVerificationDoc(documentTypes: string[]): boolean {
+  return documentTypes.some(
+    (t) =>
+      t === STEP8_DOC.GUARANTEE_VERIFICATION || t === STEP8_DOC_LEGACY.GUARANTEE,
+  );
+}
+
+export const STEP8_FORM_REQUIRED_PROGRESS_TOTAL = 5;
+
+/** ความพร้อมขั้นตอนที่ 8 — 5 ฟิลด์จริงบนฟอร์ม (ไม่รวม Checklist เก่า) */
+export function countStep8FormRequiredProgress(
+  contractExecution: Step8ContractExecution,
+  opts: {
+    earliestSigningISO?: string;
+    step7SigningDeadlineISO?: string;
+    stepDocs?: Array<{ document_type: string }>;
+  },
+): { done: number; total: number } {
+  console.log(
+    "🔧 [BUG FIX STEP 8]: Process percentage logic refactored to match actual form fields. Old checklist states completely removed.",
+  );
+
+  const total = STEP8_FORM_REQUIRED_PROGRESS_TOTAL;
+  let done = 0;
+  const uploadedDocTypes = (opts.stepDocs ?? []).map((d) => d.document_type);
+
+  if (contractExecution?.guarantee_type) done++;
+
+  const guaranteeAmount = contractExecution?.guarantee_amount;
+  if (guaranteeAmount != null && Number.isFinite(guaranteeAmount) && guaranteeAmount > 0) {
+    done++;
+  }
+
+  const signedDate = contractExecution?.contract_signed_date?.trim() ?? "";
+  const earliest = opts.earliestSigningISO?.trim() ?? "";
+  const deadline = opts.step7SigningDeadlineISO?.trim() ?? "";
+  if (
+    signedDate &&
+    !isStep8SignedOutsideAllowedRange(signedDate, earliest, deadline)
+  ) {
+    done++;
+  }
+
+  if (hasStep8SignedContractDoc(uploadedDocTypes)) done++;
+  if (hasStep8GuaranteeVerificationDoc(uploadedDocTypes)) done++;
+
+  return { done, total };
+}
+
 export type Step8ComplianceIssue = { id: string; message: string };
 
-/** ตรวจความพร้อมก่อนไปขั้นถัดไป — ขั้นตอนที่ 8 (3/3 Checklist) */
+/** ตรวจความพร้อมก่อนไปขั้นถัดไป — ขั้นตอนที่ 8 (ฟอร์ม + Evidence Validation) */
 export function getStep8ComplianceIssues(
   contractExecution: Step8ContractExecution,
-  manualChecklist: Record<string, boolean> | null | undefined,
+  _manualChecklist: Record<string, boolean> | null | undefined,
   opts: {
-    responsibleName: string;
     earliestSigningISO: string;
     appealDeadlineISO: string;
+    step7SigningDeadlineISO?: string;
     stepDocs?: Array<{ document_type: string }>;
     timelineCtx?: TimelineValidationContext;
   },
-  autoStates?: Record<string, boolean>,
 ): Step8ComplianceIssue[] {
   const issues: Step8ComplianceIssue[] = [];
-  const auto =
-    autoStates ??
-    computeAutoChecklistState({
-      stepNumber: 8,
-      step8ContractExecution: contractExecution,
-    });
-  const effective = buildEffectiveChecklist(
-    8,
-    manualChecklist,
-    auto,
-    opts.stepDocs,
-  );
+  const uploadedDocTypes = (opts.stepDocs ?? []).map((d) => d.document_type);
 
-  if (!contractExecution?.contract_no?.trim()) {
-    issues.push({ id: "contract_no", message: "กรุณาระบุเลขที่สัญญา" });
-  }
   const signedDate = contractExecution?.contract_signed_date?.trim() ?? "";
   if (!signedDate) {
-    issues.push({ id: "contract_signed_date", message: "กรุณาระบุวันที่ลงนามในสัญญา" });
+    issues.push({ id: "contract_signed_date", message: "กรุณาระบุวันที่ลงนามสัญญาจริง" });
   }
   const appealEnd = opts.appealDeadlineISO?.trim() ?? "";
   if (signedDate && appealEnd && isContractActionBeforeAppealPeriodEnds(signedDate, appealEnd)) {
@@ -4790,11 +4920,25 @@ export function getStep8ComplianceIssues(
       )})`,
     });
   }
+  const step7Deadline = opts.step7SigningDeadlineISO?.trim() ?? "";
+  const earliestSigning = opts.earliestSigningISO?.trim() ?? "";
+  if (signedDate && earliestSigning && isStep8SignedBeforeEarliest(signedDate, earliestSigning)) {
+    issues.push({
+      id: "contract_signed_date_earliest",
+      message: `วันที่ลงนามสัญญาจริงต้องไม่ก่อนวันที่เริ่มลงนามในสัญญาได้ (${formatThaiDateSlash(earliestSigning)})`,
+    });
+  }
+  if (signedDate && step7Deadline && isStep8SignedPastDeadline(signedDate, step7Deadline)) {
+    issues.push({
+      id: "contract_signed_date_step7_deadline",
+      message: `วันที่ลงนามสัญญาจริงต้องไม่เกินกำหนดวันสุดท้ายที่ต้องมาลงนามจากขั้นตอนที่ 7 (${formatThaiDateSlash(step7Deadline)})`,
+    });
+  }
   const contractAmount = contractExecution?.contract_amount;
   if (contractAmount == null || !Number.isFinite(contractAmount) || contractAmount <= 0) {
     issues.push({
       id: "contract_amount",
-      message: "กรุณาระบุมูลค่าสัญญาจัดซื้อจัดจ้างจริง (บาท)",
+      message: "ยังไม่พบวงเงินราคาที่ตกลงซื้อจ้างจากขั้นตอนก่อนหน้า",
     });
   }
   if (!contractExecution?.guarantee_type) {
@@ -4807,28 +4951,17 @@ export function getStep8ComplianceIssues(
       message: "กรุณาระบุมูลค่าหลักประกันสัญญา (บาท)",
     });
   }
-  if (!contractExecution?.guarantee_document_no?.trim()) {
+
+  if (!hasStep8SignedContractDoc(uploadedDocTypes)) {
     issues.push({
-      id: "guarantee_document_no",
-      message: "กรุณาระบุเลขที่เอกสารหลักประกัน",
+      id: "signed_contract_doc",
+      message: "กรุณาอัปโหลดร่างสัญญาฉบับลงนามแล้ว",
     });
   }
-
-  STEP8_CHECKLIST_ITEMS.forEach((item, index) => {
-    if (!effective[item.key]) {
-      const prefix =
-        item.mode === "auto" ? "ระบบตรวจพบยังไม่ครบ (Auto)" : "ยังไม่ได้แนบหลักฐาน";
-      issues.push({
-        id: `checklist-${item.key}`,
-        message: `${prefix} ข้อที่ ${index + 1}: ${item.label}`,
-      });
-    }
-  });
-
-  if (!opts.responsibleName.trim()) {
+  if (!hasStep8GuaranteeVerificationDoc(uploadedDocTypes)) {
     issues.push({
-      id: "responsible_officer",
-      message: "กรุณาระบุเจ้าหน้าที่ผู้รับผิดชอบโครงการ",
+      id: "guarantee_verification_doc",
+      message: "กรุณาอัปโหลดไฟล์หลักประกันสัญญา",
     });
   }
 
@@ -4849,11 +4982,9 @@ export function isStep8ReadyForNext(
   contractExecution: Step8ContractExecution,
   manualChecklist: Record<string, boolean> | null | undefined,
   opts: Parameters<typeof getStep8ComplianceIssues>[2],
-  autoStates?: Record<string, boolean>,
+  _autoStates?: Record<string, boolean>,
 ): boolean {
-  return (
-    getStep8ComplianceIssues(contractExecution, manualChecklist, opts, autoStates).length === 0
-  );
+  return getStep8ComplianceIssues(contractExecution, manualChecklist, opts).length === 0;
 }
 
 function parseLocalISODate(iso: string): Date | null {

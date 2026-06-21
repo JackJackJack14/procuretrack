@@ -26,8 +26,10 @@ export type ChronologicalDatePickerProps = Omit<ThaiDatePickerProps, "minDate"> 
   evaluationApprovalDate?: string | null;
   /** แสดงคำอธิบายวันที่เลือกได้ตั้งแต่... */
   showChronologicalHint?: boolean;
-  /** ปิดการล็อกข้ามด่าน (ใช้เฉพาะกรณีพิเศษ) */
+  /** ปิดการล็อกข้ามขั้นตอน (ใช้เฉพาะกรณีพิเศษ) */
   skipChronologicalLock?: boolean;
+  /** วันที่สูงสุดที่เลือกได้ (yyyy-mm-dd) */
+  maxDate?: string | null;
 };
 
 export function ChronologicalDatePicker({
@@ -40,6 +42,7 @@ export function ChronologicalDatePicker({
   evaluationApprovalDate,
   showChronologicalHint = true,
   skipChronologicalLock = false,
+  maxDate,
   disabled,
   ...pickerProps
 }: ChronologicalDatePickerProps) {
@@ -74,6 +77,7 @@ export function ChronologicalDatePicker({
       <ThaiDatePicker
         {...pickerProps}
         minDate={effectiveMin}
+        maxDate={maxDate?.trim() || undefined}
         disabled={disabled}
       />
       {showChronologicalHint &&

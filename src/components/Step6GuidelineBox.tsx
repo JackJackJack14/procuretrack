@@ -1,32 +1,119 @@
 import {
-  STEP6_CONTRACT_EARLIEST_HINT,
-  STEP6_GUIDELINE_DURATION,
-  STEP6_GUIDELINE_TODO,
-  STEP6_GUIDELINE_WARNINGS,
+  formatStep6AppealHolidayBridgeLabel,
+  STEP6_GUIDELINE_ACTION_ITEMS,
+  STEP6_GUIDELINE_SCHEDULE_STATIC_ITEMS,
+  STEP6_GUIDELINE_WARNING,
+  STEP6_SCHEDULE_INCOMPLETE_MSG,
 } from "@/lib/step6-guideline";
 import {
+  APPEAL_PERIOD_WORKDAYS,
   computeAppealDeadlineISO,
   computeContractEarliestISO,
 } from "@/lib/workdays";
-import { formatThaiDate, formatThaiDateSlash } from "@/lib/utils";
-
-function GuidelineBulletList({ items }: { items: readonly string[] }) {
-  return (
-    <ul className="mt-2 space-y-1.5 text-sm text-foreground/90 leading-relaxed">
-      {items.map((item) => (
-        <li key={item} className="flex gap-2">
-          <span className="text-muted-foreground shrink-0">•</span>
-          <span>{item}</span>
-        </li>
-      ))}
-    </ul>
-  );
-}
+import { formatThaiDateSlash } from "@/lib/utils";
 
 type Props = {
   /** วันที่ลงนามในประกาศผู้ชนะ — จากขั้นตอนที่ 5 (yyyy-mm-dd) */
   winnerAnnouncementDate?: string | null;
 };
+
+type Step6TimelineTrackProps = {
+  announcementISO: string;
+  appealDeadlineISO: string;
+  contractEarliestISO: string;
+};
+
+function Step6TimelineTrack({
+  announcementISO,
+  appealDeadlineISO,
+  contractEarliestISO,
+}: Step6TimelineTrackProps) {
+  console.log(
+    "🎨 [STEP 6 TIMELINE TRACK]: Successfully upgraded Step 6 timeline to visual node component.",
+  );
+
+  const holidayBridgeLabel = formatStep6AppealHolidayBridgeLabel(
+    appealDeadlineISO,
+    contractEarliestISO,
+  );
+
+  return (
+    <div className="mt-4 space-y-0">
+      <div className="flex gap-4">
+        <div className="flex flex-col items-center shrink-0 w-5">
+          <span
+            className="h-3.5 w-3.5 rounded-full bg-slate-500 ring-4 ring-slate-100"
+            aria-hidden
+          />
+          <span className="flex-1 w-0.5 min-h-[2.5rem] bg-gradient-to-b from-slate-400 to-blue-400 my-1" />
+        </div>
+        <div className="pb-5">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            จุดเริ่มต้น (Step 5)
+          </p>
+          <p className="text-sm font-semibold text-slate-800 mt-0.5">
+            วันที่แจ้งผลให้ผู้เสนอราคาทราบ (Step 5)
+          </p>
+          <p className="text-lg font-bold text-slate-700 tabular-nums mt-1">
+            {formatThaiDateSlash(announcementISO)}
+          </p>
+        </div>
+      </div>
+
+      <div className="flex gap-4 ml-0.5">
+        <div className="flex flex-col items-center shrink-0 w-4">
+          <span className="text-[10px] font-bold text-blue-600 bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5 whitespace-nowrap">
+            +{APPEAL_PERIOD_WORKDAYS} วันทำการ
+          </span>
+          <span className="flex-1 w-0.5 min-h-[1.5rem] bg-blue-300 my-1" />
+        </div>
+      </div>
+
+      <div className="flex gap-4">
+        <div className="flex flex-col items-center shrink-0 w-5">
+          <span
+            className="h-3.5 w-3.5 rounded-full bg-blue-500 ring-4 ring-blue-100"
+            aria-hidden
+          />
+          <span className="flex-1 w-0.5 min-h-[2.5rem] bg-gradient-to-b from-blue-400 to-emerald-400 my-1" />
+        </div>
+        <div className="pb-5">
+          <p className="text-sm font-semibold text-slate-800 mt-0.5">📅 วันสิ้นสุดระยะอุทธรณ์</p>
+          <p className="text-lg font-bold text-blue-700 tabular-nums mt-1">
+            {formatThaiDateSlash(appealDeadlineISO)}
+          </p>
+        </div>
+      </div>
+
+      <div className="flex gap-4 ml-0.5 pb-1">
+        <div className="flex flex-col items-center shrink-0 w-4">
+          <span className="text-[10px] font-bold text-slate-600 bg-slate-100 border border-slate-200 rounded px-1.5 py-0.5 whitespace-nowrap">
+            {holidayBridgeLabel}
+          </span>
+          <span className="flex-1 w-0.5 min-h-[1.5rem] bg-emerald-300 my-1" />
+        </div>
+      </div>
+
+      <div className="flex gap-4">
+        <div className="flex flex-col items-center shrink-0 w-5">
+          <span
+            className="h-3.5 w-3.5 rounded-full bg-emerald-500 ring-4 ring-emerald-100"
+            aria-hidden
+          />
+        </div>
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            จุดปลายทาง
+          </p>
+          <p className="text-sm font-semibold text-slate-800 mt-0.5">วันที่เริ่มลงนามในสัญญาได้</p>
+          <p className="text-lg font-bold text-emerald-700 tabular-nums mt-1">
+            {formatThaiDateSlash(contractEarliestISO)}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function Step6GuidelineBox({ winnerAnnouncementDate }: Props) {
   const announcementISO = winnerAnnouncementDate?.trim() ?? "";
@@ -36,76 +123,43 @@ export function Step6GuidelineBox({ winnerAnnouncementDate }: Props) {
   const contractEarliestISO = announcementISO
     ? computeContractEarliestISO(announcementISO)
     : "";
+  const hasScheduleDates =
+    !!announcementISO && !!appealDeadlineISO && !!contractEarliestISO;
 
   return (
-    <div
-      className="rounded-lg p-4 mb-4 space-y-4"
-      style={{
-        backgroundColor: "#EFF6FF",
-        borderLeft: "4px solid #2563EB",
-      }}
-    >
-      <section>
-        <h3 className="font-semibold text-foreground text-sm">📋 คุณต้องทำในขั้นตอนนี้</h3>
-        <GuidelineBulletList items={STEP6_GUIDELINE_TODO} />
+    <div className="mb-4 space-y-4">
+      <section className="rounded-lg border border-slate-200 bg-slate-50 border-l-4 border-l-blue-500 p-4 shadow-sm">
+        <h3 className="font-semibold text-slate-900 text-sm">📘 คุณต้องทำในขั้นตอนนี้</h3>
+        <ul className="mt-3 space-y-2 text-sm text-slate-700 leading-relaxed">
+          {STEP6_GUIDELINE_ACTION_ITEMS.map((item) => (
+            <li key={item}>{item}</li>
+          ))}
+        </ul>
       </section>
 
-      <section className="rounded-md border border-blue-200/80 bg-white/60 px-3 py-3">
-        <h3 className="font-semibold text-foreground text-sm">⏱ ระยะเวลา</h3>
-        <GuidelineBulletList items={STEP6_GUIDELINE_DURATION} />
-      </section>
-
-      <section className="rounded-md border border-blue-200/60 bg-white/50 px-3 py-3 space-y-1">
-        <h3 className="font-semibold text-foreground text-sm">📅 วันสิ้นสุดระยะอุทธรณ์</h3>
-        {announcementISO && appealDeadlineISO ? (
-          <>
-            <p className="text-sm text-foreground/90">
-              <span className="font-medium">{formatThaiDate(appealDeadlineISO)}</span>
-              <span className="text-muted-foreground">
-                {" "}
-                ({formatThaiDateSlash(appealDeadlineISO)})
-              </span>
-            </p>
-            <p className="text-xs text-muted-foreground leading-relaxed">
-              คำนวณจากวันที่แจ้งผลให้ผู้เสนอราคาทราบใน Step 5 (
-              {formatThaiDateSlash(announcementISO)}) + 7 วันทำการ ไม่นับวันหยุดราชการ
-            </p>
-            {contractEarliestISO && (
-              <div className="mt-2">
-                <p className="text-sm font-medium text-foreground">วันที่เริ่มลงนามในสัญญาได้</p>
-                <p className="text-sm text-foreground/90 mt-1">
-                  <span className="font-medium">{formatThaiDateSlash(contractEarliestISO)}</span>
-                  <span className="text-muted-foreground">
-                    {" "}
-                    ({formatThaiDate(contractEarliestISO)})
-                  </span>
-                </p>
-                <p className="text-gray-400 text-xs mt-1">{STEP6_CONTRACT_EARLIEST_HINT}</p>
-              </div>
-            )}
-          </>
+      <section className="rounded-lg border border-slate-200 bg-slate-50 border-l-4 border-l-green-500 p-4 shadow-sm">
+        <h3 className="font-semibold text-slate-900 text-sm">⏱ ระยะเวลาและกรอบกำหนดการ</h3>
+        <ul className="mt-3 space-y-2 text-sm text-slate-700 leading-relaxed">
+          {STEP6_GUIDELINE_SCHEDULE_STATIC_ITEMS.map((item) => (
+            <li key={item}>{item}</li>
+          ))}
+        </ul>
+        {hasScheduleDates ? (
+          <Step6TimelineTrack
+            announcementISO={announcementISO}
+            appealDeadlineISO={appealDeadlineISO}
+            contractEarliestISO={contractEarliestISO}
+          />
         ) : (
-          <p className="text-sm text-muted-foreground">
-            กรุณาบันทึกวันที่ลงนามในประกาศผู้ชนะในขั้นตอนที่ 5 ก่อน — ระบบจะคำนวณวันสิ้นสุดอุทธรณ์ให้อัตโนมัติ
+          <p className="mt-3 text-sm text-muted-foreground leading-relaxed">
+            {STEP6_SCHEDULE_INCOMPLETE_MSG}
           </p>
         )}
       </section>
 
-      <section
-        className="rounded-md px-3 py-3"
-        style={{ backgroundColor: "#FFF7ED", border: "1px solid #FDBA74" }}
-      >
-        <h3 className="font-semibold text-sm" style={{ color: "#C2410C" }}>
-          ⚠️ ข้อควรระวัง
-        </h3>
-        <ul className="mt-2 space-y-1.5 text-sm leading-relaxed" style={{ color: "#9A3412" }}>
-          {STEP6_GUIDELINE_WARNINGS.map((item) => (
-            <li key={item} className="flex gap-2">
-              <span className="shrink-0">•</span>
-              <span>{item}</span>
-            </li>
-          ))}
-        </ul>
+      <section className="rounded-lg border border-red-200 bg-red-50 border-l-4 border-l-red-500 p-4 shadow-sm">
+        <h3 className="font-semibold text-sm text-red-700">⚠️ ข้อควรระวังสูงสุด</h3>
+        <p className="mt-2 text-sm leading-relaxed text-red-700">{STEP6_GUIDELINE_WARNING}</p>
       </section>
     </div>
   );

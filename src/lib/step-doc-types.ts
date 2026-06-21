@@ -260,6 +260,12 @@ export const STEP7_DOC = {
 export const STEP7_DRAFT_CONTRACT_UPLOAD_LABEL =
   "📎 แนบไฟล์ร่างสัญญาจ้างก่อสร้าง (PDF)";
 
+export const STEP7_CONTRACT_NOTICE_LETTER_UPLOAD_LABEL =
+  "📎 หนังสือแจ้งให้มาลงนามในสัญญา (PDF)";
+
+export const STEP7_CONTRACT_NOTICE_DELIVERY_PROOF_UPLOAD_LABEL =
+  "📎 หลักฐานการส่ง/ใบตอบรับไปรษณีย์ (PDF/Image)";
+
 /** @deprecated ชื่อเอกสารเก่าใน DB */
 export const STEP7_DOC_LEGACY = {
   /** @deprecated ใช้ STEP7_DOC.DRAFT_CONTRACT */
@@ -269,6 +275,10 @@ export const STEP7_DOC_LEGACY = {
 
 export function isStep7DraftContractDocType(documentType: string): boolean {
   return documentType === STEP7_DOC.DRAFT_CONTRACT;
+}
+
+export function isStep7ContractNoticeLetterDocType(documentType: string): boolean {
+  return documentType === STEP7_DOC.CONTRACT_NOTICE_LETTER;
 }
 
 /** ประเภทเอกสารขั้นตอนที่ 8 — ตรวจหลักประกันและลงนามสัญญา */

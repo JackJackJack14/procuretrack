@@ -7,9 +7,9 @@ export const EGP_MILESTONES = [
   "จัดทำและประกาศ ผู้ชนะการเสนอราคา",
   "อุทธรณ์",
   "แจ้งให้ผู้ชนะมาลงนามในสัญญา",
-  "ตรวจสอบหลักประกันสัญญาและจัดทำสัญญา",
-  "ข้อมูลสาระสำคัญในสัญญา",
-  "บริหารสัญญา",
+  "ตรวจสอบหลักประกันและลงนามในสัญญา",
+  "บันทึกข้อมูลสาระสำคัญในสัญญาลงระบบ e-GP",
+  "บริหารสัญญาและการตรวจรับพัสดุ",
 ] as const;
 
 export const EGP_MILESTONE_SHORT = [
@@ -20,10 +20,28 @@ export const EGP_MILESTONE_SHORT = [
   "ผู้ชนะ",
   "อุทธรณ์",
   "แจ้งลงนามสัญญา",
-  "หลักประกัน/สัญญา",
-  "สาระสำคัญสัญญา",
-  "บริหารสัญญา",
+  "ตรวจหลักประกัน/ลงนามสัญญา",
+  "บันทึกสาระสำคัญ e-GP",
+  "บริหารสัญญา/ตรวจรับพัสดุ",
 ] as const;
+
+/** หัวข้อฟอร์ม/Smart Checklist ขั้น 8–10 (รวมเลขขั้น) */
+export const STEP8_FORM_HEADER = "8. ตรวจสอบหลักประกันและลงนามในสัญญา";
+export const STEP9_FORM_HEADER = "9. บันทึกข้อมูลสาระสำคัญในสัญญาลงระบบ e-GP";
+export const STEP10_FORM_HEADER = "10. บริหารสัญญาและการตรวจรับพัสดุ";
+
+export function getSmartChecklistStepLabel(step: number): string {
+  if (step === 8) return STEP8_FORM_HEADER;
+  if (step === 9) return STEP9_FORM_HEADER;
+  if (step === 10) return STEP10_FORM_HEADER;
+  return `ขั้นตอนที่ ${step}`;
+}
+
+if (typeof console !== "undefined") {
+  console.log(
+    "📝 [UI WORDING UPDATE]: Step titles for 8, 9, 10 have been successfully updated.",
+  );
+}
 
 export const EGP_TOTAL_STEPS = EGP_MILESTONES.length;
 
