@@ -215,7 +215,7 @@ export async function saveConstructionInstallmentFeed(
   project: ProjectDocRef & { id: string },
   steps: StepLike[],
   feed: ConstructionInstallmentFeed,
-  files?: { dailyReport?: File; sitePhoto?: File },
+  files?: { supervisorReport?: File; deliveryLetter?: File },
 ): Promise<boolean> {
   const step10 = steps.find((s) => s.step_number === 10);
   if (!step10?.id) return false;
@@ -250,11 +250,10 @@ export async function saveConstructionInstallmentFeed(
   if (idx >= 0) rows[idx] = patched;
   else rows.push(patched);
 
-  const projectType = resolveProjectWorkType(project as ProjectWorkTypeSource);
   const nextNote = serializeStepNote(userNote, {
     checklist: step10Form.checklist,
     inspectionRows: rows,
-    project_type: projectType,
+    ...(step10Form.project_type != null ? { project_type: step10Form.project_type } : {}),
   });
 
   const { error } = await supabase
@@ -264,20 +263,20 @@ export async function saveConstructionInstallmentFeed(
   if (error) return false;
 
   const n = feed.installment_no;
-  if (files?.dailyReport) {
+  if (files?.supervisorReport) {
     await uploadStepDocument(
       project,
       10,
-      STEP10_INSTALLMENT_DOC.dailyReport(n),
-      files.dailyReport,
+      STEP10_INSTALLMENT_DOC.supervisorReport(n),
+      files.supervisorReport,
     );
   }
-  if (files?.sitePhoto) {
+  if (files?.deliveryLetter) {
     await uploadStepDocument(
       project,
       10,
-      STEP10_INSTALLMENT_DOC.sitePhoto(n),
-      files.sitePhoto,
+      STEP10_INSTALLMENT_DOC.deliveryLetter(n),
+      files.deliveryLetter,
     );
   }
 

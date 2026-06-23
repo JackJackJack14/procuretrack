@@ -153,8 +153,8 @@ function ConstructionPage() {
         steps,
         feed,
         {
-          dailyReport: dailyInputRef.current?.files?.[0],
-          sitePhoto: photoInputRef.current?.files?.[0],
+          supervisorReport: dailyInputRef.current?.files?.[0],
+          deliveryLetter: photoInputRef.current?.files?.[0],
         },
       );
       if (!ok) {
@@ -364,8 +364,8 @@ function ConstructionPage() {
                           <input ref={n === expandedNo ? dailyInputRef : undefined} type="file" accept=".pdf" className="text-xs" />
                         </label>
                         <label className="flex flex-col gap-1 text-sm">
-                          <span className="font-medium">รูปถ่ายหน้างาน</span>
-                          <input ref={n === expandedNo ? photoInputRef : undefined} type="file" accept="image/*,.pdf" className="text-xs" />
+                          <span className="font-medium">หนังสือส่งมอบงาน/ส่งมอบพัสดุ</span>
+                          <input ref={n === expandedNo ? photoInputRef : undefined} type="file" accept=".pdf,image/*" className="text-xs" />
                         </label>
                       </div>
                       <button

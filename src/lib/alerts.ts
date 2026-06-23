@@ -1,6 +1,13 @@
 import { supabase } from "@/integrations/supabase/client";
 import { STEP_DOCS_DETAILED } from "@/lib/procurement";
 import { getMilestoneLabel } from "@/lib/egp-milestones";
+import { computeScurvePlannedPercent } from "@/lib/construction-tracking";
+import {
+  loadStep10FormFromNote,
+  resolveProjectTotalInstallmentCount,
+} from "@/lib/step-form";
+import { isStep10RowInspectionPassed } from "@/lib/step10-contract";
+import type { Step10InspectionRow } from "@/lib/step-form";
 
 export type AlertLevel = "red" | "yellow" | "blue";
 
@@ -16,6 +23,39 @@ export type Alert = {
 
 const DAY = 24 * 60 * 60 * 1000;
 const LEVEL_ORDER: Record<AlertLevel, number> = { red: 0, yellow: 1, blue: 2 };
+
+function latestSupervisorReportISO(rows: Step10InspectionRow[]): string | null {
+  let latest: string | null = null;
+  for (const row of rows) {
+    const date = row.supervisor_report_date?.trim();
+    if (!date) continue;
+    if (!latest || date > latest) latest = date;
+  }
+  return latest;
+}
+
+function worstProgressBehindPlan(
+  rows: Step10InspectionRow[],
+  totalInstallments: number,
+): { diff: number; reportDate: string | null } | null {
+  const total = Math.max(1, Math.floor(totalInstallments));
+  let worst: { diff: number; reportDate: string | null } | null = null;
+  for (const row of rows) {
+    if (isStep10RowInspectionPassed(row)) continue;
+    const actualPct = row.progress_pct ?? 0;
+    if (actualPct <= 0) continue;
+    const plannedPct = computeScurvePlannedPercent(row.installment_no, total);
+    const diff = actualPct - plannedPct;
+    if (diff >= -10) continue;
+    if (!worst || diff < worst.diff) {
+      worst = {
+        diff,
+        reportDate: row.supervisor_report_date?.trim() || null,
+      };
+    }
+  }
+  return worst;
+}
 
 export function sortAlerts(alerts: Alert[]): Alert[] {
   return [...alerts].sort((a, b) => {
@@ -38,32 +78,47 @@ export async function fetchAlerts(): Promise<Alert[]> {
   (projects ?? []).forEach((p: any) => projectMap.set(p.id, p));
   const projectIds = Array.from(projectMap.keys());
 
-  // ===== RED 1: progress_diff < -10
+  // ===== RED 1: progress behind plan > 10% (from Step 10 inspectionRows)
   if (projectIds.length) {
-    const { data: latestReports } = await supabase
-      .from("construction_reports")
-      .select("project_id, progress_diff, submitted_at, report_date")
+    const { data: stepNotes } = await supabase
+      .from("procurement_steps")
+      .select("project_id, step_number, note")
       .in("project_id", projectIds)
-      .order("submitted_at", { ascending: false });
+      .in("step_number", [9, 10]);
 
-    const seen = new Set<string>();
-    (latestReports ?? []).forEach((r: any) => {
-      if (seen.has(r.project_id)) return;
-      seen.add(r.project_id);
-      const diff = Number(r.progress_diff ?? 0);
-      if (diff < -10) {
-        const p = projectMap.get(r.project_id)!;
-        const pct = Math.abs(Math.round(diff));
-        alerts.push({
-          id: `slow-${p.id}`,
-          level: "red",
-          projectId: p.id,
-          projectName: p.name,
-          title: "ผลงานช้ากว่าแผน",
-          detail: `${p.name} ผลงานช้ากว่าแผน ${pct}% ต้องออกหนังสือเร่งรัดผู้รับจ้างทันที`,
-          date: r.submitted_at,
-        });
-      }
+    const step9NoteByProject = new Map<string, string | null>();
+    const step10NoteByProject = new Map<string, string | null>();
+    (stepNotes ?? []).forEach((s: { project_id: string; step_number: number; note: string | null }) => {
+      if (s.step_number === 9) step9NoteByProject.set(s.project_id, s.note);
+      if (s.step_number === 10) step10NoteByProject.set(s.project_id, s.note);
+    });
+
+    projectIds.forEach((projectId) => {
+      const step10Note = step10NoteByProject.get(projectId);
+      if (!step10Note) return;
+      const step10Form = loadStep10FormFromNote(step10Note);
+      const rows = step10Form.inspectionRows ?? [];
+      if (!rows.length) return;
+
+      const step9Note = step9NoteByProject.get(projectId) ?? null;
+      const totalInstallments = resolveProjectTotalInstallmentCount([
+        { step_number: 9, note: step9Note },
+      ]);
+      const behind = worstProgressBehindPlan(rows, totalInstallments);
+      if (!behind) return;
+
+      const p = projectMap.get(projectId);
+      if (!p) return;
+      const pct = Math.abs(Math.round(behind.diff));
+      alerts.push({
+        id: `slow-${p.id}`,
+        level: "red",
+        projectId: p.id,
+        projectName: p.name,
+        title: "ผลงานช้ากว่าแผน",
+        detail: `${p.name} ผลงานช้ากว่าแผน ${pct}% ต้องออกหนังสือเร่งรัดผู้รับจ้างทันที`,
+        date: behind.reportDate ?? new Date(now).toISOString(),
+      });
     });
   }
 
@@ -113,24 +168,28 @@ export async function fetchAlerts(): Promise<Alert[]> {
     });
   });
 
-  // ===== YELLOW 4: weekly report > 7 days for step >= 8 projects
+  // ===== YELLOW 4: weekly supervisor report > 7 days (from Step 10 inspectionRows)
   const contractMgmtProjects = (projects ?? []).filter((p: any) => p.current_step >= 10);
   if (contractMgmtProjects.length) {
     const ids = contractMgmtProjects.map((p: any) => p.id);
-    const { data: reports } = await supabase
-      .from("construction_reports")
-      .select("project_id, submitted_at")
+    const { data: step10Notes } = await supabase
+      .from("procurement_steps")
+      .select("project_id, note")
       .in("project_id", ids)
-      .order("submitted_at", { ascending: false });
+      .eq("step_number", 10);
 
-    const lastByProject = new Map<string, string>();
-    (reports ?? []).forEach((r: any) => {
-      if (!lastByProject.has(r.project_id)) lastByProject.set(r.project_id, r.submitted_at);
+    const step10NoteByProject = new Map<string, string | null>();
+    (step10Notes ?? []).forEach((s: { project_id: string; note: string | null }) => {
+      step10NoteByProject.set(s.project_id, s.note);
     });
 
     contractMgmtProjects.forEach((p: any) => {
-      const last = lastByProject.get(p.id);
-      const days = last ? Math.floor((now - new Date(last).getTime()) / DAY) : Infinity;
+      const step10Form = loadStep10FormFromNote(step10NoteByProject.get(p.id) ?? null);
+      const last = latestSupervisorReportISO(step10Form.inspectionRows ?? []);
+      const lastMs = last ? new Date(last).getTime() : NaN;
+      const days = Number.isFinite(lastMs)
+        ? Math.floor((now - lastMs) / DAY)
+        : Infinity;
       if (days > 7) {
         alerts.push({
           id: `report-${p.id}`,
