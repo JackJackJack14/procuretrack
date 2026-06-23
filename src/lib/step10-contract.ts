@@ -4,6 +4,8 @@ import type { StepDocRecord } from "@/lib/doc-upload";
 import {
   STEP10_CONSTRUCTION_MIN_PENALTY_PER_DAY_BAHT,
   STEP10_PENALTY_RATE_CONSTRUCTION_DEFAULT,
+  STEP10_PENALTY_RATE_CONSTRUCTION_MAX,
+  STEP10_PENALTY_RATE_CONSTRUCTION_MIN,
   STEP10_PENALTY_RATE_GENERAL_DEFAULT,
 } from "@/lib/step10-guideline";
 
@@ -75,6 +77,40 @@ export function step10DefaultPenaltyRatePct(projectType: Step10ProjectType): num
   return projectType === "construction"
     ? STEP10_PENALTY_RATE_CONSTRUCTION_DEFAULT
     : STEP10_PENALTY_RATE_GENERAL_DEFAULT;
+}
+
+/**
+ * ฐานคำนวณค่าปรับรายงวด (ระเบียบฯ ข้อ 162)
+ * - งานก่อสร้าง: วงเงินรวมทั้งสัญญาเท่านั้น (ห้ามใช้วงเงินรายงวด)
+ * - ซื้อ/จ้างทั่วไป: วงเงินเฉพาะงวดนั้น (วงเงินสัญญา ÷ จำนวนงวด)
+ */
+export function getStep10PenaltyBaseAmount(opts: {
+  projectType: Step10ProjectType;
+  contractAmount: number | null | undefined;
+  totalInstallments: number;
+}): number {
+  const contractAmount = opts.contractAmount;
+  if (contractAmount == null || !Number.isFinite(contractAmount) || contractAmount <= 0) {
+    return 0;
+  }
+  const totalN = Math.max(1, Math.floor(opts.totalInstallments));
+  return opts.projectType === "construction"
+    ? contractAmount
+    : contractAmount / totalN;
+}
+
+export function formatStep10PenaltyBaseLabel(
+  projectType: Step10ProjectType,
+  baseAmount: number,
+): string {
+  if (baseAmount <= 0) return "— ยังไม่มีวงเงินสัญญา —";
+  const formatted = baseAmount.toLocaleString("th-TH", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  return projectType === "construction"
+    ? `วงเงินรวมทั้งสัญญา ${formatted} บาท`
+    : `วงเงินเฉพาะงวดนี้ ${formatted} บาท`;
 }
 
 export function step10InstallmentDeliveryLetterDocTypes(n: number): string[] {
@@ -222,12 +258,22 @@ export function computeStep10InstallmentPenalty(opts: {
   const daysLate = countCalendarDaysBetweenISO(planned, actual);
   if (daysLate <= 0) return { daysLate: 0, penaltyBaht: 0 };
 
-  const baseAmount =
-    opts.projectType === "construction"
-      ? contractAmount
-      : contractAmount / totalN;
+  const baseAmount = getStep10PenaltyBaseAmount({
+    projectType: opts.projectType,
+    contractAmount,
+    totalInstallments: totalN,
+  });
+  if (baseAmount <= 0) return { daysLate: 0, penaltyBaht: 0 };
 
-  let penalty = baseAmount * (rate / 100) * daysLate;
+  let effectiveRate = rate;
+  if (opts.projectType === "construction") {
+    effectiveRate = Math.min(
+      STEP10_PENALTY_RATE_CONSTRUCTION_MAX,
+      Math.max(STEP10_PENALTY_RATE_CONSTRUCTION_MIN, rate),
+    );
+  }
+
+  let penalty = baseAmount * (effectiveRate / 100) * daysLate;
 
   if (opts.projectType === "construction") {
     const minTotal = STEP10_CONSTRUCTION_MIN_PENALTY_PER_DAY_BAHT * daysLate;

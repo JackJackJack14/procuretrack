@@ -72,16 +72,22 @@ import {
   STEP10_PROJECT_TYPE_OPTIONS,
   computeStep10InstallmentPenalty,
   computeWarrantyEndDateISO,
+  formatStep10PenaltyBaseLabel,
+  getStep10PenaltyBaseAmount,
   groupStep10DocsByInstallment,  isStep10DeliveryBeforeContractStart,
   isStep10InspectionBeforeDelivery,
   isStep10InspectionBeforeSupervisorReport,
   PROJECT_STATUS_WARRANTY,
   PROJECT_WARRANTY_STATUS_LABEL,
   resolveLastInstallmentInspectionDate,
-  step10DefaultPenaltyRatePct,
   step10RequiredDocCount,
   step10RowHasRequiredDocs,
 } from "@/lib/step10-contract";
+import {
+  STEP10_PENALTY_RATE_CONSTRUCTION_MAX,
+  STEP10_PENALTY_RATE_CONSTRUCTION_MIN,
+  STEP10_PENALTY_RATE_GENERAL_DEFAULT,
+} from "@/lib/step10-guideline";
 import {
   FORM_AUDIT_TRAIL_STANDARD,
   hasStep4BlacklistEvidenceDoc,
@@ -5398,13 +5404,6 @@ export function Step10DetailForm({
 
   const handleProjectTypeChange = (nextType: Step10ProjectType) => {
     onProjectTypeChange(nextType);
-    const defaultRate = step10DefaultPenaltyRatePct(nextType);
-    onInspectionRowsChange(
-      inspectionRows.map((row) => ({
-        ...row,
-        penalty_rate_pct: defaultRate,
-      })),
-    );
   };
 
   const installmentDocMap = useMemo(
@@ -5527,7 +5526,7 @@ export function Step10DetailForm({
                 value={opt.value}
                 checked={projectType === opt.value}
                 onChange={() => handleProjectTypeChange(opt.value)}
-                disabled={genericProps.readOnly || isWarrantyPhase}
+                disabled={genericProps.readOnly}
                 className="accent-primary"
               />
               {opt.label}
@@ -5598,8 +5597,22 @@ export function Step10DetailForm({
                 plannedISO: row.planned_completion_date,
                 actualDeliveryISO: row.delivery_date,
               });
+              const penaltyBaseAmount = getStep10PenaltyBaseAmount({
+                projectType,
+                contractAmount,
+                totalInstallments: totalInstallmentCount,
+              });
+              const penaltyBaseLabel = formatStep10PenaltyBaseLabel(
+                projectType,
+                penaltyBaseAmount,
+              );
+              const hasConstructionFeed =
+                row.construction_synced === true ||
+                Boolean(row.site_diary?.trim()) ||
+                Boolean(row.site_obstacles?.trim());
               const resultLabel = step10InspectionResultLabel(row.inspection_result);
               const fieldsDisabled = genericProps.readOnly || isWarrantyPhase;
+              const procurementPolicyDisabled = genericProps.readOnly;
               const inspectionMinDate =
                 projectType === "construction" && row.supervisor_report_date?.trim()
                   ? row.supervisor_report_date
@@ -5752,7 +5765,16 @@ export function Step10DetailForm({
                         >
                           <input
                             type="number"
-                            min={0}
+                            min={
+                              projectType === "construction"
+                                ? STEP10_PENALTY_RATE_CONSTRUCTION_MIN
+                                : 0
+                            }
+                            max={
+                              projectType === "construction"
+                                ? STEP10_PENALTY_RATE_CONSTRUCTION_MAX
+                                : undefined
+                            }
                             step={0.001}
                             value={row.penalty_rate_pct ?? ""}
                             onChange={(e) => {
@@ -5761,9 +5783,14 @@ export function Step10DetailForm({
                                 penalty_rate_pct: raw ? Number(raw) : null,
                               });
                             }}
-                            disabled={fieldsDisabled}
+                            disabled={procurementPolicyDisabled}
                             className={inputCls}
                           />
+                          <p className="text-xs text-muted-foreground mt-1">
+                            {projectType === "construction"
+                              ? `งานก่อสร้าง: อัตรา ${STEP10_PENALTY_RATE_CONSTRUCTION_MIN}%–${STEP10_PENALTY_RATE_CONSTRUCTION_MAX}% ต่อวัน · ฐานคำนวณ: ${penaltyBaseLabel}`
+                              : `ซื้อ/จ้างทั่วไป: ค่าเริ่มต้น ${STEP10_PENALTY_RATE_GENERAL_DEFAULT}% ต่อวัน · ฐานคำนวณ: ${penaltyBaseLabel}`}
+                          </p>
                         </FieldRow>
                       </div>
 
@@ -5775,11 +5802,57 @@ export function Step10DetailForm({
                           <span className="font-bold tabular-nums">
                             {formatBaht(penaltyResult.penaltyBaht)} บาท
                           </span>
-                          {projectType === "construction" && (
+                          {projectType === "construction" ? (
                             <span className="text-xs block mt-1">
-                              (คำนวณจากวงเงินรวมทั้งสัญญา × อัตราค่าปรับ × วันเลท — ขั้นต่ำ 100 บาท/วัน)
+                              (สูตรล็อก: {penaltyBaseLabel} × อัตราค่าปรับ × วันเลท — ขั้นต่ำ 100 บาท/วัน)
+                            </span>
+                          ) : (
+                            <span className="text-xs block mt-1">
+                              (สูตรล็อก: {penaltyBaseLabel} × อัตราค่าปรับ × วันเลท)
                             </span>
                           )}
+                        </div>
+                      )}
+
+                      {hasConstructionFeed && (
+                        <div className="rounded-md border border-sky-200 bg-sky-50/80 dark:bg-sky-950/20 dark:border-sky-800 px-3 py-3 space-y-3">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-sm font-semibold text-sky-900 dark:text-sky-100">
+                              ข้อมูลจากฝ่ายแผนงานก่อสร้าง (ระเบียบฯ ข้อ 182)
+                            </p>
+                            {row.construction_synced && (
+                              <span className="text-xs px-2 py-0.5 rounded-full border border-sky-300 bg-sky-100 text-sky-800 font-medium">
+                                ซิงก์จากเมนูติดตามงานก่อสร้าง
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-sky-800 dark:text-sky-200">
+                            ใช้ประกอบการพิจารณางด/ลดค่าปรับ — อ่านอย่างเดียว (แก้ไขได้ที่เมนูติดตามงานก่อสร้าง)
+                          </p>
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            <div className="space-y-1">
+                              <p className="text-xs font-medium text-foreground">
+                                หมายเหตุความคืบหน้า (Site Diary)
+                              </p>
+                              <div className="min-h-[3rem] rounded-md border border-sky-200 bg-white/70 dark:bg-background px-3 py-2 text-sm whitespace-pre-wrap">
+                                {row.site_diary?.trim() || "— ยังไม่มีข้อมูล —"}
+                              </div>
+                            </div>
+                            <div className="space-y-1">
+                              <p className="text-xs font-medium text-foreground">
+                                อุปสรรคหน้างาน
+                              </p>
+                              <div
+                                className={`min-h-[3rem] rounded-md border px-3 py-2 text-sm whitespace-pre-wrap ${
+                                  row.site_obstacles?.trim()
+                                    ? "border-amber-300 bg-amber-50 text-amber-900 dark:bg-amber-950/30 dark:text-amber-100"
+                                    : "border-sky-200 bg-white/70 dark:bg-background"
+                                }`}
+                              >
+                                {row.site_obstacles?.trim() || "— ไม่มีอุปสรรค —"}
+                              </div>
+                            </div>
+                          </div>
                         </div>
                       )}
 

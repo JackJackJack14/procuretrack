@@ -1756,6 +1756,12 @@ export type Step10InspectionRow = {
   inspector_note: string;
   /** @deprecated ใช้ inspection_result */
   installment_status: string;
+  /** หมายเหตุความคืบหน้าจากฝ่ายแผนงานก่อสร้าง (ซิงก์) */
+  site_diary?: string;
+  /** อุปสรรคหน้างานจากฝ่ายแผนงานก่อสร้าง (ซิงก์) */
+  site_obstacles?: string;
+  /** งวดนี้มีการซิงก์ข้อมูลจากเมนูติดตามงานก่อสร้างแล้ว */
+  construction_synced?: boolean;
 };
 
 export type Step10FormData = {
@@ -1802,6 +1808,9 @@ function normalizeStep10InspectionRow(
       inspectionResult === "passed"
         ? "inspection_passed"
         : row.installment_status?.trim() ?? "",
+    site_diary: row.site_diary?.trim() ?? "",
+    site_obstacles: row.site_obstacles?.trim() ?? "",
+    construction_synced: row.construction_synced === true,
   };
 }
 
@@ -1839,14 +1848,19 @@ export function buildStep10InspectionRows(
 export function loadStep10FormFromNote(note: string | null): Step10FormData {
   const { form } = parseStepNote(note);
   const f = form as Step10FormData;
-  const projectType: Step10ProjectType =
-    f.project_type === "construction" ? "construction" : "general";
+  const projectType: Step10ProjectType | undefined =
+    f.project_type === "construction"
+      ? "construction"
+      : f.project_type === "general"
+        ? "general"
+        : undefined;
+  const rowDefaultType = projectType ?? "general";
   const raw = f.inspectionRows ?? [];
   return {
     checklist: f.checklist,
-    project_type: projectType,
+    ...(projectType != null ? { project_type: projectType } : {}),
     inspectionRows: raw.map((row, index) =>
-      normalizeStep10InspectionRow(row, index, projectType),
+      normalizeStep10InspectionRow(row, index, rowDefaultType),
     ),
   };
 }
