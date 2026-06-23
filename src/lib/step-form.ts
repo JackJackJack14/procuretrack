@@ -2550,6 +2550,10 @@ export const STEP1_SPECIFIC_METHOD_BUDGET_EXCEEDED_MSG =
 export const STEP1_SPECIFIC_METHOD_REASON_REQUIRED_MSG =
   "กรุณาระบุเหตุผลความจำเป็นในการใช้วิธีเฉพาะเจาะจง (ระเบียบพัสดุฯ ข้อ 79)";
 
+/** คำเตือน Live Compliance — วงเงินเกิน 500,000 บาท กับวิธีเฉพาะเจาะจง */
+export const STEP1_SPECIFIC_METHOD_BUDGET_COMPLIANCE_WARNING_MSG =
+  "⚠️ คำเตือน: วงเงินงบประมาณเกิน 500,000 บาท โปรดตรวจสอบความถูกต้องของเงื่อนไขการใช้วิธีเฉพาะเจาะจงตามระเบียบกระทรวงการคลังฯ อย่างเคร่งครัด";
+
 /** ตรวจพิกัดสถานที่ดำเนินการ — บังคับครบทุกช่อง (ใช้ในรายงาน PDF ขั้น 10) */
 export function getStep1SiteLocationComplianceIssues(
   profile: Step1ProjectProfile,
@@ -2580,6 +2584,13 @@ export function isStep1SpecificMethodBudgetExceeded(
   if (method !== "specific") return false;
   const val = parseBudgetInput(budget);
   return val > STEP1_SPECIFIC_METHOD_MAX_BUDGET;
+}
+
+export function shouldShowStep1SpecificMethodBudgetComplianceWarning(
+  budget: string,
+  method: string,
+): boolean {
+  return isStep1SpecificMethodBudgetExceeded(budget, method);
 }
 
 /** Compliance Gate ขั้นตอนที่ 1 — เอกสารหลัก + ฟิลด์ฟอร์ม (ไม่ใช้ Smart Checklist) */
@@ -2648,6 +2659,22 @@ export function getStep1RequiredFormFieldIssues(opts: {
       message: "กรุณาเลือกประเภทโครงการ (e-GP)",
     });
   }
+  if (
+    opts.projectProfile.target_quantity == null ||
+    !Number.isFinite(opts.projectProfile.target_quantity) ||
+    opts.projectProfile.target_quantity <= 0
+  ) {
+    issues.push({
+      id: "target_quantity",
+      message: "กรุณาระบุจำนวนผลสัมฤทธิ์ของงาน",
+    });
+  }
+  if (!opts.projectProfile.result_unit?.trim()) {
+    issues.push({
+      id: "result_unit",
+      message: "กรุณาเลือกหน่วยวัดผลสัมฤทธิ์ของงาน",
+    });
+  }
   issues.push(...getStep1SiteLocationComplianceIssues(opts.projectProfile));
   return issues;
 }
@@ -2661,7 +2688,7 @@ export function countStep1FormRequiredProgress(opts: {
   projectProfile: Step1ProjectProfile;
   specificMethodReason?: string;
 }): { done: number; total: number } {
-  const total = 12 + (opts.method === "specific" ? 1 : 0);
+  const total = 14 + (opts.method === "specific" ? 1 : 0);
   let done = 0;
   const budgetVal = parseBudgetInput(opts.budget ?? "");
   if (budgetVal > 0) done += 1;
@@ -2674,6 +2701,14 @@ export function countStep1FormRequiredProgress(opts: {
   if (opts.method === "specific" && opts.specificMethodReason?.trim()) done += 1;
   if (opts.projectProfile.budget_category?.trim()) done += 1;
   if (opts.projectProfile.project_type?.trim()) done += 1;
+  if (opts.projectProfile.result_unit?.trim()) done += 1;
+  if (
+    opts.projectProfile.target_quantity != null &&
+    Number.isFinite(opts.projectProfile.target_quantity) &&
+    opts.projectProfile.target_quantity > 0
+  ) {
+    done += 1;
+  }
   return { done, total };
 }
 

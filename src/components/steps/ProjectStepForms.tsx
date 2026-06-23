@@ -133,7 +133,9 @@ import {
   isStep1EgpCodeUnlocked,
   isStep1SpecificMethodBudgetExceeded,
   STEP1_SPECIFIC_METHOD_BUDGET_EXCEEDED_MSG,
+  STEP1_SPECIFIC_METHOD_BUDGET_COMPLIANCE_WARNING_MSG,
   STEP1_SPECIFIC_METHOD_REASON_REQUIRED_MSG,
+  shouldShowStep1SpecificMethodBudgetComplianceWarning,
   type Step2Checklist,
   type Step2ChecklistKey,
   STEP2_CHECKLIST_ITEMS,
@@ -467,6 +469,8 @@ export function Step1DetailForm({
     stepDocs: docBinder?.docs,
   });
   const specificMethodBudgetInvalid = isStep1SpecificMethodBudgetExceeded(budget, method);
+  const showSpecificMethodBudgetWarning =
+    shouldShowStep1SpecificMethodBudgetComplianceWarning(budget, method);
   const isSpecificMethod = method === "specific";
   const specificReasonMissing = isSpecificMethod && !specificMethodReason.trim();
   const [profilePosition, setProfilePosition] = useState<string | null>(null);
@@ -555,7 +559,7 @@ export function Step1DetailForm({
             className={inputCls}
           />
         </FieldRow>
-        <FieldRow label="รหัสแผนจัดซื้อจัดจ้าง e-GP" tooltipKey="step1.egp_plan_code">
+        <FieldRow label="เลขที่โครงการ e-GP / รหัสโครงการภายใน *" tooltipKey="step1.egp_plan_code">
           <input
             value={egpCode}
             onChange={(e) => onEgpCodeChange(e.target.value)}
@@ -651,6 +655,11 @@ export function Step1DetailForm({
         <p className="text-xs text-muted-foreground mt-1">
           ใช้ร่วมกับวงเงินงบประมาณในการคำนวณวันทำการขั้นต่ำของระบบ
         </p>
+        {showSpecificMethodBudgetWarning && (
+          <div className="rounded-md bg-yellow-50 border-l-4 border-yellow-500 text-yellow-700 px-4 py-3 text-sm">
+            {STEP1_SPECIFIC_METHOD_BUDGET_COMPLIANCE_WARNING_MSG}
+          </div>
+        )}
         {specificMethodBudgetInvalid && (
           <p className="text-sm text-destructive mt-2 font-medium">
             {STEP1_SPECIFIC_METHOD_BUDGET_EXCEEDED_MSG}
@@ -722,13 +731,30 @@ export function Step1DetailForm({
             className={inputCls}
           />
         </FieldRow>
-        <FieldRow label="หน่วยวัดผลสัมฤทธิ์ของงาน">
+        <FieldRow label="หน่วยวัดผลสัมฤทธิ์ของงาน *">
           <ResultUnitSelect
             value={projectProfile.result_unit}
             onChange={(result_unit) => onProjectProfileChange({ result_unit })}
             disabled={readOnly}
             inputClassName={inputCls}
             hint="ใช้แสดงต่อท้ายผลสะสมหน้างานจริงในขั้นตอนที่ 10 และรายงานสรุปผู้บริหาร"
+          />
+        </FieldRow>
+        <FieldRow label="จำนวนผลสัมฤทธิ์ของงาน *" complianceTarget="target_quantity">
+          <input
+            type="number"
+            min={1}
+            step={1}
+            value={projectProfile.target_quantity ?? ""}
+            onChange={(e) => {
+              const raw = e.target.value.replace(/[^\d]/g, "");
+              onProjectProfileChange({
+                target_quantity: raw ? Number(raw) : null,
+              });
+            }}
+            disabled={readOnly}
+            className={inputCls}
+            placeholder="เช่น 1"
           />
         </FieldRow>
       </div>

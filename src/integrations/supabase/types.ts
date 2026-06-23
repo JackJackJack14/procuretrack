@@ -668,6 +668,7 @@ export type Database = {
           project_code: string
           project_type: string | null
           budget_category: string | null
+          target_quantity: number | null
           result_unit: string | null
           site_district: string | null
           site_engineer_name: string | null
@@ -732,6 +733,7 @@ export type Database = {
           project_code: string
           project_type?: string | null
           budget_category?: string | null
+          target_quantity?: number | null
           result_unit?: string | null
           site_district?: string | null
           site_engineer_name?: string | null
@@ -796,6 +798,7 @@ export type Database = {
           project_code?: string
           project_type?: string | null
           budget_category?: string | null
+          target_quantity?: number | null
           result_unit?: string | null
           site_district?: string | null
           site_engineer_name?: string | null

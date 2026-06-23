@@ -12,7 +12,7 @@ import {
   formatBaht, progressColor,
 } from "@/lib/procurement";
 import { EGP_MILESTONES, getMilestoneLabel, milestoneProgressPercent } from "@/lib/egp-milestones";
-import { APPEAL_STATUS_LABELS } from "@/lib/step-form";
+import { APPEAL_STATUS_LABELS, shouldShowStep1SpecificMethodBudgetComplianceWarning, STEP1_SPECIFIC_METHOD_BUDGET_COMPLIANCE_WARNING_MSG } from "@/lib/step-form";
 import { ResultUnitSelect } from "@/components/ResultUnitSelect";
 import {
   BUDGET_CATEGORY_OPTIONS,
@@ -234,6 +234,7 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
   const [approvingAgency, setApprovingAgency] = useState("");
   const [procurementAgency, setProcurementAgency] = useState("");
   const [resultUnit, setResultUnit] = useState("");
+  const [targetQuantity, setTargetQuantity] = useState("");
   const [budgetCategory, setBudgetCategory] = useState("");
   const [egpProjectType, setEgpProjectType] = useState("");
   const [egpProjectTypeTouched, setEgpProjectTypeTouched] = useState(false);
@@ -263,6 +264,7 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
         approving_agency: approvingAgency || null,
         procurement_agency: procurementAgency || null,
         result_unit: resultUnit || null,
+        target_quantity: targetQuantity ? Number(targetQuantity) : null,
         project_type: egpProjectType || null,
         budget_category: budgetCategory || null,
         current_step: 1,
@@ -300,6 +302,9 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
     return new Intl.NumberFormat("th-TH").format(Number(num));
   };
 
+  const showSpecificMethodBudgetWarning =
+    shouldShowStep1SpecificMethodBudgetComplianceWarning(budget, method);
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 sm:p-6">
       <div
@@ -324,7 +329,7 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
           <Field label="ชื่อโครงการ *">
             <input value={name} onChange={(e) => setName(e.target.value)} className={inputCls} />
           </Field>
-          <Field label="รหัสโครงการ *">
+          <Field label="เลขที่โครงการ e-GP / รหัสโครงการภายใน *">
             <input value={code} onChange={(e) => setCode(e.target.value)} className={inputCls} />
           </Field>
           <Field label="คำอธิบาย">
@@ -335,6 +340,11 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
             <input value={budget} onChange={(e) => setBudget(formatBudget(e.target.value))}
               placeholder="0" className={inputCls} />
           </Field>
+          {showSpecificMethodBudgetWarning && (
+            <div className="rounded-md bg-yellow-50 border-l-4 border-yellow-500 text-yellow-700 px-4 py-3 text-sm">
+              {STEP1_SPECIFIC_METHOD_BUDGET_COMPLIANCE_WARNING_MSG}
+            </div>
+          )}
           <Field label="หมวดงบประมาณ *">
             <select
               value={budgetCategory}
@@ -400,11 +410,22 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
           <Field label="หน่วยงานที่ดำเนินการจัดซื้อจัดจ้าง">
             <input value={procurementAgency} onChange={(e) => setProcurementAgency(e.target.value)} className={inputCls} />
           </Field>
-          <Field label="หน่วยวัดผลสัมฤทธิ์ของงาน">
+          <Field label="หน่วยวัดผลสัมฤทธิ์ของงาน *">
             <ResultUnitSelect
               value={resultUnit}
               onChange={setResultUnit}
               inputClassName={inputCls}
+            />
+          </Field>
+          <Field label="จำนวนผลสัมฤทธิ์ของงาน *">
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={targetQuantity}
+              onChange={(e) => setTargetQuantity(e.target.value.replace(/[^\d]/g, ""))}
+              className={inputCls}
+              placeholder="เช่น 1"
             />
           </Field>
           {error && <p className="text-sm text-destructive">{error}</p>}
@@ -415,7 +436,7 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
           </button>
           <button
             onClick={submit}
-            disabled={!name || !code || !budget || !budgetCategory || !egpProjectType || loading}
+            disabled={!name || !code || !budget || !budgetCategory || !egpProjectType || !resultUnit || !targetQuantity || loading}
             className="flex-1 h-10 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {loading && <Loader2 className="h-4 w-4 animate-spin" />}

@@ -44,6 +44,8 @@ export type Step1ProjectProfile = {
   /** หมวดงบประมาณ — บันทึกลง projects.budget_category */
   budget_category: string;
   result_unit: string;
+  /** จำนวนผลสัมฤทธิ์ของงาน — บันทึกลง projects.target_quantity */
+  target_quantity: number | null;
   site_village: string;
   site_moo: number | null;
   site_subdistrict: string;
@@ -59,6 +61,7 @@ export const EMPTY_STEP1_PROJECT_PROFILE: Step1ProjectProfile = {
   project_type: "",
   budget_category: "",
   result_unit: "",
+  target_quantity: null,
   site_village: "",
   site_moo: null,
   site_subdistrict: "",
@@ -74,6 +77,7 @@ type ProjectProfileLike = {
   project_type?: string | null;
   budget_category?: string | null;
   result_unit?: string | null;
+  target_quantity?: number | null;
   site_village?: string | null;
   site_moo?: number | null;
   site_subdistrict?: string | null;
@@ -94,6 +98,12 @@ export function mergeStep1ProfileFromProject(
     project_type: project.project_type?.trim() ?? "",
     budget_category: project.budget_category?.trim() ?? "",
     result_unit: project.result_unit?.trim() ?? "",
+    target_quantity:
+      project.target_quantity != null &&
+      Number.isFinite(project.target_quantity) &&
+      project.target_quantity > 0
+        ? project.target_quantity
+        : null,
     site_village: project.site_village?.trim() ?? "",
     site_moo: moo != null && Number.isFinite(moo) && moo > 0 ? Math.floor(moo) : null,
     site_subdistrict: project.site_subdistrict?.trim() ?? "",
@@ -112,6 +122,12 @@ export function buildProjectStep1ProfileFields(profile: Step1ProjectProfile) {
     project_type: profile.project_type.trim() || null,
     budget_category: profile.budget_category.trim() || null,
     result_unit: profile.result_unit.trim() || null,
+    target_quantity:
+      profile.target_quantity != null &&
+      Number.isFinite(profile.target_quantity) &&
+      profile.target_quantity > 0
+        ? profile.target_quantity
+        : null,
     site_village: profile.site_village.trim() || null,
     site_moo: moo != null && Number.isFinite(moo) && moo > 0 ? Math.floor(moo) : null,
     site_subdistrict: profile.site_subdistrict.trim() || null,
