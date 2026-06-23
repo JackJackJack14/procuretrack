@@ -11,6 +11,26 @@ export type EgpProjectType = (typeof EGP_PROJECT_TYPE_OPTIONS)[number];
 
 export const EGP_PROJECT_TYPE_CONSTRUCTION: EgpProjectType = "จ้างก่อสร้าง";
 
+/** ประเภทโครงการที่ไม่บังคับรายละเอียดที่อยู่หน้างาน (ขั้นตอนที่ 1) */
+export const EGP_PROJECT_TYPES_SITE_DETAIL_OPTIONAL: readonly EgpProjectType[] = [
+  "ซื้อ",
+  "จ้างทำของ/จ้างเหมาบริการ",
+];
+
+export function isStep1SiteDetailOptional(
+  projectType: string | null | undefined,
+): boolean {
+  const t = projectType?.trim() ?? "";
+  return (EGP_PROJECT_TYPES_SITE_DETAIL_OPTIONAL as readonly string[]).includes(t);
+}
+
+/** จำนวนฟิลด์สถานที่ที่บังคับกรอก — งานซื้อ/จ้างเหมา = จังหวัดอย่างเดียว, งานก่อสร้าง = ครบ 5 ช่อง */
+export function countStep1SiteLocationRequiredFields(
+  projectType: string | null | undefined,
+): number {
+  return isStep1SiteDetailOptional(projectType) ? 1 : 5;
+}
+
 /** หมวดงบประมาณ — ใช้แนะนำประเภทโครงการอัตโนมัติ (ขั้นตอนที่ 1) */
 export const BUDGET_CATEGORY_OPTIONS = [
   {

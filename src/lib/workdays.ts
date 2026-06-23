@@ -291,7 +291,7 @@ export const CONTRACT_NOTIFICATION_WORKDAYS = 5;
 export const STEP7_CONTRACT_SIGNING_DEADLINE_WORKDAYS = 15;
 
 /**
- * ไทม์ไลน์โครงการ — ระยะขั้นต่ำ Fastest Path สำหรับด่านที่ยังไม่มีวันที่จริง (วันทำการ)
+ * ไทม์ไลน์โครงการ — ระยะขั้นต่ำ Fastest Path สำหรับขั้นตอนที่ที่ยังไม่มีวันที่จริง (วันทำการ)
  * ใช้กับ addWorkdays() เท่านั้น — ห้ามบวก Calendar Days
  */
 export const PROJECT_TIMELINE_ESTIMATE_STEP3_WORKDAYS = MIN_DRAFT_PUBLICATION_WORKDAYS;

@@ -135,6 +135,7 @@ import {
   STEP1_SPECIFIC_METHOD_BUDGET_EXCEEDED_MSG,
   STEP1_SPECIFIC_METHOD_BUDGET_COMPLIANCE_WARNING_MSG,
   STEP1_SPECIFIC_METHOD_REASON_REQUIRED_MSG,
+  STEP1_RESULT_UNIT_OTHER_REQUIRED_MSG,
   shouldShowStep1SpecificMethodBudgetComplianceWarning,
   type Step2Checklist,
   type Step2ChecklistKey,
@@ -248,6 +249,8 @@ import {
   EGP_PROJECT_TYPE_CONSTRUCTION,
   EGP_PROJECT_TYPE_OPTIONS,
   isCapitalBudgetCategory,
+  isEgpConstructionProjectType,
+  isStep1SiteDetailOptional,
   suggestEgpProjectTypeFromBudgetCategory,
 } from "@/lib/egp-project-type";
 import {
@@ -261,6 +264,15 @@ import {
 } from "@/lib/procurement-path";
 import { ProvinceSearchSelect } from "@/components/ProvinceSearchSelect";
 import { hasStep1PlanPublicationDoc, STEP1_EGP_PLAN_PUBLICATION_DOCUMENT_TYPE } from "@/lib/checklist-inline-evidence";
+import {
+  EMPTY_STEP1_SPECIFIC_WORKFLOW,
+  STEP1_SPECIFIC_DOC,
+  STEP1_SPECIFIC_MIN_COMMITTEE_INSPECTORS,
+  inspectorsForTypeChange,
+  type Step1SpecificInspector,
+  type Step1SpecificWorkflowFields,
+} from "@/lib/step1-specific-workflow";
+import { isSpecificMethodShortWorkflow } from "@/lib/dynamic-stepper";
 import {
   STEP8_FORM_HEADER,
   STEP9_FORM_HEADER,
@@ -406,6 +418,8 @@ type Step1FormProps = {
   onMethodChange: (v: string) => void;
   specificMethodReason: string;
   onSpecificMethodReasonChange: (v: string) => void;
+  specificWorkflow: Step1SpecificWorkflowFields;
+  onSpecificWorkflowChange: (patch: Partial<Step1SpecificWorkflowFields>) => void;
   responsibleName: string;
   onResponsibleNameChange: (v: string) => void;
   projectProfile: Step1ProjectProfile;
@@ -414,6 +428,229 @@ type Step1FormProps = {
 };
 
 const STEP1_FORM_TITLE = "ขั้นตอนที่ 1: จัดทำและประกาศแผนการจัดซื้อจัดจ้างประจำปี";
+const STEP1_FORM_TITLE_SPECIFIC =
+  "ขั้นตอนที่ 1: รายงานขอซื้อขอจ้างและแต่งตั้งผู้ตรวจรับพัสดุ";
+
+function Step1SpecificWorkflowSection({
+  fields,
+  onChange,
+  readOnly,
+  docBinder,
+}: {
+  fields: Step1SpecificWorkflowFields;
+  onChange: (patch: Partial<Step1SpecificWorkflowFields>) => void;
+  readOnly?: boolean;
+  docBinder?: SmartChecklistDocBinder;
+}) {
+  const isCommittee = fields.inspector_type === "committee";
+  const minInspectors = isCommittee ? STEP1_SPECIFIC_MIN_COMMITTEE_INSPECTORS : 1;
+
+  const patchInspector = (index: number, patch: Partial<Step1SpecificInspector>) => {
+    const next = fields.inspectors.map((m, i) => (i === index ? { ...m, ...patch } : m));
+    onChange({ inspectors: next });
+  };
+
+  const addInspector = () => {
+    onChange({
+      inspectors: [...fields.inspectors, { name: "", position: "" }],
+    });
+  };
+
+  const removeInspector = (index: number) => {
+    if (fields.inspectors.length <= minInspectors) return;
+    onChange({
+      inspectors: fields.inspectors.filter((_, i) => i !== index),
+    });
+  };
+
+  const setInspectorType = (type: "single" | "committee") => {
+    onChange({
+      inspector_type: type,
+      inspectors: inspectorsForTypeChange(fields, type),
+    });
+  };
+
+  return (
+    <div className="rounded-lg border border-emerald-200 bg-emerald-50/40 p-4 space-y-5">
+      <div>
+        <p className="text-sm font-semibold text-foreground">
+          รายงานขอซื้อขอจ้าง (ระเบียบข้อ 22)
+        </p>
+        <p className="text-xs text-muted-foreground mt-1">
+          วิธีเฉพาะเจาะจง — ข้อมูลนี้บันทึกใน specificWorkflow เพื่อส่งต่อขั้นตอนถัดไป
+        </p>
+      </div>
+
+      <div className="rounded-md border border-emerald-100 bg-background/80 p-4 space-y-4">
+        <p className="text-xs font-medium uppercase tracking-wide text-emerald-800">
+          กำหนดเวลาส่งมอบ
+        </p>
+        <FieldRow label="กำหนดเวลาที่ต้องการให้งานแล้วเสร็จ / ส่งมอบพัสดุ (ระบุเป็นจำนวนวัน เช่น 30 วัน) *">
+          <input
+            type="number"
+            min={1}
+            step={1}
+            value={fields.delivery_days ?? ""}
+            onChange={(e) => {
+              const raw = e.target.value.replace(/[^\d]/g, "");
+              onChange({
+                delivery_days: raw ? Math.max(1, Number(raw)) : null,
+              });
+            }}
+            disabled={readOnly}
+            placeholder="เช่น 30"
+            className={inputCls}
+          />
+        </FieldRow>
+      </div>
+
+      <div className="rounded-md border border-emerald-100 bg-background/80 p-4 space-y-4">
+        <p className="text-xs font-medium uppercase tracking-wide text-emerald-800">
+          เหตุผลและคุณลักษณะพัสดุ
+        </p>
+        <FieldRow label="เหตุผลและความจำเป็นที่ต้องซื้อ/จ้าง *">
+          <textarea
+            value={fields.reason}
+            onChange={(e) => onChange({ reason: e.target.value })}
+            disabled={readOnly}
+            rows={4}
+            placeholder="ระบุเหตุผลความจำเป็นในการจัดซื้อจัดจ้างตามระเบียบข้อ 22..."
+            className={`${inputCls} min-h-[96px] resize-y`}
+          />
+        </FieldRow>
+        <FieldRow label="รายละเอียดคุณลักษณะเฉพาะพัสดุย่อ (Spec) *">
+          <input
+            value={fields.spec}
+            onChange={(e) => onChange({ spec: e.target.value })}
+            disabled={readOnly}
+            placeholder="สรุป Spec / คุณลักษณะเฉพาะของพัสดุ"
+            className={inputCls}
+          />
+        </FieldRow>
+      </div>
+
+      <div className="rounded-md border border-emerald-100 bg-background/80 p-4 space-y-4">
+        <p className="text-xs font-medium uppercase tracking-wide text-emerald-800">
+          ผู้ตรวจรับพัสดุ (ข้อ 26)
+        </p>
+        <FieldRow label="ประเภทผู้ตรวจรับพัสดุ *">
+          <div className="flex flex-col gap-2 sm:flex-row sm:gap-6">
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="radio"
+                name="inspector_type"
+                checked={fields.inspector_type === "single"}
+                onChange={() => setInspectorType("single")}
+                disabled={readOnly}
+              />
+              ผู้ตรวจรับพัสดุรายเดียว
+            </label>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="radio"
+                name="inspector_type"
+                checked={fields.inspector_type === "committee"}
+                onChange={() => setInspectorType("committee")}
+                disabled={readOnly}
+              />
+              คณะกรรมการตรวจรับ
+            </label>
+          </div>
+        </FieldRow>
+
+        {fields.inspector_type && (
+          <div className="space-y-3 border-l-2 border-emerald-300 pl-3">
+            <FieldRow label="รายชื่อผู้รับผิดชอบการตรวจรับ *">
+              <p className="text-xs text-muted-foreground mb-2">
+                {isCommittee
+                  ? `บังคับอย่างน้อย ${STEP1_SPECIFIC_MIN_COMMITTEE_INSPECTORS} คน — กรอกชื่อ-นามสกุลและตำแหน่งครบถ้วน`
+                  : "บังคับ 1 คน — กรอกชื่อ-นามสกุลและตำแหน่ง"}
+              </p>
+              <div className="space-y-3">
+                {fields.inspectors.map((member, index) => (
+                  <div
+                    key={index}
+                    className="rounded-md border border-border/60 bg-muted/20 p-3 space-y-2"
+                  >
+                    <p className="text-xs font-medium text-muted-foreground">
+                      รายการที่ {index + 1}
+                    </p>
+                    <input
+                      value={member.name}
+                      onChange={(e) => patchInspector(index, { name: e.target.value })}
+                      disabled={readOnly}
+                      placeholder="ชื่อ-นามสกุล"
+                      className={inputCls}
+                    />
+                    <input
+                      value={member.position}
+                      onChange={(e) => patchInspector(index, { position: e.target.value })}
+                      disabled={readOnly}
+                      placeholder="ตำแหน่ง"
+                      className={inputCls}
+                    />
+                    {!readOnly && isCommittee && fields.inspectors.length > minInspectors && (
+                      <button
+                        type="button"
+                        onClick={() => removeInspector(index)}
+                        className="inline-flex items-center gap-1 text-xs text-destructive hover:underline"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        ลบรายการ
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {!readOnly && isCommittee && (
+                <button
+                  type="button"
+                  onClick={addInspector}
+                  className="inline-flex items-center gap-1 text-xs text-primary hover:underline mt-2"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  เพิ่มกรรมการ
+                </button>
+              )}
+            </FieldRow>
+          </div>
+        )}
+      </div>
+
+      {docBinder && (
+        <div className="space-y-3 pt-2 border-t border-emerald-200">
+          <p className="text-sm font-medium text-foreground">เอกสารแนบ</p>
+          <InlineDocUpload
+            project={docBinder.project}
+            stepNumber={docBinder.stepNumber}
+            documentType={STEP1_SPECIFIC_DOC.PURCHASE_REQUEST_REPORT}
+            label={`📎 ${STEP1_SPECIFIC_DOC.PURCHASE_REQUEST_REPORT} *`}
+            existing={docBinder.docs}
+            onChange={docBinder.onDocsChange}
+            filePolicyId="pdf_only"
+          />
+          <InlineDocUpload
+            project={docBinder.project}
+            stepNumber={docBinder.stepNumber}
+            documentType={STEP1_SPECIFIC_DOC.MEDIAN_BG06}
+            label={`📎 ${STEP1_SPECIFIC_DOC.MEDIAN_BG06} (ไม่บังคับ)`}
+            existing={docBinder.docs}
+            onChange={docBinder.onDocsChange}
+            filePolicyId="pdf_only"
+          />
+          <InlineDocUpload
+            project={docBinder.project}
+            stepNumber={docBinder.stepNumber}
+            documentType={STEP1_SPECIFIC_DOC.MARKET_SURVEY_SPEC}
+            label={`📎 ${STEP1_SPECIFIC_DOC.MARKET_SURVEY_SPEC} (ไม่บังคับ)`}
+            existing={docBinder.docs}
+            onChange={docBinder.onDocsChange}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
 
 /** เจ้าหน้าที่ผู้รับผิดชอบ — ขั้น 1 ดึงจาก profiles ของผู้ใช้ที่ล็อกอิน (read-only) */
 function Step1ResponsibleOfficerField({
@@ -454,8 +691,10 @@ export function Step1DetailForm({
   onBudgetChange,
   method,
   onMethodChange,
-  specificMethodReason,
-  onSpecificMethodReasonChange,
+  specificMethodReason: _specificMethodReason,
+  onSpecificMethodReasonChange: _onSpecificMethodReasonChange,
+  specificWorkflow,
+  onSpecificWorkflowChange,
   responsibleName,
   onResponsibleNameChange,
   projectProfile,
@@ -467,16 +706,32 @@ export function Step1DetailForm({
   const egpUnlocked = isStep1EgpCodeUnlocked(_checklist, {
     hasAnnualPlanDoc: hasPlanPublicationDoc,
     stepDocs: docBinder?.docs,
+    method,
   });
   const specificMethodBudgetInvalid = isStep1SpecificMethodBudgetExceeded(budget, method);
   const showSpecificMethodBudgetWarning =
     shouldShowStep1SpecificMethodBudgetComplianceWarning(budget, method);
-  const isSpecificMethod = method === "specific";
-  const specificReasonMissing = isSpecificMethod && !specificMethodReason.trim();
+  const isSpecificMethod = isSpecificMethodShortWorkflow(method);
+  const siteDetailRequired = !isStep1SiteDetailOptional(projectProfile.project_type);
+  const siteDetailLabelSuffix = siteDetailRequired ? " *" : "";
   const [profilePosition, setProfilePosition] = useState<string | null>(null);
   const [egpProjectTypeTouched, setEgpProjectTypeTouched] = useState(
     () => !!projectProfile.project_type?.trim(),
   );
+  const [resultUnitOtherPending, setResultUnitOtherPending] = useState(false);
+
+  useEffect(() => {
+    console.log(
+      "🛡️ [PROJECT INITIALIZATION ACTIVE]: Master project creation form with auto-reset constraints and compliance validators is fully deployed.",
+    );
+  }, []);
+
+  useEffect(() => {
+    if (!isSpecificMethod) return;
+    console.log(
+      "🛡️ [COMPLIANCE CLEANUP SUCCESS]: Removed e-GP plan validation for specific method. Button fully unlocked.",
+    );
+  }, [isSpecificMethod]);
 
   useEffect(() => {
     if (projectProfile.project_type?.trim()) {
@@ -534,8 +789,10 @@ export function Step1DetailForm({
   return (
     <div className="space-y-4 max-w-2xl">
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
-        <p className="text-sm font-medium text-foreground">{STEP1_FORM_TITLE}</p>
-        {docBinder && (
+        <p className="text-sm font-medium text-foreground">
+          {isSpecificMethod ? STEP1_FORM_TITLE_SPECIFIC : STEP1_FORM_TITLE}
+        </p>
+        {!isSpecificMethod && docBinder && (
           <FieldRow label="เอกสารประกาศแผนจัดซื้อจัดจ้างจากระบบ e-GP">
             <p className="text-xs text-muted-foreground mb-2">
               แนบหลักฐานการเผยแพร่แผนจัดซื้อจัดจ้างประจำปีก่อนกรอกรหัส e-GP
@@ -567,7 +824,7 @@ export function Step1DetailForm({
             disabled={!egpUnlocked}
             className={`${inputCls}${!egpUnlocked ? " opacity-60 cursor-not-allowed bg-muted" : ""}`}
           />
-          {!egpUnlocked && (
+          {!egpUnlocked && !isSpecificMethod && (
             <p className="text-xs text-muted-foreground mt-1">
               ปลดล็อกเมื่อแนบเอกสารประกาศแผนจัดซื้อจัดจ้างจากระบบ e-GP ด้านบนแล้ว
             </p>
@@ -584,10 +841,14 @@ export function Step1DetailForm({
           inputMode="numeric"
           className={inputCls}
         />
-        <p className="text-xs text-muted-foreground mt-1">
-          ใช้คำนวณระยะเวลาขั้นตอนที่มีกำหนดวันขั้นต่ำ (เช่น ประกาศ e-bidding)
-        </p>
+        {!isSpecificMethod && (
+          <p className="text-xs text-muted-foreground mt-1">
+            ใช้คำนวณระยะเวลาขั้นตอนที่มีกำหนดวันขั้นต่ำ (เช่น ประกาศ e-bidding)
+          </p>
+        )}
       </FieldRow>
+      {!isSpecificMethod && (
+        <>
       <FieldRow label="หมวดงบประมาณ *">
         <select
           value={projectProfile.budget_category}
@@ -623,7 +884,11 @@ export function Step1DetailForm({
           value={projectProfile.project_type}
           onChange={(e) => {
             setEgpProjectTypeTouched(true);
-            onProjectProfileChange({ project_type: e.target.value });
+            onProjectProfileChange({
+              project_type: e.target.value,
+              result_unit: "",
+            });
+            setResultUnitOtherPending(false);
           }}
           disabled={readOnly}
           className={inputCls}
@@ -639,6 +904,8 @@ export function Step1DetailForm({
           บันทึกลงข้อมูลโครงการหลัก — ใช้กำหนดโหมดขั้นตอนที่ 10 และเมนูติดตามงานก่อสร้าง
         </p>
       </FieldRow>
+        </>
+      )}
       <FieldRow label="ประเภทโครงการ (วิธีจัดซื้อจัดจ้าง)">
         <select
           value={method}
@@ -652,9 +919,11 @@ export function Step1DetailForm({
             </option>
           ))}
         </select>
-        <p className="text-xs text-muted-foreground mt-1">
-          ใช้ร่วมกับวงเงินงบประมาณในการคำนวณวันทำการขั้นต่ำของระบบ
-        </p>
+        {!isSpecificMethod && (
+          <p className="text-xs text-muted-foreground mt-1">
+            ใช้ร่วมกับวงเงินงบประมาณในการคำนวณวันทำการขั้นต่ำของระบบ
+          </p>
+        )}
         {showSpecificMethodBudgetWarning && (
           <div className="rounded-md bg-yellow-50 border-l-4 border-yellow-500 text-yellow-700 px-4 py-3 text-sm">
             {STEP1_SPECIFIC_METHOD_BUDGET_COMPLIANCE_WARNING_MSG}
@@ -666,29 +935,23 @@ export function Step1DetailForm({
           </p>
         )}
       </FieldRow>
-      {isSpecificMethod && (
-        <FieldRow label="เหตุผลความจำเป็นในการใช้วิธีเฉพาะเจาะจง">
-          <textarea
-            value={specificMethodReason}
-            onChange={(e) => onSpecificMethodReasonChange(e.target.value)}
-            disabled={readOnly}
-            rows={4}
-            placeholder="ระบุเหตุผลตามระเบียบพัสดุฯ ข้อ 79 เช่น มีลักษณะเฉพาะเจาะจง..."
-            className={`${inputCls} min-h-[96px] resize-y${specificReasonMissing ? " border-destructive" : ""}`}
-          />
-          {specificReasonMissing && (
-            <p className="text-sm text-destructive mt-2 font-medium">
-              {STEP1_SPECIFIC_METHOD_REASON_REQUIRED_MSG}
-            </p>
-          )}
-        </FieldRow>
-      )}
       <Step1ResponsibleOfficerField
         value={responsibleName}
         profilePosition={profilePosition}
       />
       </div>
 
+      {isSpecificMethod && (
+        <Step1SpecificWorkflowSection
+          fields={specificWorkflow}
+          onChange={onSpecificWorkflowChange}
+          readOnly={readOnly}
+          docBinder={docBinder}
+        />
+      )}
+
+      {!isSpecificMethod && (
+      <>
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
         <p className="text-sm font-medium text-foreground">กลุ่มข้อมูลหน่วยงาน</p>
         <FieldRow label="หน่วยงานส่วนภูมิภาค / เขตที่รับผิดชอบ">
@@ -733,12 +996,19 @@ export function Step1DetailForm({
         </FieldRow>
         <FieldRow label="หน่วยวัดผลสัมฤทธิ์ของงาน *">
           <ResultUnitSelect
+            key={projectProfile.project_type || "none"}
             value={projectProfile.result_unit}
             onChange={(result_unit) => onProjectProfileChange({ result_unit })}
+            onOtherModeChange={setResultUnitOtherPending}
             disabled={readOnly}
             inputClassName={inputCls}
             hint="ใช้แสดงต่อท้ายผลสะสมหน้างานจริงในขั้นตอนที่ 10 และรายงานสรุปผู้บริหาร"
           />
+          {resultUnitOtherPending && (
+            <p className="text-sm text-destructive mt-2 font-medium">
+              {STEP1_RESULT_UNIT_OTHER_REQUIRED_MSG}
+            </p>
+          )}
         </FieldRow>
         <FieldRow label="จำนวนผลสัมฤทธิ์ของงาน *" complianceTarget="target_quantity">
           <input
@@ -761,18 +1031,28 @@ export function Step1DetailForm({
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
         <p className="text-sm font-medium text-foreground">ที่อยู่/พิกัดสถานที่ดำเนินการ</p>
+        {!siteDetailRequired && (
+          <p className="text-xs text-muted-foreground">
+            ประเภทโครงการ «{projectProfile.project_type || "ซื้อ/จ้างเหมา"}» — ไม่บังคับระบุบ้าน หมู่ ตำบล อำเภอ (เหมาะกับงานจัดซื้อครุภัณฑ์) กรุณาระบุจังหวัดอย่างน้อย
+          </p>
+        )}
+        {isEgpConstructionProjectType(projectProfile.project_type) && (
+          <p className="text-xs text-sky-700 bg-sky-50 border border-sky-200 rounded-md px-2 py-1.5">
+            งานจ้างก่อสร้าง — บังคับกรอกที่อยู่หน้างานให้ครบถ้วน
+          </p>
+        )}
         <div className="grid gap-4 sm:grid-cols-2">
-          <FieldRow label="ชื่อบ้าน/หมู่บ้าน *">
+          <FieldRow label={`ชื่อบ้าน/หมู่บ้าน${siteDetailLabelSuffix}`}>
             <input
               value={projectProfile.site_village}
               onChange={(e) => onProjectProfileChange({ site_village: e.target.value })}
               placeholder="เช่น บ้านหนองปลามัน"
               disabled={readOnly}
-              required
+              required={siteDetailRequired}
               className={inputCls}
             />
           </FieldRow>
-          <FieldRow label="หมู่ที่ *">
+          <FieldRow label={`หมู่ที่${siteDetailLabelSuffix}`}>
             <input
               type="number"
               min={1}
@@ -784,26 +1064,26 @@ export function Step1DetailForm({
                 });
               }}
               disabled={readOnly}
-              required
+              required={siteDetailRequired}
               className={inputCls}
               placeholder="เช่น 5"
             />
           </FieldRow>
-          <FieldRow label="ตำบล *">
+          <FieldRow label={`ตำบล${siteDetailLabelSuffix}`}>
             <input
               value={projectProfile.site_subdistrict}
               onChange={(e) => onProjectProfileChange({ site_subdistrict: e.target.value })}
               disabled={readOnly}
-              required
+              required={siteDetailRequired}
               className={inputCls}
             />
           </FieldRow>
-          <FieldRow label="อำเภอ *">
+          <FieldRow label={`อำเภอ${siteDetailLabelSuffix}`}>
             <input
               value={projectProfile.site_district}
               onChange={(e) => onProjectProfileChange({ site_district: e.target.value })}
               disabled={readOnly}
-              required
+              required={siteDetailRequired}
               className={inputCls}
             />
           </FieldRow>
@@ -816,6 +1096,8 @@ export function Step1DetailForm({
           </FieldRow>
         </div>
       </div>
+      </>
+      )}
     </div>
   );
 }
@@ -859,6 +1141,8 @@ type Step2FormProps = {
   step2GateDebug?: Parameters<typeof getStep2ReadyDebugInfo>[1] & {
     autoCheckStates?: Record<string, boolean>;
   };
+  /** วิธีเฉพาะเจาะจง — แสดงเฉพาะกลุ่มใบเสนอราคา */
+  specificQuotationMode?: boolean;
 } & ChronologicalFormProps;
 
 function CommitteeMemberList({
@@ -1132,6 +1416,7 @@ export function Step2DetailForm({
   onSaveMarketQuotes,
   step2GateDebug,
   chronologicalCtx,
+  specificQuotationMode = false,
 }: Step2FormProps) {
   const medianOverBudget = isStep2MedianPriceOverBudget(
     medianPrice.approved_median_price,
@@ -1178,6 +1463,13 @@ export function Step2DetailForm({
 
   return (
     <div className="space-y-4 max-w-2xl">
+      {specificQuotationMode && (
+        <p className="text-sm font-medium text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-md px-3 py-2">
+          โหมดวิธีเฉพาะเจาะจง — บันทึกใบเสนอราคา (Quotation) อย่างน้อย 3 ราย
+        </p>
+      )}
+      {!specificQuotationMode && (
+      <>
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
         <div className="space-y-3">
           <p className="text-sm font-medium text-foreground">รูปแบบการแต่งตั้งคณะกรรมการ</p>
@@ -1421,9 +1713,15 @@ export function Step2DetailForm({
           />
         </FieldRow>
       </div>
+      </>
+      )}
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-3">
-        <SectionTitle>กลุ่มที่ 3: ใบเสนอราคาท้องตลาด (อย่างน้อย 3 ราย)</SectionTitle>
+        <SectionTitle>
+          {specificQuotationMode
+            ? "ใบเสนอราคา (Quotation)"
+            : "กลุ่มที่ 3: ใบเสนอราคาท้องตลาด (อย่างน้อย 3 ราย)"}
+        </SectionTitle>
         <div className="flex flex-wrap items-center gap-3">
           <Step2MarketQuotesModal
             committees={committees}

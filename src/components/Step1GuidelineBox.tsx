@@ -3,23 +3,35 @@ import {
   STEP1_GUIDELINE_DURATION,
   STEP1_GUIDELINE_WARNING,
 } from "@/lib/step1-guideline";
+import {
+  STEP1_SPECIFIC_GUIDELINE_ACTION,
+  STEP1_SPECIFIC_GUIDELINE_DURATION,
+  STEP1_SPECIFIC_GUIDELINE_WARNING,
+} from "@/lib/step1-specific-workflow";
 
-export function Step1GuidelineBox() {
+import { isSpecificMethodShortWorkflow } from "@/lib/dynamic-stepper";
+
+export function Step1GuidelineBox({ method = "e_bidding" }: { method?: string }) {
+  const isSpecific = isSpecificMethodShortWorkflow(method);
+  const action = isSpecific ? STEP1_SPECIFIC_GUIDELINE_ACTION : STEP1_GUIDELINE_ACTION;
+  const duration = isSpecific ? STEP1_SPECIFIC_GUIDELINE_DURATION : STEP1_GUIDELINE_DURATION;
+  const warning = isSpecific ? STEP1_SPECIFIC_GUIDELINE_WARNING : STEP1_GUIDELINE_WARNING;
+
   return (
     <div className="mb-4 space-y-4">
       <section className="rounded-lg border border-slate-200 bg-slate-50 border-l-4 border-l-blue-500 p-4 shadow-sm">
         <h3 className="font-semibold text-slate-900 text-sm">📘 คุณต้องทำในขั้นตอนนี้</h3>
-        <p className="mt-3 text-sm text-slate-700 leading-relaxed">{STEP1_GUIDELINE_ACTION}</p>
+        <p className="mt-3 text-sm text-slate-700 leading-relaxed whitespace-pre-line">{action}</p>
       </section>
 
       <section className="rounded-lg border border-slate-200 bg-slate-50 border-l-4 border-l-green-500 p-4 shadow-sm">
         <h3 className="font-semibold text-slate-900 text-sm">⏱ ระยะเวลาดำเนินการ</h3>
-        <p className="mt-3 text-sm text-slate-700 leading-relaxed">{STEP1_GUIDELINE_DURATION}</p>
+        <p className="mt-3 text-sm text-slate-700 leading-relaxed whitespace-pre-line">{duration}</p>
       </section>
 
       <section className="rounded-lg border border-red-200 bg-red-50 border-l-4 border-l-red-500 p-4 shadow-sm">
         <h3 className="font-semibold text-sm text-red-700">⚠️ ข้อควรระวัง</h3>
-        <p className="mt-2 text-sm leading-relaxed text-red-700">{STEP1_GUIDELINE_WARNING}</p>
+        <p className="mt-2 text-sm leading-relaxed text-red-700 whitespace-pre-line">{warning}</p>
       </section>
     </div>
   );

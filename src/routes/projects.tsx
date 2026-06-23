@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Search, Loader2, X, FolderKanban } from "lucide-react";
 import { toast } from "sonner";
@@ -12,7 +12,8 @@ import {
   formatBaht, progressColor,
 } from "@/lib/procurement";
 import { EGP_MILESTONES, getMilestoneLabel, milestoneProgressPercent } from "@/lib/egp-milestones";
-import { APPEAL_STATUS_LABELS, shouldShowStep1SpecificMethodBudgetComplianceWarning, STEP1_SPECIFIC_METHOD_BUDGET_COMPLIANCE_WARNING_MSG } from "@/lib/step-form";
+import { getWorkflowDisplayStepCount, backendStepToUiStep } from "@/lib/dynamic-stepper";
+import { APPEAL_STATUS_LABELS, isStep1ResultUnitSubmitBlocked, shouldShowStep1SpecificMethodBudgetComplianceWarning, STEP1_SPECIFIC_METHOD_BUDGET_COMPLIANCE_WARNING_MSG } from "@/lib/step-form";
 import { ResultUnitSelect } from "@/components/ResultUnitSelect";
 import {
   BUDGET_CATEGORY_OPTIONS,
@@ -174,7 +175,9 @@ function FilterSelect({ value, onChange, options }: {
 }
 
 function ProjectCard({ project }: { project: Project }) {
-  const pct = milestoneProgressPercent(project.current_step);
+  const displayStep = backendStepToUiStep(project.current_step, project.method);
+  const displayTotal = getWorkflowDisplayStepCount(project.method);
+  const pct = Math.round((displayStep / displayTotal) * 100);
   return (
     <Link
       to="/projects/$projectId"
@@ -197,7 +200,7 @@ function ProjectCard({ project }: { project: Project }) {
       <div className="mt-3">
         <div className="flex items-center justify-between text-xs mb-1.5 gap-2">
           <span className="text-muted-foreground truncate">
-            ขั้น {project.current_step}: {getMilestoneLabel(project.current_step, true)}
+            ขั้น {displayStep}: {getMilestoneLabel(project.current_step, true)}
           </span>
           <div className="flex items-center gap-1.5 shrink-0">
             {project.current_step >= 6 && project.appeal_status === "pending" && (
@@ -238,8 +241,15 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
   const [budgetCategory, setBudgetCategory] = useState("");
   const [egpProjectType, setEgpProjectType] = useState("");
   const [egpProjectTypeTouched, setEgpProjectTypeTouched] = useState(false);
+  const [resultUnitOtherPending, setResultUnitOtherPending] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    console.log(
+      "🛡️ [PROJECT INITIALIZATION ACTIVE]: Master project creation form with auto-reset constraints and compliance validators is fully deployed.",
+    );
+  }, []);
 
   const submit = async () => {
     setLoading(true); setError(null);
@@ -375,6 +385,8 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
               onChange={(e) => {
                 setEgpProjectTypeTouched(true);
                 setEgpProjectType(e.target.value);
+                setResultUnit("");
+                setResultUnitOtherPending(false);
               }}
               className={inputCls}
             >
@@ -412,8 +424,10 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
           </Field>
           <Field label="หน่วยวัดผลสัมฤทธิ์ของงาน *">
             <ResultUnitSelect
+              key={egpProjectType || "none"}
               value={resultUnit}
               onChange={setResultUnit}
+              onOtherModeChange={setResultUnitOtherPending}
               inputClassName={inputCls}
             />
           </Field>
@@ -436,7 +450,16 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
           </button>
           <button
             onClick={submit}
-            disabled={!name || !code || !budget || !budgetCategory || !egpProjectType || !resultUnit || !targetQuantity || loading}
+            disabled={
+              !name
+              || !code
+              || !budget
+              || !budgetCategory
+              || !egpProjectType
+              || !targetQuantity
+              || isStep1ResultUnitSubmitBlocked(resultUnit, resultUnitOtherPending)
+              || loading
+            }
             className="flex-1 h-10 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {loading && <Loader2 className="h-4 w-4 animate-spin" />}

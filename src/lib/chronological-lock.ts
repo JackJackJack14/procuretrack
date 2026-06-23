@@ -1,5 +1,5 @@
 /**
- * Global Chronological Lock — minDate แบบ Dynamic จากด่านก่อนหน้าในฐานข้อมูล (ห้าม hard-code วันที่)
+ * Global Chronological Lock — minDate แบบ Dynamic จากขั้นตอนที่ก่อนหน้าในฐานข้อมูล (ห้าม hard-code วันที่)
  */
 import {
   resolvePreviousStepMilestoneEndISO,
@@ -11,7 +11,7 @@ import type { TimelineValidationContext } from "@/lib/timeline-validation";
 
 export type ChronologicalMinProfile =
   | "default"
-  /** ขั้น 3 — วันลงนาม TOR: หลังแผนด่าน 1 และด่าน 2 */
+  /** ขั้น 3 — วันลงนาม TOR: หลังแผนขั้นตอนที่ 1 และขั้นตอนที่ 2 */
   | "step3_tor_approval"
   /** ขั้น 5 — ประกาศผล: ตั้งแต่วันหัวหน้าหน่วยงานอนุมัติผล (ขั้น 4) มาตรา 66 — ไม่ใช่ระยะอุทธรณ์ +7 วัน */
   | "step5_winner_announcement";
@@ -29,7 +29,7 @@ export function mergeMinDateISO(
   return best || undefined;
 }
 
-/** วันสิ้นสุด milestone ด่านก่อนหน้า — ใช้เป็น minDate เริ่มต้นของด่าน N */
+/** วันสิ้นสุด milestone ขั้นตอนที่ก่อนหน้า — ใช้เป็น minDate เริ่มต้นของขั้นตอนที่ N */
 export function getStepPreviousMilestoneMinISO(
   stepNumber: number,
   ctx: TimelineValidationContext,
@@ -44,7 +44,7 @@ export function getStepPreviousMilestoneMinISO(
   return iso || undefined;
 }
 
-/** ขั้น 3 — วันลงนาม TOR ต้องไม่ก่อนแผนด่าน 1 และไม่ก่อนด่าน 2 */
+/** ขั้น 3 — วันลงนาม TOR ต้องไม่ก่อนแผนขั้นตอนที่ 1 และไม่ก่อนขั้นตอนที่ 2 */
 export function getStep3TorApprovalMinISO(ctx: TimelineValidationContext): string | undefined {
   return mergeMinDateISO(
     resolveStep1PlanPublicationDateISO(ctx.steps, ctx.project),

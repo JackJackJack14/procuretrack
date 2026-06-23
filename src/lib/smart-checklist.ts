@@ -37,6 +37,7 @@ import {
   type EvidenceValidationContext,
 } from "@/lib/form-audit-trail";
 import { hasStep1PlanPublicationDoc } from "@/lib/checklist-inline-evidence";
+import { isSpecificMethodShortWorkflow } from "@/lib/dynamic-stepper";
 
 export type StepDocRef = { document_type: string };
 
@@ -46,16 +47,16 @@ export type SmartChecklistItem<K extends string = string> = {
   key: K;
   label: string;
   hint?: string;
-  /** ข้อความเงื่อนไขระเบียบ (แสดงใต้รายการ — ด่าน 3) */
+  /** ข้อความเงื่อนไขระเบียบ (แสดงใต้รายการ — ขั้นตอนที่ 3) */
   complianceHelperText?: string;
   mode: ChecklistMode;
 };
 
-/** เงื่อนไขระเบียบ — แสดงใต้ข้อ 2 กลุ่มที่ 1 ด่าน 3 */
+/** เงื่อนไขระเบียบ — แสดงใต้ข้อ 2 กลุ่มที่ 1 ขั้นตอนที่ 3 */
 export const STEP3_HEARING_FILES_COMPLIANCE_HELPER =
   "⚠️ เงื่อนไข: โปรดตรวจสอบร่างประกาศฯ และเอกสารประกวดราคาให้เป็นไปตามแบบมาตรฐาน และไม่มีการกำหนดคุณลักษณะเฉพาะที่สืบไปถึงการล็อกสเปคตาม พ.ร.บ. มาตรา 9";
 
-/** เงื่อนไขระเบียบ — แสดงใต้ข้อ 3 กลุ่มที่ 1 ด่าน 3 */
+/** เงื่อนไขระเบียบ — แสดงใต้ข้อ 3 กลุ่มที่ 1 ขั้นตอนที่ 3 */
 export const STEP3_EGP_PUBLICATION_COMPLIANCE_HELPER =
   "⚠️ เงื่อนไข: ต้องจัดทำบันทึกข้อความภายในเสนอหัวหน้าหน่วยงานเพื่อขอความเห็นชอบก่อนนำไปขึ้นเว็บภาครัฐ";
 
@@ -417,9 +418,11 @@ export function computeAutoChecklistState(ctx: SmartChecklistAutoContext): Recor
   if (stepNumber === 1) {
     const budgetVal = parseBudgetInput(ctx.budget ?? "");
     auto.budget_allocated_confirmed = !!budgetVal && budgetVal > 0;
-    auto.annual_plan_published = hasStep1PlanPublicationDoc(
-      (ctx.uploadedDocTypes ?? []).map((t) => ({ document_type: t })),
-    );
+    auto.annual_plan_published = isSpecificMethodShortWorkflow(ctx.method)
+      ? true
+      : hasStep1PlanPublicationDoc(
+          (ctx.uploadedDocTypes ?? []).map((t) => ({ document_type: t })),
+        );
     auto.egp_plan_code_verified = !!ctx.egpCode?.trim();
     auto.project_name_and_type_verified =
       !!ctx.projectName?.trim() &&

@@ -123,6 +123,8 @@ import {
   countStep1CoreDocumentsReady,
   countStep1FormRequiredProgress,
   getStep1ComplianceIssues,
+  getStep1RequiredDocsForMethod,
+  isStep1RequiredDocSatisfiedForMethod,
   type Step1ChecklistKey,
   EMPTY_STEP2_CHECKLIST,
   EMPTY_STEP2_COMMITTEE_ORDER,
@@ -252,7 +254,6 @@ import {
   hasStep6AgencyOpinionCgdDoc,
   hasStep6CgdReportDoc,
   hasStep6NoAppealEgpDoc,
-  isStep1RequiredDocSatisfied,
   isStep2RequiredDocSatisfied,
   isStep4RequiredDocSatisfied,
   isStep5RequiredDocSatisfied,
@@ -295,6 +296,26 @@ import {
   isWorkflowReadOnly,
   WORKFLOW_TOTAL_STEPS,
 } from "@/lib/step-workflow";
+import {
+  backendStepToUiStep,
+  uiStepToBackendStep,
+  getWorkflowDisplayStepCount,
+  getWorkflowStepTitle,
+  isSpecificMethodShortWorkflow,
+  normalizeProcurementMethod,
+  getNextBackendStepAfterComplete,
+  getBackendStepsSkippedOnAdvance,
+  getPrevBackendStep,
+  canNavigateToUiStep,
+} from "@/lib/dynamic-stepper";
+import {
+  EMPTY_STEP1_SPECIFIC_WORKFLOW,
+  pruneTimelineForSpecificMethod,
+  STEP1_SPECIFIC_STEP_HEADER_HINT,
+  type Step1SpecificWorkflowFields,
+} from "@/lib/step1-specific-workflow";
+import { WorkflowStepper } from "@/components/WorkflowStepper";
+import { ProcurementMethodBadge } from "@/components/ProcurementMethodBadge";
 
 export const Route = createFileRoute("/projects_/$projectId")({
   head: () => ({ meta: [{ title: "รายละเอียดโครงการ — ProcureTrack" }] }),
@@ -408,7 +429,11 @@ function ProjectDetailPage() {
   const [step1Profile, setStep1Profile] = useState<Step1ProjectProfile>({
     ...EMPTY_STEP1_PROJECT_PROFILE,
   });
-  const [step1SpecificMethodReason, setStep1SpecificMethodReason] = useState("");
+  const [step1SpecificWorkflow, setStep1SpecificWorkflow] =
+    useState<Step1SpecificWorkflowFields>(EMPTY_STEP1_SPECIFIC_WORKFLOW);
+  const patchStep1SpecificWorkflow = (patch: Partial<Step1SpecificWorkflowFields>) =>
+    setStep1SpecificWorkflow((prev) => ({ ...prev, ...patch }));
+  const step1SpecificMethodReason = step1SpecificWorkflow.reason;
   const patchStep1Profile = (patch: Partial<Step1ProjectProfile>) =>
     setStep1Profile((prev) => ({ ...prev, ...patch }));
   // ขั้นตอนที่ 2
@@ -501,17 +526,30 @@ function ProjectDetailPage() {
   const committees = data?.committees ?? [];
 
   const workflowStep = project?.current_step ?? 1;
+  const procurementMethod = normalizeProcurementMethod(
+    project
+      ? activeStep === 1
+        ? step1Method || project.method
+        : project.method ?? step1Method
+      : step1Method,
+  );
+  const isSpecificShortWorkflow = isSpecificMethodShortWorkflow(procurementMethod);
+  const workflowDisplayTotal = getWorkflowDisplayStepCount(procurementMethod);
+  const workflowUiStep = backendStepToUiStep(workflowStep, procurementMethod);
+  const viewedBackendStep = isSpecificShortWorkflow
+    ? uiStepToBackendStep(activeStep, procurementMethod)
+    : activeStep;
   const effectiveProcurementPath = normalizeProcurementPath(project?.procurement_path);
   const isExternalProcurementMode = isExternalProcurement(effectiveProcurementPath);
   const workflowMode = useMemo(
     () =>
       getStepWorkflowMode(
         activeStep,
-        workflowStep,
+        isSpecificShortWorkflow ? workflowUiStep : workflowStep,
         historicalEditUnlocked,
         effectiveProcurementPath,
       ),
-    [activeStep, workflowStep, historicalEditUnlocked, effectiveProcurementPath],
+    [activeStep, workflowUiStep, workflowStep, isSpecificShortWorkflow, historicalEditUnlocked, effectiveProcurementPath],
   );
   const workflowReadOnly = isWorkflowReadOnly(workflowMode);
 
@@ -532,7 +570,7 @@ function ProjectDetailPage() {
     setStep1Method("e_bidding");
     setStep1Checklist({ ...EMPTY_STEP1_CHECKLIST });
     setStep1Profile({ ...EMPTY_STEP1_PROJECT_PROFILE });
-    setStep1SpecificMethodReason("");
+    setStep1SpecificWorkflow({ ...EMPTY_STEP1_SPECIFIC_WORKFLOW });
     setStep2Checklist({ ...EMPTY_STEP2_CHECKLIST });
     setStep2CommitteeOrder({ ...EMPTY_STEP2_COMMITTEE_ORDER });
     setStep2MedianPrice({ ...EMPTY_STEP2_MEDIAN_PRICE });
@@ -560,15 +598,19 @@ function ProjectDetailPage() {
 
   const handleStepNavigation = (stepNumber: number) => {
     if (!project) return;
+    const targetUi = isSpecificShortWorkflow ? stepNumber : stepNumber;
     console.log(
       "🔄 [STEPPER NAVIGATION FIXED] Project Current Step:",
       project.current_step,
       "Target Click Step:",
       stepNumber,
       "Is Allowed:",
-      stepNumber <= project.current_step,
+      isSpecificShortWorkflow
+        ? stepNumber <= workflowUiStep
+        : stepNumber <= project.current_step,
     );
     if (
+      !isSpecificShortWorkflow &&
       isAppealWorkflowLocked(step6Appeal) &&
       (stepNumber === 7 || stepNumber === 8)
     ) {
@@ -577,7 +619,11 @@ function ProjectDetailPage() {
       );
       return;
     }
-    if (!canNavigateToStep(stepNumber, workflowStep, effectiveProcurementPath)) {
+    if (
+      isSpecificShortWorkflow
+        ? !canNavigateToUiStep(targetUi, workflowStep, procurementMethod, effectiveProcurementPath)
+        : !canNavigateToStep(stepNumber, workflowStep, effectiveProcurementPath)
+    ) {
       toast.message(
         "ไม่สามารถข้ามไปขั้นตอนถัดไปได้ — กรุณาดำเนินการตามลำดับและกด «บันทึกและไปขั้นตอนถัดไป»",
       );
@@ -596,9 +642,23 @@ function ProjectDetailPage() {
   };
 
   const handleNextStep = () => {
-    if (!project || activeStep >= workflowStep || activeStep >= WORKFLOW_TOTAL_STEPS) return;
+    if (!project) return;
+    const maxUi = isSpecificShortWorkflow ? workflowUiStep : workflowStep;
+    if (activeStep >= maxUi || activeStep >= workflowDisplayTotal) return;
     setActiveStep(activeStep + 1);
   };
+
+  useEffect(() => {
+    if (!project) return;
+    console.log(
+      "🛡️ [DYNAMIC STEPPER ROUTER ACTIVE]: Workflow successfully pruned. Specific method shortened to 5 steps, e-Bidding preserved at 10 steps.",
+    );
+    if (isSpecificMethodShortWorkflow(project.method)) {
+      console.log(
+        "🛡️ [SPECIFIC WORKFLOW FRONTEND DEPLOYED]: Guidance texts, 5-milestone project timeline, and Section 22 specific form fields are fully operational.",
+      );
+    }
+  }, [project?.id, project?.method]);
 
   useEffect(() => {
     console.log(
@@ -627,7 +687,7 @@ function ProjectDetailPage() {
     }
 
     const stepNum = current.step_number;
-    const prevStep = stepNum - 1;
+    const prevStep = getPrevBackendStep(stepNum, project.method);
     const prevStepRecord = steps.find((s) => s.step_number === prevStep);
     if (!prevStepRecord) return;
 
@@ -717,7 +777,7 @@ function ProjectDetailPage() {
 
       setHistoricalEditUnlocked(false);
       setGenericManualChecklist(createEmptyManualChecklist(stepNum));
-      setActiveStep(prevStep);
+      setActiveStep(backendStepToUiStep(prevStep, project.method));
       await invalidateAll();
       toast.success(
         `ย้อนกลับไปขั้นตอนที่ ${prevStep} แล้ว — ล้างข้อมูลขั้นที่ ${stepNum} และเปิดให้แก้ไขขั้นก่อนหน้าได้`,
@@ -734,10 +794,19 @@ function ProjectDetailPage() {
   // Sync activeStep กับ current_step ของโครงการที่โหลดอยู่เสมอ (รวมเมื่อสลับโครงการ)
   useEffect(() => {
     if (!project || project.id !== projectId) return;
-    setActiveStep(project.current_step);
-  }, [projectId, project?.id, project?.current_step]);
+    setActiveStep(backendStepToUiStep(project.current_step, project.method));
+  }, [projectId, project?.id, project?.current_step, project?.method]);
 
-  const current = useMemo(() => steps.find((s) => s.step_number === activeStep), [steps, activeStep]);
+  // ซิงก์วิธีจัดซื้อจากโครงการหลัก — ป้องกัน stepper เป็น specific แต่ฟอร์มยังใช้ค่าเริ่มต้น e_bidding
+  useEffect(() => {
+    if (!project || project.id !== projectId) return;
+    setStep1Method(normalizeProcurementMethod(project.method ?? "e_bidding"));
+  }, [projectId, project?.id, project?.method]);
+
+  const current = useMemo(
+    () => steps.find((s) => s.step_number === viewedBackendStep),
+    [steps, viewedBackendStep],
+  );
   const step3Record = useMemo(() => steps.find((s) => s.step_number === 3), [steps]);
   const step4Record = useMemo(() => steps.find((s) => s.step_number === 4), [steps]);
   const step5Record = useMemo(() => steps.find((s) => s.step_number === 5), [steps]);
@@ -1010,12 +1079,14 @@ function ProjectDetailPage() {
       setStep1ProjectName(project.name ?? "");
       setEgpCode(project.project_code ?? "");
       setStep1Budget(formatBudgetInput(String(project.budget ?? 0)));
-      const m = project.method ?? "e_bidding";
-      setStep1Method(m === "e_market" ? "selection" : m);
+      const m = normalizeProcurementMethod(project.method ?? "e_bidding");
+      setStep1Method(m);
       const draft1 = loadStepDraftFields(current);
       const step1Form = loadStep1FormFromStep(current as { note: string | null; step1_checklist?: unknown });
       setStep1Checklist(step1Form.checklist ?? { ...EMPTY_STEP1_CHECKLIST });
-      setStep1SpecificMethodReason(step1Form.specificMethodReason ?? "");
+      setStep1SpecificWorkflow(
+        step1Form.specificWorkflow ?? { ...EMPTY_STEP1_SPECIFIC_WORKFLOW },
+      );
       setStep1Profile(mergeStep1ProfileFromProject(project));
       setNote(draft1.userNote);
       setDueDate(draft1.dueDate);
@@ -1297,11 +1368,7 @@ function ProjectDetailPage() {
       ? parseBudgetInput(step1Budget) || Number(project.budget)
       : Number(project.budget)
     : 0;
-  const calcMethod = project
-    ? activeStep === 1
-      ? step1Method
-      : project.method
-    : "e_bidding";
+  const calcMethod = procurementMethod;
 
   const invalidateAll = async () => {
     await Promise.all([
@@ -1501,7 +1568,8 @@ function ProjectDetailPage() {
       const budgetVal = parseCurrencyForDatabase(step1Budget) ?? 0;
       const formNote = serializeStepNote(note, {
         checklist: step1Checklist,
-        specificMethodReason: step1SpecificMethodReason,
+        specificMethodReason: step1SpecificWorkflow.reason,
+        specificWorkflow: step1SpecificWorkflow,
       });
       const { error: pe } = await supabase
         .from("projects")
@@ -1509,7 +1577,7 @@ function ProjectDetailPage() {
           name: step1ProjectName.trim() || project.name,
           project_code: egpCode.trim() || project.project_code,
           budget: budgetVal,
-          method: step1Method,
+          method: normalizeProcurementMethod(step1Method),
           ...buildProjectStep1ProfileFields(step1Profile),
         })
         .eq("id", project.id);
@@ -1989,7 +2057,28 @@ function ProjectDetailPage() {
       isExternalProcurement(project.procurement_path) &&
       current.step_number <= EXTERNAL_PROCUREMENT_ENTRY_STEP - 1
         ? EXTERNAL_PROCUREMENT_ENTRY_STEP
-        : Math.min(10, current.step_number + 1);
+        : getNextBackendStepAfterComplete(current.step_number, project.method);
+
+    const skippedSteps = getBackendStepsSkippedOnAdvance(
+      current.step_number,
+      project.method,
+    );
+    if (skippedSteps.length > 0) {
+      const { data: skipUser } = await supabase.auth.getUser();
+      for (const skipNum of skippedSteps) {
+        const skipRecord = steps.find((s) => s.step_number === skipNum);
+        if (!skipRecord || skipRecord.status === "completed") continue;
+        await supabase
+          .from("procurement_steps")
+          .update({
+            status: "completed",
+            completed_at: new Date().toISOString(),
+            completed_by: skipUser.user?.id ?? null,
+          })
+          .eq("id", skipRecord.id);
+      }
+    }
+
     const updates: Record<string, unknown> = { current_step: nextStep };
     if (current.step_number === 10) {
       const lastInspection = resolveLastInstallmentInspectionDate(step10InspectionRows);
@@ -2020,7 +2109,7 @@ function ProjectDetailPage() {
         console.warn("[Workflow] failed to mark next step in_progress", nextStepErr);
       }
     }
-    setActiveStep(nextStep);
+    setActiveStep(backendStepToUiStep(nextStep, project.method));
     await invalidateAll();
     return true;
   };
@@ -2040,7 +2129,12 @@ function ProjectDetailPage() {
 
   const completeStep = async (opts?: { skipDocValidation?: boolean }) => {
     if (!current || !project) return;
-    if (!canCompleteWorkflowStep(activeStep, project.current_step, current.status, project.procurement_path)) {
+    if (!canCompleteWorkflowStep(
+      activeStep,
+      isSpecificMethodShortWorkflow(project.method) ? workflowUiStep : project.current_step,
+      current.status,
+      project.procurement_path,
+    )) {
       toast.error("ดำเนินการไปขั้นถัดไปได้เฉพาะขั้นตอนปัจจุบันเท่านั้น");
       return;
     }
@@ -2164,9 +2258,10 @@ function ProjectDetailPage() {
           budget: step1Budget,
           responsibleName: effectiveResponsibleName,
           projectName: step1ProjectName,
-          method: step1Method,
+          method: procurementMethod,
           projectProfile: step1Profile,
-          specificMethodReason: step1SpecificMethodReason,
+          specificMethodReason: step1SpecificWorkflow.reason,
+          specificWorkflow: step1SpecificWorkflow,
           stepDocs: step1Docs,
         },
         computeAutoChecklistState({
@@ -2175,7 +2270,7 @@ function ProjectDetailPage() {
           budget: step1Budget,
           responsibleName: effectiveResponsibleName,
           projectName: step1ProjectName,
-          method: step1Method,
+          method: procurementMethod,
         }),
       );
       if (complianceIssues.length > 0) {
@@ -2362,13 +2457,20 @@ function ProjectDetailPage() {
       current.step_number !== 10
     ) {
       const stepDocs = STEP_DOCS_DETAILED[current.step_number - 1] ?? [];
-      const requiredDocs = stepDocs.filter((d) => d.required).map((d) => d.name);
+      const requiredDocs =
+        current.step_number === 1
+          ? getStep1RequiredDocsForMethod(stepDocs, procurementMethod).map((d) => d.name)
+          : stepDocs.filter((d) => d.required).map((d) => d.name);
       const uploaded = docs
         .filter((d) => d.step_number === current.step_number)
         .map((d) => d.document_type);
       const missing = requiredDocs.filter((name) => {
         if (current.step_number === 1) {
-          return !isStep1RequiredDocSatisfied(name, uploaded);
+          return !isStep1RequiredDocSatisfiedForMethod(
+            name,
+            uploaded,
+            procurementMethod,
+          );
         }
         if (current.step_number === 4) {
           return !isStep4RequiredDocSatisfied(name, uploaded);
@@ -2461,7 +2563,7 @@ function ProjectDetailPage() {
     return <AppShell breadcrumb="โครงการ"><p className="text-sm text-destructive">ไม่พบโครงการ</p></AppShell>;
   }
 
-  const docsForStep = docs.filter((d) => d.step_number === activeStep);
+  const docsForStep = docs.filter((d) => d.step_number === viewedBackendStep);
   const step3InheritedDocs =
     activeStep === 3
       ? [{ fromStep: 2, docs: docs.filter((d) => d.step_number === 2) }]
@@ -2510,7 +2612,7 @@ function ProjectDetailPage() {
                   {STATUS_LABEL[project.status] ?? project.status}
                 </span>
                 <span className="text-xs px-2.5 py-1 rounded-full bg-accent text-accent-foreground font-medium">
-                  ขั้นตอน {project.current_step}/10
+                  ขั้นตอน {isSpecificShortWorkflow ? workflowUiStep : project.current_step}/{workflowDisplayTotal}
                 </span>
               </div>
               <div className="flex gap-2">
@@ -2531,72 +2633,29 @@ function ProjectDetailPage() {
 
         {/* Step progress */}
         <div className="bg-card border rounded-[10px] p-5">
-          <h3 className="font-semibold mb-1">ความคืบหน้า 10 ขั้นตอน</h3>
+          <h3 className="font-semibold mb-1">
+            ความคืบหน้า {workflowDisplayTotal} ขั้นตอน
+            {isSpecificShortWorkflow && (
+              <span className="ml-2 text-xs font-normal text-emerald-700">
+                (วิธีเฉพาะเจาะจง)
+              </span>
+            )}
+          </h3>
           <p className="text-xs text-muted-foreground mb-4">
             {isExternalProcurementMode
-              ? "โหมดสัญญาจากส่วนกลาง/สพข. — คลิก Tab ใดก็ได้ (ข้าม Step 1–7 ไปเริ่ม Step 9 ได้ทันที)"
-              : "คลิกขั้นตอนที่เคยทำแล้วเพื่อย้อนกลับดู/แก้ไขได้ — ขั้นตอนในอนาคตล็อกจนกว่าจะกด «บันทึกและไปขั้นตอนถัดไป»"}
+              ? "โหมดสัญญาจากส่วนกลาง/สพข. — คลิก Tab ใดก็ได้ (ข้ามขั้นตอนที่ 1–7 ไปเริ่มขั้นตอนที่ 9 ได้ทันที)"
+              : isSpecificShortWorkflow
+                ? "โหมดวิธีเฉพาะเจาะจง — แสดง 5 ขั้นตอนหลัก (ข้ามขั้นตอน e-bidding / อุทธรณ์ / เปิดซอง)"
+                : "คลิกขั้นตอนที่เคยทำแล้วเพื่อย้อนกลับดู/แก้ไขได้ — ขั้นตอนในอนาคตล็อกจนกว่าจะกด «บันทึกและไปขั้นตอนถัดไป»"}
           </p>
-          <div className="grid grid-cols-5 lg:grid-cols-10 gap-2">
-            {steps.map((s) => {
-              const isActive = s.step_number === activeStep;
-              const isStepCompleted = s.step_number < project.current_step;
-              console.log(
-                "🟢 [STATUS GREEN VERIFY] Step " +
-                  s.step_number +
-                  " is completed? " +
-                  (s.step_number < project.current_step),
-              );
-              const isWorkflowLocked = isStepForwardLocked(
-                s.step_number,
-                workflowStep,
-                effectiveProcurementPath,
-              );
-              const isAppealStepperHardLocked =
-                isAppealWorkflowLocked(step6Appeal) &&
-                (s.step_number === 7 || s.step_number === 8);
-              const canNav =
-                canClickStepperTab(
-                  s.step_number,
-                  workflowStep,
-                  effectiveProcurementPath,
-                ) && !isAppealStepperHardLocked;
-              return (
-                <button
-                  key={s.id}
-                  type="button"
-                  disabled={!canNav}
-                  onClick={() => handleStepNavigation(s.step_number)}
-                  title={
-                    isAppealStepperHardLocked
-                      ? "ล็อก — รอผลวินิจฉัยอุทธรณ์ฟังไม่ขึ้น หรือยืนยันไม่มีผู้ยื่นอุทธรณ์"
-                      : isWorkflowLocked
-                        ? "ล็อก — ดำเนินการตามลำดับและกด «บันทึกและไปขั้นตอนถัดไป»"
-                        : isStepCompleted
-                        ? "คลิกเพื่อย้อนกลับดูข้อมูลขั้นตอนนี้"
-                        : isActive
-                          ? "ขั้นตอนที่กำลังดูอยู่"
-                          : "ขั้นตอนปัจจุบัน"
-                  }
-                  style={!canNav ? { cursor: "not-allowed" } : undefined}
-                  className={`relative p-3 rounded-md text-xs text-center transition border-2 ${
-                    !canNav
-                      ? "bg-muted/30 border-transparent text-muted-foreground/40 opacity-50 cursor-not-allowed"
-                      : isStepCompleted
-                        ? "bg-success/15 border-success/30 text-success-foreground hover:bg-success/20 cursor-pointer"
-                        : isActive
-                          ? "bg-blue-50 border-2 border-blue-600 text-blue-700 font-semibold cursor-pointer"
-                          : "bg-muted/50 border-transparent text-muted-foreground hover:bg-muted cursor-pointer"
-                  }`}
-                >
-                  {isStepCompleted && (
-                    <Check className="absolute top-1 right-1 h-3 w-3 text-success" />
-                  )}
-                  <div className="font-medium">{EGP_MILESTONE_SHORT[s.step_number - 1]}</div>
-                </button>
-              );
-            })}
-          </div>
+          <WorkflowStepper
+            method={procurementMethod}
+            currentBackendStep={workflowStep}
+            activeUiStep={activeStep}
+            procurementPath={effectiveProcurementPath}
+            step6Appeal={step6Appeal}
+            onNavigate={handleStepNavigation}
+          />
         </div>
 
         {/* Timeline summary */}
@@ -2705,7 +2764,7 @@ function ProjectDetailPage() {
             egpCode,
             budget: step1Budget,
             projectName: step1ProjectName,
-            method: step1Method,
+            method: normalizeProcurementMethod(step1Method),
             committees: step2Committees,
             committeeOrder: step2CommitteeOrder,
             medianPrice: step2MedianPrice,
@@ -2788,6 +2847,7 @@ function ProjectDetailPage() {
                   step1Budget: calcBudget,
                   stepDocs: docsForStep,
                   timelineCtx: timelineValidationCtx,
+                  quotationOnly: isSpecificShortWorkflow,
                 }
               : null;
           const step2ReadyForGate =
@@ -2928,20 +2988,24 @@ function ProjectDetailPage() {
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                     <h3 className="text-lg font-semibold">
-                      ขั้นตอนที่ {current.step_number}: {getMilestoneLabel(current.step_number)}
+                      ขั้นตอนที่ {activeStep}: {getWorkflowStepTitle(activeStep, procurementMethod)}
                     </h3>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      ระยะเวลา/ข้อควรระวัง:{" "}
-                      {current.step_number === 3
-                        ? "รับฟังความคิดเห็นร่างประกาศ/TOR ตามวงเงินงบประมาณ (ดูกล่องไกด์ไลน์ด้านบน)"
-                        : EGP_STEP_LEGAL_HINTS[current.step_number - 1]}
+                    <p className="text-xs text-muted-foreground mt-1 whitespace-pre-line">
+                      {current.step_number === 3 && !isSpecificShortWorkflow
+                        ? "ระยะเวลา/ข้อควรระวัง: รับฟังความคิดเห็นร่างประกาศ/TOR ตามวงเงินงบประมาณ (ดูกล่องไกด์ไลน์ด้านบน)"
+                        : isSpecificShortWorkflow && current.step_number === 1
+                          ? STEP1_SPECIFIC_STEP_HEADER_HINT
+                          : `ระยะเวลา/ข้อควรระวัง: ${EGP_STEP_LEGAL_HINTS[current.step_number - 1]}`}
                     </p>
                     </div>
-                    <StepAuditZipButton
-                      stepNumber={current.step_number}
-                      stepLabel={getMilestoneLabel(current.step_number)}
-                      docs={docs}
-                    />
+                    <div className="flex flex-col items-end gap-2">
+                      <ProcurementMethodBadge method={procurementMethod} />
+                      <StepAuditZipButton
+                        stepNumber={current.step_number}
+                        stepLabel={getWorkflowStepTitle(activeStep, procurementMethod)}
+                        docs={docs}
+                      />
+                    </div>
                   </div>
                   {current.step_number === 1 && (
                     <Step1DetailForm
@@ -2955,10 +3019,14 @@ function ProjectDetailPage() {
                       onEgpCodeChange={setEgpCode}
                       budget={step1Budget}
                       onBudgetChange={setStep1Budget}
-                      method={step1Method}
-                      onMethodChange={setStep1Method}
-                      specificMethodReason={step1SpecificMethodReason}
-                      onSpecificMethodReasonChange={setStep1SpecificMethodReason}
+                      method={procurementMethod}
+                      onMethodChange={(v) => setStep1Method(normalizeProcurementMethod(v))}
+                      specificMethodReason={step1SpecificWorkflow.reason}
+                      onSpecificMethodReasonChange={(v) =>
+                        patchStep1SpecificWorkflow({ reason: v })
+                      }
+                      specificWorkflow={step1SpecificWorkflow}
+                      onSpecificWorkflowChange={patchStep1SpecificWorkflow}
                       responsibleName={responsibleName}
                       onResponsibleNameChange={setResponsibleName}
                       projectProfile={step1Profile}
@@ -2973,6 +3041,7 @@ function ProjectDetailPage() {
                   )}
                   {current.step_number === 2 && (
                     <Step2DetailForm
+                      specificQuotationMode={isSpecificShortWorkflow}
                       checklist={step2Checklist}
                       onChecklistChange={setStep2Check}
                       autoCheckStates={autoCheckStates}
@@ -3008,7 +3077,7 @@ function ProjectDetailPage() {
                       chronologicalCtx={timelineValidationCtx}
                     />
                   )}
-                  {current.step_number === 3 && showStep3HearingForm && (
+                  {current.step_number === 3 && !isSpecificShortWorkflow && showStep3HearingForm && (
                     <Step3DetailForm
                       checklist={step3Checklist}
                       onChecklistChange={setStep3Check}
@@ -3037,7 +3106,7 @@ function ProjectDetailPage() {
                       chronologicalCtx={timelineValidationCtx}
                     />
                   )}
-                  {current.step_number === 3 && !showStep3HearingForm && current.status !== "completed" && (
+                  {current.step_number === 3 && !isSpecificShortWorkflow && !showStep3HearingForm && current.status !== "completed" && (
                     <p className="text-sm text-muted-foreground rounded-md border border-dashed p-4">
                       {step3Tier === "exempt"
                         ? "โครงการวงเงินไม่เกิน 5 ล้านบาท — กดปุ่ม «ข้ามขั้นตอนนี้อัตโนมัติ» ในกล่องไกด์ไลน์ด้านบนเพื่อไปขั้นตอนที่ 4"
@@ -3104,7 +3173,7 @@ function ProjectDetailPage() {
                       chronologicalCtx={timelineValidationCtx}
                     />
                   )}
-                  {current.step_number === 6 && (
+                  {current.step_number === 6 && !isSpecificShortWorkflow && (
                     <Step6AppealForm
                       checklist={
                         normalizeManualChecklist(
@@ -3134,7 +3203,7 @@ function ProjectDetailPage() {
                       chronologicalCtx={timelineValidationCtx}
                     />
                   )}
-                  {current.step_number === 7 && (
+                  {current.step_number === 7 && !isSpecificShortWorkflow && (
                     <Step7ContractNoticeForm
                       contractNotice={step7ContractNotice}
                       onContractNoticeChange={(patch) =>
@@ -3166,7 +3235,7 @@ function ProjectDetailPage() {
                       chronologicalCtx={timelineValidationCtx}
                     />
                   )}
-                  {current.step_number === 8 && (
+                  {current.step_number === 8 && !isSpecificShortWorkflow && (
                     <Step8ContractGuaranteeForm
                       contractExecution={step8ContractExecution}
                       defaultContractAmountFromStep4={step4ContractAmountDefault}
@@ -3194,7 +3263,7 @@ function ProjectDetailPage() {
                       chronologicalCtx={timelineValidationCtx}
                     />
                   )}
-                  {current.step_number === 9 && (
+                  {current.step_number === 9 && !isSpecificShortWorkflow && (
                     <Step9DetailForm
                       manualChecklist={genericManualChecklist}
                       onManualChange={setGenericManualCheck}
@@ -3292,9 +3361,19 @@ function ProjectDetailPage() {
                 const requiredDocs =
                   current.step_number === 3 && !showStep3HearingForm
                     ? []
-                    : stepDocs.filter((d) => d.required);
+                    : current.step_number === 1
+                      ? getStep1RequiredDocsForMethod(stepDocs, procurementMethod)
+                      : stepDocs.filter((d) => d.required);
                 const uploadedTypes = docsForStep.map((d) => d.document_type);
-                const completedCount = requiredDocs.filter((d) => uploadedTypes.includes(d.name)).length;
+                const completedCount = requiredDocs.filter((d) =>
+                  current.step_number === 1
+                    ? isStep1RequiredDocSatisfiedForMethod(
+                        d.name,
+                        uploadedTypes,
+                        procurementMethod,
+                      )
+                    : uploadedTypes.includes(d.name),
+                ).length;
                 const total = requiredDocs.length;
                 const allUploaded = total === 0 || completedCount >= total;
                 const isCompleted = current.status === "completed";
@@ -3426,9 +3505,10 @@ function ProjectDetailPage() {
                           budget: step1Budget,
                           responsibleName: effectiveResponsibleName,
                           projectName: step1ProjectName,
-                          method: step1Method,
+                          method: procurementMethod,
                           projectProfile: step1Profile,
-                          specificMethodReason: step1SpecificMethodReason,
+                          specificMethodReason: step1SpecificWorkflow.reason,
+                          specificWorkflow: step1SpecificWorkflow,
                           stepDocs: docsForStep,
                         },
                         autoCheckStates,
@@ -3443,9 +3523,10 @@ function ProjectDetailPage() {
                       budget: step1Budget,
                       responsibleName: effectiveResponsibleName,
                       projectName: step1ProjectName,
-                      method: step1Method,
+                      method: procurementMethod,
                       projectProfile: step1Profile,
-                      specificMethodReason: step1SpecificMethodReason,
+                      specificMethodReason: step1SpecificWorkflow.reason,
+                      specificWorkflow: step1SpecificWorkflow,
                       stepDocs: docsForStep,
                     },
                     autoCheckStates,
@@ -3724,7 +3805,7 @@ function ProjectDetailPage() {
                               : {};
                 const step1CoreDocsProgress =
                   current.step_number === 1
-                    ? countStep1CoreDocumentsReady(docsForStep)
+                    ? countStep1CoreDocumentsReady(docsForStep, procurementMethod)
                     : null;
                 const step1FormProgress =
                   current.step_number === 1
@@ -3733,9 +3814,10 @@ function ProjectDetailPage() {
                         budget: step1Budget,
                         responsibleName: effectiveResponsibleName,
                         projectName: step1ProjectName,
-                        method: step1Method,
+                        method: procurementMethod,
                         projectProfile: step1Profile,
-                        specificMethodReason: step1SpecificMethodReason,
+                        specificMethodReason: step1SpecificWorkflow.reason,
+                        specificWorkflow: step1SpecificWorkflow,
                       })
                     : null;
                 const step2CoreDocsProgress =
@@ -3961,25 +4043,25 @@ function ProjectDetailPage() {
                     blockingIssues: step2ComplianceIssues.map((i) => i.message),
                   });
                 }
-                const isViewingPastStep = activeStep < workflowStep;
+                const isViewingPastStep = activeStep < (isSpecificShortWorkflow ? workflowUiStep : workflowStep);
                 const showCompleteBtn =
                   workflowMode === "current" &&
                   !isCompleted &&
                   project.status !== PROJECT_STATUS_WARRANTY &&
-                  (current.step_number !== 3 || showStep3HearingForm);
+                  (isSpecificShortWorkflow || current.step_number !== 3 || showStep3HearingForm);
                 const showSaveDraft =
                   !isViewingPastStep &&
                   !workflowReadOnly &&
                   workflowMode === "current" &&
-                  (current.step_number !== 3 || showStep3HearingForm);
+                  (isSpecificShortWorkflow || current.step_number !== 3 || showStep3HearingForm);
                 const saveDraftLabel = "บันทึกร่าง";
                 const completeBtnLabel =
-                  current.step_number === 10
+                  viewedBackendStep === 10
                     ? "ปิดโครงการจ้างสำเร็จ (Archive Project)"
                     : "บันทึกและไปขั้นตอนถัดไป";
                 const showBackButton = activeStep > 1;
                 const showNextNavButton =
-                  isViewingPastStep && activeStep < WORKFLOW_TOTAL_STEPS;
+                  isViewingPastStep && activeStep < workflowDisplayTotal;
                 const checklistProgressPct =
                   reactiveChecklist.total > 0
                     ? Math.round((reactiveChecklist.done / reactiveChecklist.total) * 100)
@@ -4913,10 +4995,27 @@ function ProjectTimeline({
     [timelineInput],
   );
 
-  /** true = ยังมีวันที่ cascade/ประมาณการในด่าน 1–5 (ไม่ควรเกิดหลังลบ mock) */
+  const isSpecificTimeline = isSpecificMethodShortWorkflow(project.method);
+  const displayItems = useMemo(() => {
+    if (!isSpecificTimeline) {
+      return items.map((it) => ({
+        uiStep: it.stepNumber,
+        backendStep: it.stepNumber,
+        label: getMilestoneLabel(it.stepNumber),
+        date: it.date,
+        estimated: it.estimated,
+      }));
+    }
+    return pruneTimelineForSpecificMethod(items);
+  }, [items, isSpecificTimeline]);
+
+  /** true = ยังมีวันที่ cascade/ประมาณการในขั้นตอนที่ 1–5 (ไม่ควรเกิดหลังลบ mock) */
   const isUsingMockData = useMemo(
-    () => items.some((it) => it.estimated && it.stepNumber >= 1 && it.stepNumber <= 5),
-    [items],
+    () =>
+      displayItems.some(
+        (it) => it.estimated && (isSpecificTimeline ? it.uiStep <= 5 : it.backendStep <= 5),
+      ),
+    [displayItems, isSpecificTimeline],
   );
 
   useEffect(() => {
@@ -4957,13 +5056,18 @@ function ProjectTimeline({
       </p>
       <div className="overflow-x-auto">
         <div className="flex items-start gap-2 min-w-max pb-2">
-          {items.map((it, i) => {
-            const isActiveView = it.stepNumber === activeStep;
-            const isStepCompleted = it.stepNumber < project.current_step;
+          {displayItems.map((it, i) => {
+            const stepKey = isSpecificTimeline ? it.uiStep : it.backendStep;
+            const isActiveView = isSpecificTimeline
+              ? it.uiStep === activeStep
+              : it.backendStep === activeStep;
+            const isStepCompleted = isSpecificTimeline
+              ? it.backendStep < project.current_step
+              : it.backendStep < project.current_step;
             const isWorkflowStep =
-              it.stepNumber === project.current_step && !isStepCompleted;
+              it.backendStep === project.current_step && !isStepCompleted;
             return (
-            <div key={it.stepNumber} className="flex items-start gap-2">
+            <div key={stepKey} className="flex items-start gap-2">
               <div className="flex flex-col items-center w-28">
                 <div
                   className={`h-4 w-4 rounded-full border-2 shadow ${
@@ -4974,7 +5078,7 @@ function ProjectTimeline({
                         : "border-background"
                   }`}
                   style={{
-                    backgroundColor: timelineStepColor(it.stepNumber, isActiveView),
+                    backgroundColor: timelineStepColor(it.backendStep, isActiveView),
                   }}
                 />
                 <p
@@ -4986,7 +5090,7 @@ function ProjectTimeline({
                         : "font-medium text-foreground"
                   }`}
                 >
-                  {it.stepNumber}. {getMilestoneLabel(it.stepNumber)}
+                  {it.uiStep}. {it.label}
                 </p>
                 <p className="text-[11px] text-muted-foreground mt-0.5">
                   {it.date ? (
@@ -5009,7 +5113,7 @@ function ProjectTimeline({
                   </p>
                 )}
               </div>
-              {i < items.length - 1 && (
+              {i < displayItems.length - 1 && (
                 <div className="h-0.5 w-6 bg-border mt-[7px]" />
               )}
             </div>

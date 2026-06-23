@@ -1,9 +1,13 @@
-/** ตัวเลือกหน่วยวัดผลสัมฤทธิ์ — ใช้ร่วม Step 1 / รายงานสรุป */
+/** ตัวเลือกหน่วยวัดผลสัมฤทธิ์ — มาตรฐาน e-GP (ขั้นตอนที่ 1) */
 export const PROJECT_RESULT_UNIT_OPTIONS = [
   { value: "ไร่", label: "ไร่" },
   { value: "บ่อ", label: "บ่อ" },
   { value: "กม.", label: "กม." },
   { value: "แห่ง", label: "แห่ง" },
+  { value: "เครื่อง", label: "เครื่อง" },
+  { value: "ชุด", label: "ชุด" },
+  { value: "งาน", label: "งาน" },
+  { value: "ราย", label: "ราย" },
 ] as const;
 
 export type ProjectResultUnit = (typeof PROJECT_RESULT_UNIT_OPTIONS)[number]["value"];
@@ -31,6 +35,19 @@ export function getResultUnitDropdownValue(unit: string | null | undefined): str
 /** หน่วยที่ใช้แสดงผล (preset หรือข้อความที่พิมพ์เอง) */
 export function resolveResultUnitLabel(unit: string | null | undefined): string {
   return unit?.trim() ?? "";
+}
+
+/** หน่วยวัดพร้อมบันทึก — preset หรือข้อความกำหนดเองที่ไม่ว่าง */
+export function isResultUnitComplete(unit: string | null | undefined): boolean {
+  return !!unit?.trim();
+}
+
+/** เลือก «อื่น ๆ» แล้วยังไม่ได้พิมพ์หน่วย (ล็อก Submit/ขั้นถัดไป) */
+export function isResultUnitOtherPending(
+  unit: string | null | undefined,
+  otherModeActive: boolean,
+): boolean {
+  return otherModeActive && !unit?.trim();
 }
 
 /** ข้อมูลโปรไฟล์โครงการ — กรอกในขั้นตอนที่ 1 บันทึกลง projects */

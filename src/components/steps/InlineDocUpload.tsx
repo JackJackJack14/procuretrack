@@ -41,7 +41,7 @@ type Props = {
   alternateDocumentTypes?: string[];
   /** ปิดการลบไฟล์ (เช่น เอกสารสืบทอน) */
   readOnly?: boolean;
-  /** อนุญาตลบไฟล์ที่สืบทอนจากด่านก่อนหน้า เพื่ออัปโหลดฉบับใหม่ */
+  /** อนุญาตลบไฟล์ที่สืบทอนจากขั้นตอนที่ก่อนหน้า เพื่ออัปโหลดฉบับใหม่ */
   allowInheritedDelete?: boolean;
   /** เรียกหลังอัปโหลดสำเร็จ (ก่อน/หลัง onChange ตามที่ parent กำหนด) */
   onUploadSuccess?: (info: {

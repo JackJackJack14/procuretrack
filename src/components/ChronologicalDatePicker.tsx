@@ -10,19 +10,19 @@ import { formatThaiDateSlash } from "@/lib/utils";
 type ThaiDatePickerProps = React.ComponentProps<typeof ThaiDatePicker>;
 
 export type ChronologicalDatePickerProps = Omit<ThaiDatePickerProps, "minDate"> & {
-  /** ด่านปัจจุบัน (1–10) — ใช้คำนวณ minDate จากด่าน N-1 */
+  /** ขั้นตอนที่ปัจจุบัน (1–10) — ใช้คำนวณ minDate จากขั้นตอนที่ N-1 */
   stepNumber: number;
   /** บริบทโครงการ — ดึงวันที่จากฐานข้อมูลแบบ Dynamic */
   chronologicalCtx?: TimelineValidationContext | null;
   /** โปรไฟล์ขั้นต่ำพิเศษ (เช่น TOR ขั้น 3, ประกาศผู้ชนะขั้น 5) */
   minProfile?: ChronologicalMinProfile;
-  /** ขั้นต่ำภายในด่านเดียวกัน (เช่น วันอนุมัติหลังคำสั่งแต่งตั้ง) */
+  /** ขั้นต่ำภายในขั้นตอนที่เดียวกัน (เช่น วันอนุมัติหลังคำสั่งแต่งตั้ง) */
   intraStepMinDate?: string | null;
   /** ขั้นต่ำเพิ่มเติม (เช่น เดดไลน์รับซอง, วันสิ้นสุดเผยแพร่) */
   additionalMinDates?: Array<string | null | undefined>;
   /** ขั้นต่ำจาก props เดิม — รวมกับค่าที่คำนวณอัตโนมัติ */
   minDate?: string | null;
-  /** ขั้น 5 — วันอนุมัติผลจากด่าน 4 */
+  /** ขั้น 5 — วันอนุมัติผลจากขั้นตอนที่ 4 */
   evaluationApprovalDate?: string | null;
   /** แสดงคำอธิบายวันที่เลือกได้ตั้งแต่... */
   showChronologicalHint?: boolean;

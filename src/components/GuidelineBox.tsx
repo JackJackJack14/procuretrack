@@ -71,7 +71,7 @@ export function GuidelineBox({
   readOnly = false,
 }: Props) {
   if (stepNumber === 1) {
-    return <Step1GuidelineBox />;
+    return <Step1GuidelineBox method={method} />;
   }
 
   if (stepNumber === 2) {

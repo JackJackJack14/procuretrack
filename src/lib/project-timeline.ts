@@ -58,9 +58,9 @@ export type ProjectTimelineInput = {
   project: ProjectTimelineProject;
   steps: ProjectTimelineStep[];
   step3Note: string | null;
-  /** Form State สดของด่าน 3 — override ค่าใน step3Note สำหรับไทม์ไลน์แบบ real-time */
+  /** Form State สดของขั้นตอนที่ 3 — override ค่าใน step3Note สำหรับไทม์ไลน์แบบ real-time */
   step3LiveAnnouncement?: Step3TimelineLiveAnnouncement | null;
-  /** note ด่าน 4–5 จาก procurement_steps */
+  /** note ขั้นตอนที่ 4–5 จาก procurement_steps */
   timelineNotes?: TimelineNotesContext | null;
 };
 
@@ -228,7 +228,7 @@ function buildProjectTimelineItemsFromInput(
     return {
       stepNumber: stepNum,
       date,
-      /** derived = คำนวณจาก workdays.ts (ด่าน 6–7) — ไม่ใช่ cascade mock */
+      /** derived = คำนวณจาก workdays.ts (ขั้นตอนที่ 6–7) — ไม่ใช่ cascade mock */
       estimated: resolution.derived && !!date,
       isDone,
       isCurrent,

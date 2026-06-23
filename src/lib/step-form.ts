@@ -1,6 +1,20 @@
 /** ตัวเลือกวิธีจัดซื้อในฟอร์มขั้นตอนที่ 1 (3 วิธีหลัก) */
 import { buildStep4EvidenceFieldValues, getChecklistEvidenceIssues } from "@/lib/form-audit-trail";
-import { hasStep1PlanPublicationDoc } from "@/lib/checklist-inline-evidence";
+import {
+  hasStep1PlanPublicationDoc,
+  STEP1_EGP_PLAN_PUBLICATION_DOCUMENT_TYPE,
+} from "@/lib/checklist-inline-evidence";
+import { isSpecificMethodShortWorkflow, normalizeProcurementMethod } from "@/lib/dynamic-stepper";
+import type { DocItem } from "@/lib/procurement";
+import {
+  getStep1SpecificWorkflowComplianceIssues,
+  hasStep1SpecificPurchaseReportDoc,
+  isStep1SpecificCoreDocumentsReady,
+  isStep1SpecificInspectorsComplete,
+  normalizeStep1SpecificWorkflow,
+  STEP1_SPECIFIC_DOC,
+  type Step1SpecificWorkflowFields,
+} from "@/lib/step1-specific-workflow";
 import {
   formatBudgetInput as formatBudgetInputFromCurrency,
   parseBudgetInput as parseBudgetInputFromCurrency,
@@ -77,8 +91,15 @@ import {
 import { formatThaiDateSlash } from "@/lib/utils";
 import {
   buildProjectStep1ProfileFields,
+  isResultUnitComplete,
+  isResultUnitOtherPending,
   type Step1ProjectProfile,
 } from "@/lib/project-profile";
+import {
+  countStep1SiteLocationRequiredFields,
+  isEgpConstructionProjectType,
+  isStep1SiteDetailOptional,
+} from "@/lib/egp-project-type";
 import { isExternalProcurement } from "@/lib/procurement-path";
 
 export const STEP1_METHOD_OPTIONS = [
@@ -817,7 +838,7 @@ export function logStep4DocumentInheritanceDebug(
   });
 }
 
-/** ตรวจว่ามีคำสั่งพิจารณาผล/ตรวจรับที่อัปโหลดจากด่าน 2 (สำหรับยืนยันในด่าน 4) */
+/** ตรวจว่ามีคำสั่งพิจารณาผล/ตรวจรับที่อัปโหลดจากขั้นตอนที่ 2 (สำหรับยืนยันในขั้นตอนที่ 4) */
 export function hasEvaluationOrderFromStep2(
   docs: Array<{ step_number?: number | null; document_type: string }>,
 ): boolean {
@@ -902,7 +923,7 @@ export const STEP3_CHECKLIST_ITEMS: Array<{
   },
 ];
 
-/** คำแนะนำระเบียบ — แสดงใต้ช่องอัปโหลดในฟอร์มด่าน 3 */
+/** คำแนะนำระเบียบ — แสดงใต้ช่องอัปโหลดในฟอร์มขั้นตอนที่ 3 */
 export const STEP3_TOR_UPLOAD_COMPLIANCE_HELPER =
   "⚠️ เงื่อนไข: ตรวจสอบว่าไม่มีการกำหนดคุณลักษณะเฉพาะที่สืบไปถึงการล็อกสเปคตาม พ.ร.บ. มาตรา 9";
 
@@ -948,7 +969,7 @@ function isStep3ProcurementApprovalDateValid(announcement: Step3Announcement): b
   return true;
 }
 
-/** ฟิลด์กรอกข้อมูลที่มีเครื่องหมาย * ในฟอร์มด่าน 3 */
+/** ฟิลด์กรอกข้อมูลที่มีเครื่องหมาย * ในฟอร์มขั้นตอนที่ 3 */
 export function getStep3RequiredFormFieldIssues(
   announcement: Step3Announcement,
 ): Step3ComplianceIssue[] {
@@ -1429,7 +1450,7 @@ export function applyStep4CommitteeRoleConstraints(
   });
 }
 
-/** จัดรูปแบบรายชื่อกรรมการด่าน 4 — เก็บใน evaluation_committee_text เพื่อ backward compat */
+/** จัดรูปแบบรายชื่อกรรมการขั้นตอนที่ 4 — เก็บใน evaluation_committee_text เพื่อ backward compat */
 export function formatStep4CommitteeMembersForDisplay(members: Step4CommitteeMember[]): string {
   const lines: string[] = [];
   let filledIndex = 0;
@@ -1560,7 +1581,7 @@ export type Step4BidResult = {
   site_supervisor_name?: string;
   site_supervisor_affiliation?: string;
   site_engineer_name?: string;
-  /** ยืนยันตรวจสอบคำสั่งพิจารณาผล/ตรวจรับที่ดึงจากด่าน 2 */
+  /** ยืนยันตรวจสอบคำสั่งพิจารณาผล/ตรวจรับที่ดึงจากขั้นตอนที่ 2 */
   evaluation_inspection_order_confirmed?: boolean;
   /** ตารางผู้ยื่นข้อเสนอและเปรียบเทียบราคา — บันทึกใน step4 note */
   bidders?: Step4Bidder[];
@@ -1574,8 +1595,10 @@ export type Step2ComplianceLog = {
 
 export type Step1FormData = {
   checklist?: Step1Checklist;
-  /** เหตุผลความจำเป็น — วิธีเฉพาะเจาะจง (ข้อ 79) */
+  /** @deprecated ใช้ specificWorkflow.reason */
   specificMethodReason?: string;
+  /** ฟิลด์ขั้นตอนที่ 1 — วิธีเฉพาะเจาะจง (< 500,000 บาท) */
+  specificWorkflow?: Partial<Step1SpecificWorkflowFields>;
 };
 export type Step2FormData = {
   checklist?: Step2Checklist;
@@ -1590,7 +1613,7 @@ export type Step3FormData = {
   complianceLog?: Step3ComplianceLog;
 };
 
-/** บันทึก compliance warning ด่าน 3 — ชื่อกรรมการซ้ำข้ามชุด */
+/** บันทึก compliance warning ขั้นตอนที่ 3 — ชื่อกรรมการซ้ำข้ามชุด */
 export type Step3ComplianceLog = {
   committee_overlap_warning?: boolean;
   committee_overlap_warning_at?: string;
@@ -1609,7 +1632,7 @@ export type Step4NotesPayload = {
 export type Step4FormData = {
   checklist?: Step4Checklist;
   bidResult?: Step4BidResult;
-  /** โครงสร้าง JSON คณะกรรมการด่าน 4 — บันทึกใน note ของ procurement_steps */
+  /** โครงสร้าง JSON คณะกรรมการขั้นตอนที่ 4 — บันทึกใน note ของ procurement_steps */
   step4_notes?: Step4NotesPayload;
 };
 export type Step5FormData = { checklist?: Step5Checklist; announcement?: Step5Announcement };
@@ -2142,13 +2165,13 @@ export function resolveCommitteeReviewWorkdays(
 }
 
 export const STEP4_PROCUREMENT_SIGN_DATE_INVALID_MSG =
-  "❌ วันที่อนุมัติรายงานต้องเป็นวันหลังจากอนุมัติราคากลาง (ด่าน 2) และสิ้นสุดการรับฟังความคิดเห็น (ด่าน 3) เรียบร้อยแล้วเท่านั้น";
+  "❌ วันที่อนุมัติรายงานต้องเป็นวันหลังจากอนุมัติราคากลาง (ขั้นตอนที่ 2) และสิ้นสุดการรับฟังความคิดเห็น (ขั้นตอนที่ 3) เรียบร้อยแล้วเท่านั้น";
 
 /** @deprecated ใช้ STEP4_PROCUREMENT_SIGN_DATE_INVALID_MSG */
 export const STEP4_PROCUREMENT_APPROVAL_BEFORE_PUBLICATION_END_MSG =
   STEP4_PROCUREMENT_SIGN_DATE_INVALID_MSG;
 
-/** วันที่อนุมัติราคากลางจากด่าน 2 */
+/** วันที่อนุมัติราคากลางจากขั้นตอนที่ 2 */
 export function resolveStep2MedianApprovalDate(
   project: { median_price_approval_date?: string | null } | null,
   step2Note: string | null,
@@ -2159,7 +2182,7 @@ export function resolveStep2MedianApprovalDate(
   return step2Form.medianPrice?.median_price_approval_date?.trim() ?? "";
 }
 
-/** วันที่ลงนามรายงานขอซื้อขอจ้างต้องไม่ก่อนราคากลาง (ด่าน 2) และวันสิ้นสุดรับฟังความคิดเห็น (ด่าน 3) */
+/** วันที่ลงนามรายงานขอซื้อขอจ้างต้องไม่ก่อนราคากลาง (ขั้นตอนที่ 2) และวันสิ้นสุดรับฟังความคิดเห็น (ขั้นตอนที่ 3) */
 export function resolveStep4ProcurementSignMinDate(opts: {
   step2MedianApprovalDate?: string;
   step3PublicationEnd?: string;
@@ -2520,17 +2543,22 @@ export function countStep1ChecklistDone(checklist: Step1Checklist): number {
   return STEP1_CHECKLIST_ITEMS.filter((item) => checklist[item.key]).length;
 }
 
-/** ปลดล็อกช่องรหัส e-GP — เมื่อแนบหลักฐานแผนจัดซื้อจัดจ้าง (ข้อ 2) แล้ว */
+/** ปลดล็อกช่องรหัส e-GP — เมื่อแนบหลักฐานแผนจัดซื้อจัดจ้าง (ข้อ 2) แล้ว; วิธีเฉพาะเจาะจงปลดล็อกทันที */
 export function isStep1EgpCodeUnlocked(
   _checklist: Step1Checklist,
-  opts?: { hasAnnualPlanDoc?: boolean; stepDocs?: Array<{ document_type: string }> },
+  opts?: {
+    hasAnnualPlanDoc?: boolean;
+    stepDocs?: Array<{ document_type: string }>;
+    method?: string;
+  },
 ): boolean {
+  if (isSpecificMethodShortWorkflow(opts?.method)) return true;
   return !!(opts?.hasAnnualPlanDoc || hasStep1AnnualPlanDoc(opts?.stepDocs));
 }
 
 export type Step1ComplianceIssue = { id: string; message: string };
 
-/** เอกสารบังคับขั้นตอนที่ 2 — ใช้ใน Compliance Gate (คำสั่งพิจารณาผล/ตรวจรับ = ไม่บังคับในด่าน 2) */
+/** เอกสารบังคับขั้นตอนที่ 2 — ใช้ใน Compliance Gate (คำสั่งพิจารณาผล/ตรวจรับ = ไม่บังคับในขั้นตอนที่ 2) */
 export const STEP2_REQUIRED_DOCS = {
   MARKET_QUOTES: "ใบเสนอราคาท้องตลาดอย่างน้อย 3 ราย",
 } as const;
@@ -2550,26 +2578,41 @@ export const STEP1_SPECIFIC_METHOD_BUDGET_EXCEEDED_MSG =
 export const STEP1_SPECIFIC_METHOD_REASON_REQUIRED_MSG =
   "กรุณาระบุเหตุผลความจำเป็นในการใช้วิธีเฉพาะเจาะจง (ระเบียบพัสดุฯ ข้อ 79)";
 
+export const STEP1_RESULT_UNIT_OTHER_REQUIRED_MSG =
+  "กรุณาระบุหน่วยวัดเมื่อเลือก «อื่น ๆ (พิมพ์ระบุเอง)» ตามระเบียบข้อ 22";
+
+export function isStep1ResultUnitSubmitBlocked(
+  unit: string | null | undefined,
+  otherPending: boolean,
+): boolean {
+  if (isResultUnitOtherPending(unit, otherPending)) return true;
+  return !isResultUnitComplete(unit);
+}
+
 /** คำเตือน Live Compliance — วงเงินเกิน 500,000 บาท กับวิธีเฉพาะเจาะจง */
 export const STEP1_SPECIFIC_METHOD_BUDGET_COMPLIANCE_WARNING_MSG =
   "⚠️ คำเตือน: วงเงินงบประมาณเกิน 500,000 บาท โปรดตรวจสอบความถูกต้องของเงื่อนไขการใช้วิธีเฉพาะเจาะจงตามระเบียบกระทรวงการคลังฯ อย่างเคร่งครัด";
 
-/** ตรวจพิกัดสถานที่ดำเนินการ — บังคับครบทุกช่อง (ใช้ในรายงาน PDF ขั้น 10) */
+/** ตรวจพิกัดสถานที่ดำเนินการ — แปรผันตามประเภทโครงการ e-GP */
 export function getStep1SiteLocationComplianceIssues(
   profile: Step1ProjectProfile,
 ): Step1ComplianceIssue[] {
   const issues: Step1ComplianceIssue[] = [];
-  if (!profile.site_village.trim()) {
-    issues.push({ id: "site_village", message: "กรุณาระบุชื่อบ้าน/หมู่บ้าน" });
-  }
-  if (profile.site_moo == null || !Number.isFinite(profile.site_moo) || profile.site_moo <= 0) {
-    issues.push({ id: "site_moo", message: "กรุณาระบุหมู่ที่" });
-  }
-  if (!profile.site_subdistrict.trim()) {
-    issues.push({ id: "site_subdistrict", message: "กรุณาระบุตำบล" });
-  }
-  if (!profile.site_district.trim()) {
-    issues.push({ id: "site_district", message: "กรุณาระบุอำเภอ" });
+  const siteDetailRequired = !isStep1SiteDetailOptional(profile.project_type);
+
+  if (siteDetailRequired) {
+    if (!profile.site_village.trim()) {
+      issues.push({ id: "site_village", message: "กรุณาระบุชื่อบ้าน/หมู่บ้าน" });
+    }
+    if (profile.site_moo == null || !Number.isFinite(profile.site_moo) || profile.site_moo <= 0) {
+      issues.push({ id: "site_moo", message: "กรุณาระบุหมู่ที่" });
+    }
+    if (!profile.site_subdistrict.trim()) {
+      issues.push({ id: "site_subdistrict", message: "กรุณาระบุตำบล" });
+    }
+    if (!profile.site_district.trim()) {
+      issues.push({ id: "site_district", message: "กรุณาระบุอำเภอ" });
+    }
   }
   if (!profile.site_province.trim()) {
     issues.push({ id: "site_province", message: "กรุณาระบุจังหวัด" });
@@ -2581,7 +2624,7 @@ export function isStep1SpecificMethodBudgetExceeded(
   budget: string,
   method: string,
 ): boolean {
-  if (method !== "specific") return false;
+  if (!isSpecificMethodShortWorkflow(method)) return false;
   const val = parseBudgetInput(budget);
   return val > STEP1_SPECIFIC_METHOD_MAX_BUDGET;
 }
@@ -2596,14 +2639,73 @@ export function shouldShowStep1SpecificMethodBudgetComplianceWarning(
 /** Compliance Gate ขั้นตอนที่ 1 — เอกสารหลัก + ฟิลด์ฟอร์ม (ไม่ใช้ Smart Checklist) */
 export function isStep1CoreDocumentsReady(
   stepDocs?: Array<{ document_type: string }>,
+  method?: string,
 ): boolean {
+  if (isSpecificMethodShortWorkflow(method)) {
+    return isStep1SpecificCoreDocumentsReady(stepDocs);
+  }
   return hasStep1AnnualPlanDoc(stepDocs);
 }
 
 export function countStep1CoreDocumentsReady(
   stepDocs?: Array<{ document_type: string }>,
+  method?: string,
 ): { done: number; total: number } {
+  if (isSpecificMethodShortWorkflow(method)) {
+    const ready = isStep1SpecificCoreDocumentsReady(stepDocs);
+    return { done: ready ? 1 : 0, total: 1 };
+  }
   return { done: hasStep1AnnualPlanDoc(stepDocs) ? 1 : 0, total: 1 };
+}
+
+const STEP1_LEGACY_ANNUAL_PLAN_DOC_NAMES = [
+  STEP1_EGP_PLAN_PUBLICATION_DOCUMENT_TYPE,
+  "เอกสารอนุมัติโครงการ/จัดสรรงบประมาณ",
+] as const;
+
+/** วิธีเฉพาะเจาะจง — ยกเว้นเอกสารประกาศแผน e-GP ถาวร */
+export function isStep1AnnualPlanDocRequired(method?: string): boolean {
+  return !isSpecificMethodShortWorkflow(method);
+}
+
+export function isStep1AnnualPlanDocName(docName: string): boolean {
+  return (STEP1_LEGACY_ANNUAL_PLAN_DOC_NAMES as readonly string[]).includes(docName);
+}
+
+/** รายการเอกสารบังคับขั้นตอนที่ 1 — แยกตามวิธีจัดซื้อ */
+export function getStep1RequiredDocsForMethod(
+  stepDocs: DocItem[],
+  method?: string,
+): DocItem[] {
+  if (isSpecificMethodShortWorkflow(method)) {
+    return [{ name: STEP1_SPECIFIC_DOC.PURCHASE_REQUEST_REPORT, required: true }];
+  }
+  return stepDocs.filter((d) => d.required);
+}
+
+/** ตรวจเอกสารบังคับขั้นตอนที่ 1 — วิธีเฉพาะเจาะจงไม่บังคับแผน e-GP */
+export function isStep1RequiredDocSatisfiedForMethod(
+  requiredName: string,
+  uploadedTypes: string[],
+  method?: string,
+): boolean {
+  if (isSpecificMethodShortWorkflow(method)) {
+    if (isStep1AnnualPlanDocName(requiredName)) {
+      return true;
+    }
+    if (requiredName === STEP1_SPECIFIC_DOC.PURCHASE_REQUEST_REPORT) {
+      return hasStep1SpecificPurchaseReportDoc(
+        uploadedTypes.map((document_type) => ({ document_type })),
+      );
+    }
+    return uploadedTypes.includes(requiredName);
+  }
+  if (isStep1AnnualPlanDocName(requiredName)) {
+    return hasStep1PlanPublicationDoc(
+      uploadedTypes.map((document_type) => ({ document_type })),
+    );
+  }
+  return uploadedTypes.includes(requiredName);
 }
 
 export function getStep1RequiredFormFieldIssues(opts: {
@@ -2614,6 +2716,7 @@ export function getStep1RequiredFormFieldIssues(opts: {
   method: string;
   projectProfile: Step1ProjectProfile;
   specificMethodReason?: string;
+  specificWorkflow?: Step1SpecificWorkflowFields;
 }): Step1ComplianceIssue[] {
   const issues: Step1ComplianceIssue[] = [];
   const budgetVal = parseBudgetInput(opts.budget ?? "");
@@ -2626,7 +2729,9 @@ export function getStep1RequiredFormFieldIssues(opts: {
   if (!opts.egpCode?.trim()) {
     issues.push({
       id: "egp_plan_code",
-      message: "กรุณาระบุรหัสแผนจัดซื้อจัดจ้าง e-GP",
+      message: isSpecificMethodShortWorkflow(opts.method)
+        ? "กรุณาระบุเลขที่โครงการ e-GP / รหัสโครงการภายใน"
+        : "กรุณาระบุรหัสแผนจัดซื้อจัดจ้าง e-GP",
     });
   }
   if (!opts.projectName?.trim()) {
@@ -2676,6 +2781,43 @@ export function getStep1RequiredFormFieldIssues(opts: {
     });
   }
   issues.push(...getStep1SiteLocationComplianceIssues(opts.projectProfile));
+
+  return issues;
+}
+
+/** ฟิลด์พื้นฐานขั้นตอนที่ 1 — วิธีเฉพาะเจาะจง (ไม่รวม e-Bidding / ที่อยู่ / บก.06) */
+export function getStep1SpecificMethodBaseFormIssues(opts: {
+  egpCode: string;
+  budget: string;
+  responsibleName: string;
+  projectName: string;
+}): Step1ComplianceIssue[] {
+  const issues: Step1ComplianceIssue[] = [];
+  const budgetVal = parseBudgetInput(opts.budget ?? "");
+  if (!budgetVal || budgetVal <= 0) {
+    issues.push({
+      id: "budget_allocated",
+      message: "กรุณาระบุวงเงินงบประมาณมากกว่า 0",
+    });
+  }
+  if (!opts.egpCode?.trim()) {
+    issues.push({
+      id: "egp_plan_code",
+      message: "กรุณาระบุเลขที่โครงการ e-GP / รหัสโครงการภายใน",
+    });
+  }
+  if (!opts.projectName?.trim()) {
+    issues.push({
+      id: "project_name",
+      message: "กรุณาระบุชื่อโครงการ",
+    });
+  }
+  if (!opts.responsibleName?.trim()) {
+    issues.push({
+      id: "responsible_officer",
+      message: "กรุณาระบุเจ้าหน้าที่ผู้รับผิดชอบโครงการ",
+    });
+  }
   return issues;
 }
 
@@ -2687,8 +2829,32 @@ export function countStep1FormRequiredProgress(opts: {
   method: string;
   projectProfile: Step1ProjectProfile;
   specificMethodReason?: string;
+  specificWorkflow?: Step1SpecificWorkflowFields;
 }): { done: number; total: number } {
-  const total = 14 + (opts.method === "specific" ? 1 : 0);
+  const isSpecific = isSpecificMethodShortWorkflow(opts.method);
+  if (isSpecific) {
+    const baseTotal = 4;
+    const wfTotal = 5;
+    const docTotal = 1;
+    const total = baseTotal + wfTotal + docTotal;
+    let done = 0;
+    const budgetVal = parseBudgetInput(opts.budget ?? "");
+    if (budgetVal > 0) done += 1;
+    if (opts.egpCode?.trim()) done += 1;
+    if (opts.projectName?.trim()) done += 1;
+    if (opts.responsibleName?.trim()) done += 1;
+    if (opts.specificWorkflow) {
+      const wf = opts.specificWorkflow;
+      if (wf.delivery_days != null && wf.delivery_days >= 1) done += 1;
+      if (wf.reason?.trim()) done += 1;
+      if (wf.spec?.trim()) done += 1;
+      if (wf.inspector_type) done += 1;
+      if (isStep1SpecificInspectorsComplete(wf)) done += 1;
+    }
+    return { done, total };
+  }
+  const siteFieldTotal = countStep1SiteLocationRequiredFields(opts.projectProfile.project_type);
+  const total = 9 + siteFieldTotal;
   let done = 0;
   const budgetVal = parseBudgetInput(opts.budget ?? "");
   if (budgetVal > 0) done += 1;
@@ -2697,8 +2863,7 @@ export function countStep1FormRequiredProgress(opts: {
   if (opts.method?.trim()) done += 1;
   if (opts.responsibleName?.trim()) done += 1;
   const siteIssues = getStep1SiteLocationComplianceIssues(opts.projectProfile);
-  done += 5 - siteIssues.length;
-  if (opts.method === "specific" && opts.specificMethodReason?.trim()) done += 1;
+  done += siteFieldTotal - siteIssues.length;
   if (opts.projectProfile.budget_category?.trim()) done += 1;
   if (opts.projectProfile.project_type?.trim()) done += 1;
   if (opts.projectProfile.result_unit?.trim()) done += 1;
@@ -2722,6 +2887,7 @@ export function getStep1ComplianceIssues(
     method: string;
     projectProfile: Step1ProjectProfile;
     specificMethodReason?: string;
+    specificWorkflow?: Step1SpecificWorkflowFields;
     stepDocs?: Array<{ document_type: string }>;
   },
   _autoStates?: Record<string, boolean>,
@@ -2735,6 +2901,15 @@ export function getStep1ComplianceIssues(
     });
   }
 
+  if (isSpecificMethodShortWorkflow(opts.method)) {
+    const wf = normalizeStep1SpecificWorkflow(opts.specificWorkflow);
+    issues.push(
+      ...getStep1SpecificWorkflowComplianceIssues(wf, opts.stepDocs),
+    );
+    issues.push(...getStep1SpecificMethodBaseFormIssues(opts));
+    return issues;
+  }
+
   if (opts.method === "specific" && !opts.specificMethodReason?.trim()) {
     issues.push({
       id: "specific_method_reason",
@@ -2742,7 +2917,7 @@ export function getStep1ComplianceIssues(
     });
   }
 
-  if (!isStep1CoreDocumentsReady(opts.stepDocs)) {
+  if (!isStep1CoreDocumentsReady(opts.stepDocs, opts.method)) {
     issues.push({
       id: "annual_plan_doc",
       message: "กรุณาแนบเอกสารประกาศแผนจัดซื้อจัดจ้างจากระบบ e-GP",
@@ -2764,6 +2939,7 @@ export function isStep1ReadyForNext(
     method: string;
     projectProfile: Step1ProjectProfile;
     specificMethodReason?: string;
+    specificWorkflow?: Step1SpecificWorkflowFields;
     stepDocs?: Array<{ document_type: string }>;
   },
   autoStates?: Record<string, boolean>,
@@ -2801,10 +2977,16 @@ export function loadStep1FormFromStep(step: {
 export function loadStep1FormFromNote(note: string | null): Step1FormData {
   const { form } = parseStepNote(note);
   const f = form as Step1FormData;
+  const legacyReason =
+    typeof f.specificMethodReason === "string" ? f.specificMethodReason : "";
+  const specificWorkflow = normalizeStep1SpecificWorkflow(f.specificWorkflow);
+  if (!specificWorkflow.reason && legacyReason) {
+    specificWorkflow.reason = legacyReason;
+  }
   return {
     checklist: normalizeStep1Checklist(f.checklist),
-    specificMethodReason:
-      typeof f.specificMethodReason === "string" ? f.specificMethodReason : "",
+    specificMethodReason: legacyReason || specificWorkflow.reason,
+    specificWorkflow,
   };
 }
 
@@ -3181,10 +3363,38 @@ export function getStep2ComplianceIssues(
     step1Budget?: number;
     stepDocs?: Array<{ document_type: string }>;
     timelineCtx?: TimelineValidationContext;
+    quotationOnly?: boolean;
   },
   _autoStates?: Record<string, boolean>,
 ): Step2ComplianceIssue[] {
   const issues: Step2ComplianceIssue[] = [];
+
+  if (opts.quotationOnly) {
+    if (!opts.hasMarketQuotesDoc) {
+      const uploaded = countStep2MarketQuoteDocsUploaded(opts.stepDocs);
+      const required = EMPTY_STEP2_MARKET_QUOTES.length;
+      issues.push({
+        id: "market_quotes_doc",
+        message:
+          uploaded > 0
+            ? `กรุณาแนบใบเสนอราคาครบ ${required} ไฟล์ (แนบแล้ว ${uploaded}/${required} ราย)`
+            : `กรุณาแนบใบเสนอราคาครบ ${required} ไฟล์`,
+      });
+    }
+    if (!isStep2MarketQuotesComplete(opts.committees.market_quotes)) {
+      issues.push({
+        id: "market_quotes",
+        message: "กรุณากรอกใบเสนอราคาครบ 3 ราย (ชื่อซัพพลายเออร์และราคา)",
+      });
+    }
+    if (!opts.responsibleName.trim()) {
+      issues.push({
+        id: "responsible_officer",
+        message: "กรุณาระบุเจ้าหน้าที่ผู้รับผิดชอบโครงการ",
+      });
+    }
+    return issues;
+  }
 
   if (!opts.hasAppointmentOrderDoc) {
     issues.push({
@@ -3518,7 +3728,7 @@ export function countStep4CoreDocumentsReady(opts: {
   return { done, total: 6 };
 }
 
-/** มีรายชื่อคณะกรรมการจากด่าน 2 (ชุดใหม่หรือชุดเก่า TOR/ราคากลาง) */
+/** มีรายชื่อคณะกรรมการจากขั้นตอนที่ 2 (ชุดใหม่หรือชุดเก่า TOR/ราคากลาง) */
 export function hasStep2CommitteeMemberNames(committees: Step2CommitteesState): boolean {
   return (
     resolveStep4CommitteeMembersForEvaluation(committees).length > 0 ||
@@ -3568,7 +3778,7 @@ function resolveStep4CommitteeMembersForInspection(
   return resolveStep4LegacyTorMembers(committees);
 }
 
-/** เติมรายชื่อคณะกรรมการจากด่าน 2 เมื่อช่องด่าน 4 ยังว่าง */
+/** เติมรายชื่อคณะกรรมการจากขั้นตอนที่ 2 เมื่อช่องขั้นตอนที่ 4 ยังว่าง */
 export function applyStep4CommitteeAutoFill(
   bidResult: Step4BidResult,
   committees?: Step2CommitteesState | null,
@@ -4303,6 +4513,19 @@ function formHasPersistedData(form: StepFormData): boolean {
     return true;
   }
   if ((form as Step1FormData).specificMethodReason?.trim()) return true;
+  const sw = (form as Step1FormData).specificWorkflow;
+  if (sw) {
+    const normalized = normalizeStep1SpecificWorkflow(sw);
+    if (
+      normalized.delivery_days != null ||
+      normalized.reason ||
+      normalized.spec ||
+      normalized.inspector_type ||
+      normalized.inspectors.some((m) => m.name || m.position)
+    ) {
+      return true;
+    }
+  }
   if (
     "committeeOrder" in form ||
     "medianPrice" in form ||

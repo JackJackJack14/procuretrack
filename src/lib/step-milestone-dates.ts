@@ -43,7 +43,7 @@ type Step3AnnouncementFields = {
   committee_review_workdays?: number | null;
 };
 
-/** ฟิลด์ด่าน 3 ที่ส่งจาก Form State สด — ใช้ override ค่าใน step3Note (DB) */
+/** ฟิลด์ขั้นตอนที่ 3 ที่ส่งจาก Form State สด — ใช้ override ค่าใน step3Note (DB) */
 export type Step3TimelineLiveAnnouncement = Step3AnnouncementFields;
 
 export type Step4TimelineLiveFields = {
@@ -166,7 +166,7 @@ function parseStep3AnnouncementFromNote(note: string | null): Step3AnnouncementF
   }
 }
 
-/** วันที่ประกาศแผนจัดซื้อจัดจ้างประจำปี (ด่าน 1) */
+/** วันที่ประกาศแผนจัดซื้อจัดจ้างประจำปี (ขั้นตอนที่ 1) */
 export function resolveStep1PlanPublicationDateISO(
   steps: StepMilestoneStep[],
   project?: StepMilestoneProject | null,
