@@ -22,7 +22,7 @@ function ConstructionListPage() {
     queryFn: async () => {
       const { data: projectRows } = await supabase
         .from("projects")
-        .select("id, name, project_code, budget, current_step, status, activity_type, design_code, method")
+        .select("id, name, project_code, budget, current_step, status, project_type")
         .gte("current_step", 10)
         .order("created_at", { ascending: false });
 

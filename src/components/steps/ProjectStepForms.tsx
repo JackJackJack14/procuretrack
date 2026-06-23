@@ -240,7 +240,14 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { getSmartChecklistItems, getStep6ChecklistItems, getStep10ChecklistItems } from "@/lib/smart-checklist";
+import { getSmartChecklistItems } from "@/lib/smart-checklist";
+import {
+  BUDGET_CATEGORY_OPTIONS,
+  EGP_PROJECT_TYPE_CONSTRUCTION,
+  EGP_PROJECT_TYPE_OPTIONS,
+  isCapitalBudgetCategory,
+  suggestEgpProjectTypeFromBudgetCategory,
+} from "@/lib/egp-project-type";
 import {
   formatProgressWithUnit,
   type Step1ProjectProfile,
@@ -463,6 +470,31 @@ export function Step1DetailForm({
   const isSpecificMethod = method === "specific";
   const specificReasonMissing = isSpecificMethod && !specificMethodReason.trim();
   const [profilePosition, setProfilePosition] = useState<string | null>(null);
+  const [egpProjectTypeTouched, setEgpProjectTypeTouched] = useState(
+    () => !!projectProfile.project_type?.trim(),
+  );
+
+  useEffect(() => {
+    if (projectProfile.project_type?.trim()) {
+      setEgpProjectTypeTouched(true);
+    }
+  }, [projectProfile.project_type]);
+
+  useEffect(() => {
+    if (readOnly || egpProjectTypeTouched) return;
+    const suggested = suggestEgpProjectTypeFromBudgetCategory(
+      projectProfile.budget_category,
+    );
+    if (suggested && !projectProfile.project_type?.trim()) {
+      onProjectProfileChange({ project_type: suggested });
+    }
+  }, [
+    readOnly,
+    egpProjectTypeTouched,
+    projectProfile.budget_category,
+    projectProfile.project_type,
+    onProjectProfileChange,
+  ]);
 
   const step1AutoStates = useMemo(
     () => ({
@@ -550,6 +582,57 @@ export function Step1DetailForm({
         />
         <p className="text-xs text-muted-foreground mt-1">
           ใช้คำนวณระยะเวลาขั้นตอนที่มีกำหนดวันขั้นต่ำ (เช่น ประกาศ e-bidding)
+        </p>
+      </FieldRow>
+      <FieldRow label="หมวดงบประมาณ *">
+        <select
+          value={projectProfile.budget_category}
+          onChange={(e) => {
+            const budget_category = e.target.value;
+            const patch: Partial<Step1ProjectProfile> = { budget_category };
+            if (!egpProjectTypeTouched) {
+              const suggested = suggestEgpProjectTypeFromBudgetCategory(budget_category);
+              if (suggested) {
+                patch.project_type = suggested;
+              }
+            }
+            onProjectProfileChange(patch);
+          }}
+          disabled={readOnly}
+          className={inputCls}
+        >
+          <option value="">— เลือกหมวดงบประมาณ —</option>
+          {BUDGET_CATEGORY_OPTIONS.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
+        {isCapitalBudgetCategory(projectProfile.budget_category) && (
+          <p className="text-xs text-sky-700 bg-sky-50 border border-sky-200 rounded-md px-2 py-1.5 mt-1.5">
+            งบลงทุน — ระบบแนะนำประเภทโครงการ «{EGP_PROJECT_TYPE_CONSTRUCTION}» อัตโนมัติ (เปลี่ยนได้ตลอด)
+          </p>
+        )}
+      </FieldRow>
+      <FieldRow label="ประเภทโครงการ (e-GP) *">
+        <select
+          value={projectProfile.project_type}
+          onChange={(e) => {
+            setEgpProjectTypeTouched(true);
+            onProjectProfileChange({ project_type: e.target.value });
+          }}
+          disabled={readOnly}
+          className={inputCls}
+        >
+          <option value="">— เลือกประเภทโครงการ —</option>
+          {EGP_PROJECT_TYPE_OPTIONS.map((opt) => (
+            <option key={opt} value={opt}>
+              {opt}
+            </option>
+          ))}
+        </select>
+        <p className="text-xs text-muted-foreground mt-1">
+          บันทึกลงข้อมูลโครงการหลัก — ใช้กำหนดโหมดขั้นตอนที่ 10 และเมนูติดตามงานก่อสร้าง
         </p>
       </FieldRow>
       <FieldRow label="ประเภทโครงการ (วิธีจัดซื้อจัดจ้าง)">

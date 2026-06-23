@@ -44,8 +44,7 @@ type Project = {
   budget: number;
   current_step: number;
   activity_type?: string | null;
-  design_code?: string | null;
-  method?: string | null;
+  project_type?: string | null;
 };
 
 function ConstructionPage() {
@@ -194,10 +193,12 @@ function ConstructionPage() {
     return (
       <AppShell breadcrumb={`${CONSTRUCTION_TRACKING_MENU_LABEL} / ${project.name}`}>
         <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 space-y-2">
-          <p className="font-semibold">โครงการนี้ไม่ใช่ประเภทงานก่อสร้าง</p>
+          <p className="font-semibold">
+            ❌ โครงการนี้ไม่ใช่ประเภทงานก่อสร้าง
+          </p>
           <p>
-            ระบบตรวจจับจากข้อมูลโครงการหลัก (ประเภทกิจกรรม/งาน, รหัสแบบ, หรือวิธี e-bidding)
-            — เมนูนี้ใช้ได้เฉพาะโครงการงานก่อสร้างที่ดำเนินงานถึงขั้นตอนที่ 10
+            ระบบติดตามงวดงานและ Site Diary จะเปิดใช้งานเฉพาะโครงการที่ระบุประเภทเป็น
+            &apos;จ้างก่อสร้าง&apos; ในขั้นตอนที่ 1 เท่านั้น
           </p>
           <Link
             to="/projects/$projectId"

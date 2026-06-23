@@ -14,6 +14,13 @@ import {
 import { EGP_MILESTONES, getMilestoneLabel, milestoneProgressPercent } from "@/lib/egp-milestones";
 import { APPEAL_STATUS_LABELS } from "@/lib/step-form";
 import { ResultUnitSelect } from "@/components/ResultUnitSelect";
+import {
+  BUDGET_CATEGORY_OPTIONS,
+  EGP_PROJECT_TYPE_CONSTRUCTION,
+  EGP_PROJECT_TYPE_OPTIONS,
+  isCapitalBudgetCategory,
+  suggestEgpProjectTypeFromBudgetCategory,
+} from "@/lib/egp-project-type";
 
 export const Route = createFileRoute("/projects")({
   head: () => ({ meta: [{ title: "โครงการทั้งหมด — ProcureTrack" }] }),
@@ -227,6 +234,9 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
   const [approvingAgency, setApprovingAgency] = useState("");
   const [procurementAgency, setProcurementAgency] = useState("");
   const [resultUnit, setResultUnit] = useState("");
+  const [budgetCategory, setBudgetCategory] = useState("");
+  const [egpProjectType, setEgpProjectType] = useState("");
+  const [egpProjectTypeTouched, setEgpProjectTypeTouched] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -253,6 +263,8 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
         approving_agency: approvingAgency || null,
         procurement_agency: procurementAgency || null,
         result_unit: resultUnit || null,
+        project_type: egpProjectType || null,
+        budget_category: budgetCategory || null,
         current_step: 1,
         status: "active",
         created_by: u.user.id,
@@ -323,6 +335,45 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
             <input value={budget} onChange={(e) => setBudget(formatBudget(e.target.value))}
               placeholder="0" className={inputCls} />
           </Field>
+          <Field label="หมวดงบประมาณ *">
+            <select
+              value={budgetCategory}
+              onChange={(e) => {
+                const next = e.target.value;
+                setBudgetCategory(next);
+                if (!egpProjectTypeTouched) {
+                  const suggested = suggestEgpProjectTypeFromBudgetCategory(next);
+                  if (suggested) setEgpProjectType(suggested);
+                }
+              }}
+              className={inputCls}
+            >
+              <option value="">— เลือกหมวดงบประมาณ —</option>
+              {BUDGET_CATEGORY_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+            {isCapitalBudgetCategory(budgetCategory) && (
+              <p className="text-xs text-sky-700 mt-1">
+                แนะนำประเภท «{EGP_PROJECT_TYPE_CONSTRUCTION}» — เปลี่ยนได้ก่อนบันทึก
+              </p>
+            )}
+          </Field>
+          <Field label="ประเภทโครงการ (e-GP) *">
+            <select
+              value={egpProjectType}
+              onChange={(e) => {
+                setEgpProjectTypeTouched(true);
+                setEgpProjectType(e.target.value);
+              }}
+              className={inputCls}
+            >
+              <option value="">— เลือกประเภทโครงการ —</option>
+              {EGP_PROJECT_TYPE_OPTIONS.map((opt) => (
+                <option key={opt} value={opt}>{opt}</option>
+              ))}
+            </select>
+          </Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="ปีงบประมาณ">
               <select value={fiscalYear} onChange={(e) => setFiscalYear(Number(e.target.value))} className={inputCls}>
@@ -364,7 +415,7 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
           </button>
           <button
             onClick={submit}
-            disabled={!name || !code || !budget || loading}
+            disabled={!name || !code || !budget || !budgetCategory || !egpProjectType || loading}
             className="flex-1 h-10 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {loading && <Loader2 className="h-4 w-4 animate-spin" />}

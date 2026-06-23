@@ -666,6 +666,8 @@ export type Database = {
           procurement_request_approval_date: string | null
           procurement_request_letter_no: string | null
           project_code: string
+          project_type: string | null
+          budget_category: string | null
           result_unit: string | null
           site_district: string | null
           site_engineer_name: string | null
@@ -728,6 +730,8 @@ export type Database = {
           procurement_request_approval_date?: string | null
           procurement_request_letter_no?: string | null
           project_code: string
+          project_type?: string | null
+          budget_category?: string | null
           result_unit?: string | null
           site_district?: string | null
           site_engineer_name?: string | null
@@ -790,6 +794,8 @@ export type Database = {
           procurement_request_approval_date?: string | null
           procurement_request_letter_no?: string | null
           project_code?: string
+          project_type?: string | null
+          budget_category?: string | null
           result_unit?: string | null
           site_district?: string | null
           site_engineer_name?: string | null

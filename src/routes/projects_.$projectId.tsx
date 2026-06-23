@@ -320,6 +320,8 @@ type Project = {
   procurement_agency: string | null;
   result_unit: string | null;
   activity_type?: string | null;
+  project_type?: string | null;
+  budget_category?: string | null;
   site_village?: string | null;
   site_moo?: number | null;
   site_subdistrict?: string | null;
@@ -1191,9 +1193,7 @@ function ProjectDetailPage() {
       const step10Form = loadStep10FormFromNote(current.note);
       const draft = loadStepDraftFields(current);
       const autoDetectedType = resolveProjectWorkType({
-        activity_type: step1Profile.activity_type || project?.activity_type,
-        design_code: project?.design_code,
-        method: project?.method,
+        project_type: project?.project_type,
       });
       const projectType = step10Form.project_type ?? autoDetectedType;
       setStep10ProjectType(projectType);

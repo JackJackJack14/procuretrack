@@ -39,6 +39,10 @@ export type Step1ProjectProfile = {
   approving_agency: string;
   procurement_agency: string;
   activity_type: string;
+  /** ประเภทโครงการ e-GP — บันทึกลง projects.project_type */
+  project_type: string;
+  /** หมวดงบประมาณ — บันทึกลง projects.budget_category */
+  budget_category: string;
   result_unit: string;
   site_village: string;
   site_moo: number | null;
@@ -52,6 +56,8 @@ export const EMPTY_STEP1_PROJECT_PROFILE: Step1ProjectProfile = {
   approving_agency: "",
   procurement_agency: "",
   activity_type: "",
+  project_type: "",
+  budget_category: "",
   result_unit: "",
   site_village: "",
   site_moo: null,
@@ -65,6 +71,8 @@ type ProjectProfileLike = {
   approving_agency?: string | null;
   procurement_agency?: string | null;
   activity_type?: string | null;
+  project_type?: string | null;
+  budget_category?: string | null;
   result_unit?: string | null;
   site_village?: string | null;
   site_moo?: number | null;
@@ -83,6 +91,8 @@ export function mergeStep1ProfileFromProject(
     approving_agency: project.approving_agency?.trim() ?? "",
     procurement_agency: project.procurement_agency?.trim() ?? "",
     activity_type: project.activity_type?.trim() ?? "",
+    project_type: project.project_type?.trim() ?? "",
+    budget_category: project.budget_category?.trim() ?? "",
     result_unit: project.result_unit?.trim() ?? "",
     site_village: project.site_village?.trim() ?? "",
     site_moo: moo != null && Number.isFinite(moo) && moo > 0 ? Math.floor(moo) : null,
@@ -99,6 +109,8 @@ export function buildProjectStep1ProfileFields(profile: Step1ProjectProfile) {
     approving_agency: profile.approving_agency.trim() || null,
     procurement_agency: profile.procurement_agency.trim() || null,
     activity_type: profile.activity_type.trim() || null,
+    project_type: profile.project_type.trim() || null,
+    budget_category: profile.budget_category.trim() || null,
     result_unit: profile.result_unit.trim() || null,
     site_village: profile.site_village.trim() || null,
     site_moo: moo != null && Number.isFinite(moo) && moo > 0 ? Math.floor(moo) : null,

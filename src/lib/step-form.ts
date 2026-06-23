@@ -2636,6 +2636,18 @@ export function getStep1RequiredFormFieldIssues(opts: {
       message: "กรุณาระบุเจ้าหน้าที่ผู้รับผิดชอบโครงการ",
     });
   }
+  if (!opts.projectProfile.budget_category?.trim()) {
+    issues.push({
+      id: "budget_category",
+      message: "กรุณาเลือกหมวดงบประมาณ",
+    });
+  }
+  if (!opts.projectProfile.project_type?.trim()) {
+    issues.push({
+      id: "egp_project_type",
+      message: "กรุณาเลือกประเภทโครงการ (e-GP)",
+    });
+  }
   issues.push(...getStep1SiteLocationComplianceIssues(opts.projectProfile));
   return issues;
 }
@@ -2649,7 +2661,7 @@ export function countStep1FormRequiredProgress(opts: {
   projectProfile: Step1ProjectProfile;
   specificMethodReason?: string;
 }): { done: number; total: number } {
-  const total = 10 + (opts.method === "specific" ? 1 : 0);
+  const total = 12 + (opts.method === "specific" ? 1 : 0);
   let done = 0;
   const budgetVal = parseBudgetInput(opts.budget ?? "");
   if (budgetVal > 0) done += 1;
@@ -2660,6 +2672,8 @@ export function countStep1FormRequiredProgress(opts: {
   const siteIssues = getStep1SiteLocationComplianceIssues(opts.projectProfile);
   done += 5 - siteIssues.length;
   if (opts.method === "specific" && opts.specificMethodReason?.trim()) done += 1;
+  if (opts.projectProfile.budget_category?.trim()) done += 1;
+  if (opts.projectProfile.project_type?.trim()) done += 1;
   return { done, total };
 }
 
