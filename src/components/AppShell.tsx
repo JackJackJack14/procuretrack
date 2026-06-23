@@ -12,7 +12,7 @@ const MAIN_NAV = [
   { to: "/executive", label: "ภาพรวมผู้บริหาร", icon: LayoutDashboard },
   { to: "/projects", label: "โครงการทั้งหมด", icon: FolderKanban },
   { to: "/procurement", label: "จัดซื้อจัดจ้าง", icon: ClipboardList },
-  { to: "/construction", label: "ติดตามก่อสร้าง", icon: HardHat },
+  { to: "/construction", label: "ติดตามงานก่อสร้าง", icon: HardHat },
   { to: "/documents", label: "คลังเอกสาร", icon: FileArchive },
   { to: "/reports", label: "รายงาน", icon: BarChart3 },
 ];

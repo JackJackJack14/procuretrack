@@ -28,6 +28,8 @@ type Props = {
   contractSignedDate?: string | null;
   /** ขั้นตอนที่ 10 — วันสิ้นสุดสัญญาจริงจาก Step 9 */
   contractEndDate?: string | null;
+  /** ขั้นตอนที่ 10 — วันเริ่มต้นสัญญาจาก Step 9 */
+  contractStartDate?: string | null;
   /** ขั้นตอนที่ 3 — วันเริ่มเผยแพร่ร่างประกาศ (ไทม์ไลน์การ์ดที่ 2) */
   step3PublicationStartDate?: string | null;
   /** ขั้นตอนที่ 8 — วันเส้นตายการลงนามจากขั้นตอนที่ 7 */
@@ -56,6 +58,7 @@ export function GuidelineBox({
   winnerAnnouncementDate,
   contractSignedDate,
   contractEndDate,
+  contractStartDate,
   step3PublicationStartDate,
   step7SigningDeadlineISO,
   step8EarliestSigningISO,
@@ -121,9 +124,13 @@ export function GuidelineBox({
   }
 
   if (stepNumber === 10) {
-    return <Step10GuidelineBox contractEndDate={contractEndDate} />;
+    return (
+      <Step10GuidelineBox
+        contractStartDate={contractStartDate}
+        contractEndDate={contractEndDate}
+      />
+    );
   }
-
   const g = STEP_GUIDELINES[stepNumber - 1];
   if (!g) return null;
   const duration = g.duration;

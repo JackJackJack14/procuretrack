@@ -271,7 +271,6 @@ const GENERIC_STEP_ITEMS: Record<number, SmartChecklistItem[]> = {
   7: STEP7_CHECKLIST_ITEMS,
   8: STEP8_CHECKLIST_ITEMS,
   9: STEP9_CHECKLIST_ITEMS,
-  10: STEP10_CHECKLIST_ITEMS,
 };
 
 function withModes<K extends string>(

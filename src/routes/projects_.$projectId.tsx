@@ -54,7 +54,6 @@ import {
   createEmptyManualChecklist,
   getSmartChecklistItems,
   getStep6ChecklistItems,
-  getStep10ChecklistItems,
   loadManualChecklistFromNote,
   normalizeManualChecklist,
 } from "@/lib/smart-checklist";
@@ -64,7 +63,6 @@ import {
   computeWarrantyEndDateISO,
   PROJECT_STATUS_WARRANTY,
   resolveLastInstallmentInspectionDate,
-  countStep10PassedInstallments,
 } from "@/lib/step10-contract";
 import {
   addWorkdays,
@@ -195,12 +193,15 @@ import {
   isStep9ReadyForNext,
   getStep10ComplianceIssues,
   isStep10ReadyForNext,
+  countStep10FormRequiredProgress,
+  formatStep4CommitteeMembersForDisplay,
   sanitizeStep9WorkStartAgainstSignedDate,
   type Step9ContractSchedule,
   buildStep10InspectionRows,
   loadStep10FormFromNote,
   resolveProjectTotalInstallmentCount,
   type Step10InspectionRow,
+  type Step10ProjectType,
   resolveWinnerAnnouncementDate,
   resolveAppealAnchorDate,
   isStep4WinnerDataLocked,
@@ -237,7 +238,8 @@ import {
   normalizeProcurementPath,
 } from "@/lib/procurement-path";
 import { resolveProjectContractSignedDate } from "@/lib/step9-guideline";
-import { resolveProjectContractEndDate } from "@/lib/step10-guideline";
+import { resolveProjectContractEndDate, resolveProjectContractStartDate } from "@/lib/step10-guideline";
+import { resolveProjectWorkType } from "@/lib/construction-tracking";
 import {
   hasStep4SignedProcurementRequestDoc,
   hasStep4PriceComparisonDoc,
@@ -455,6 +457,7 @@ function ProjectDetailPage() {
     ...EMPTY_STEP9_CONTRACT_SCHEDULE,
   });
   const [step10InspectionRows, setStep10InspectionRows] = useState<Step10InspectionRow[]>([]);
+  const [step10ProjectType, setStep10ProjectType] = useState<Step10ProjectType>("general");
 
   const { data, isPending: loading, refetch } = useQuery({
     queryKey: ["project", projectId],
@@ -546,6 +549,7 @@ function ProjectDetailPage() {
     setStep8ContractExecution({ ...EMPTY_STEP8_CONTRACT_EXECUTION });
     setStep9ContractSchedule({ ...EMPTY_STEP9_CONTRACT_SCHEDULE });
     setStep10InspectionRows([]);
+    setStep10ProjectType("general");
   }, [projectId]);
 
   useEffect(() => {
@@ -865,6 +869,10 @@ function ProjectDetailPage() {
     [steps, step7Record?.note, contractSignedDate],
   );
 
+  const contractStartDate = useMemo(
+    () => resolveProjectContractStartDate(steps),
+    [steps],
+  );
   const totalInstallmentCount = useMemo(
     () => resolveProjectTotalInstallmentCount(steps),
     [steps],
@@ -907,6 +915,13 @@ function ProjectDetailPage() {
     const amount = exec.contract_amount;
     return amount != null && Number.isFinite(amount) ? amount : null;
   }, [step8Record?.note, project, mergedStep4BidResult, step4BidResult]);
+
+  const step10InspectionCommitteeDisplay = useMemo(() => {
+    const members = mergedStep4BidResult.inspection_committee_members ?? [];
+    const formatted = formatStep4CommitteeMembersForDisplay(members);
+    if (formatted) return formatted;
+    return mergedStep4BidResult.inspection_committee_text?.trim() ?? "";
+  }, [mergedStep4BidResult]);
 
   const executiveReportSource = useMemo((): ExecutiveReportProject | null => {
     if (!project) return null;
@@ -1175,6 +1190,13 @@ function ProjectDetailPage() {
     if (current.step_number === 10) {
       const step10Form = loadStep10FormFromNote(current.note);
       const draft = loadStepDraftFields(current);
+      const autoDetectedType = resolveProjectWorkType({
+        activity_type: step1Profile.activity_type || project?.activity_type,
+        design_code: project?.design_code,
+        method: project?.method,
+      });
+      const projectType = step10Form.project_type ?? autoDetectedType;
+      setStep10ProjectType(projectType);
       setGenericManualChecklist(
         normalizeManualChecklist(10, step10Form.checklist ?? loadManualChecklistFromNote(10, current.note)),
       );
@@ -1183,6 +1205,7 @@ function ProjectDetailPage() {
           totalInstallmentCount,
           step10Form.inspectionRows ?? [],
           step10PlannedDates,
+          projectType,
         ),
       );
       if (isExternalProcurement(effectiveProcurementPath)) {
@@ -1207,10 +1230,9 @@ function ProjectDetailPage() {
   useEffect(() => {
     if (current?.step_number !== 10) return;
     setStep10InspectionRows((prev) =>
-      buildStep10InspectionRows(totalInstallmentCount, prev, step10PlannedDates),
+      buildStep10InspectionRows(totalInstallmentCount, prev, step10PlannedDates, step10ProjectType),
     );
-  }, [current?.step_number, totalInstallmentCount, step10PlannedDates]);
-
+  }, [current?.step_number, totalInstallmentCount, step10PlannedDates, step10ProjectType]);
   useEffect(() => {
     if (current?.step_number !== 9 || !contractSignedDate?.trim()) return;
     setStep9ContractSchedule((prev) =>
@@ -1918,6 +1940,7 @@ function ProjectDetailPage() {
             ? serializeStepNote(note, {
                 checklist: genericManualChecklist,
                 inspectionRows: step10InspectionRows,
+                project_type: step10ProjectType,
               })
             : null;
     const { error: e } = await patchStepDraft(
@@ -2291,6 +2314,8 @@ function ProjectDetailPage() {
           responsibleName: effectiveResponsibleName,
           stepDocs: step10Docs,
           totalInstallmentCount,
+          projectType: step10ProjectType,
+          contractStartDate,
           timelineCtx: timelineValidationCtx,
         },
         computeAutoChecklistState({
@@ -2298,8 +2323,7 @@ function ProjectDetailPage() {
           step10InspectionRows,
           uploadedDocTypes: step10Docs.map((d) => d.document_type),
         }),
-      );
-      if (complianceIssues.length > 0) {
+      );      if (complianceIssues.length > 0) {
         failStepCompliance(complianceIssues[0].message, complianceIssues[0].id);
         return;
       }
@@ -2495,7 +2519,7 @@ function ProjectDetailPage() {
                   params={{ projectId: project.id }}
                   className="h-9 px-3 rounded-md border border-input bg-background text-sm hover:bg-accent flex items-center gap-1.5"
                 >
-                  <FileText className="h-3.5 w-3.5" /> ติดตามก่อสร้าง
+                  <FileText className="h-3.5 w-3.5" /> ติดตามงานก่อสร้าง
                 </Link>
                 <button onClick={() => window.print()} className="h-9 px-3 rounded-md border border-input bg-background text-sm hover:bg-accent flex items-center gap-1.5">
                   <FileText className="h-3.5 w-3.5" /> Export PDF
@@ -2815,7 +2839,9 @@ function ProjectDetailPage() {
               contractEndDate={
                 current.step_number === 10 ? contractEndDate : undefined
               }
-              readOnly={workflowReadOnly}
+              contractStartDate={
+                current.step_number === 10 ? contractStartDate : undefined
+              }              readOnly={workflowReadOnly}
               onSkipStep3={
                 current.step_number === 3 && !workflowReadOnly ? skipStep3 : undefined
               }
@@ -3231,7 +3257,12 @@ function ProjectDetailPage() {
                       totalInstallmentCount={totalInstallmentCount}
                       inspectionRows={step10InspectionRows}
                       onInspectionRowsChange={setStep10InspectionRows}
+                      projectType={step10ProjectType}
+                      onProjectTypeChange={setStep10ProjectType}
                       contractAmount={step10ContractAmount}
+                      contractStartDate={contractStartDate}
+                      contractEndDate={contractEndDate}
+                      inspectionCommitteeDisplay={step10InspectionCommitteeDisplay}
                       projectStatus={project.status}
                       resultUnit={step1Profile.result_unit || project.result_unit}
                       executiveReportSource={
@@ -3621,6 +3652,8 @@ function ProjectDetailPage() {
                           responsibleName: effectiveResponsibleName,
                           stepDocs: docsForStep,
                           totalInstallmentCount,
+                          projectType: step10ProjectType,
+                          contractStartDate,
                           timelineCtx: timelineValidationCtx,
                         },
                         autoCheckStates,
@@ -3635,9 +3668,20 @@ function ProjectDetailPage() {
                       responsibleName: effectiveResponsibleName,
                       stepDocs: docsForStep,
                       totalInstallmentCount,
+                      projectType: step10ProjectType,
+                      contractStartDate,
                     },
                     autoCheckStates,
                   );
+
+                const step10FormProgress =
+                  current.step_number === 10
+                    ? countStep10FormRequiredProgress(step10InspectionRows, {
+                        projectType: step10ProjectType,
+                        stepDocs: docsForStep,
+                        totalInstallmentCount,
+                      })
+                    : null;
                 const step4Ready =
                   current.step_number !== 4 ||
                   isStep4ReadyForNext(step4Checklist, step4BidResult, {
@@ -3659,14 +3703,11 @@ function ProjectDetailPage() {
                   current.step_number === 4 ||
                   current.step_number === 5 ||
                   current.step_number === 6 ||
-                  current.step_number === 8
+                  current.step_number === 8 ||
+                  current.step_number === 9 ||
+                  current.step_number === 10
                     ? []
-                    : current.step_number === 10
-                      ? getStep10ChecklistItems(
-                          countStep10PassedInstallments(step10InspectionRows),
-                          totalInstallmentCount,
-                        )
-                      : getSmartChecklistItems(current.step_number);
+                    : getSmartChecklistItems(current.step_number);
                 const manualForReactive =
                   current.step_number === 1
                     ? (step1Checklist as Record<string, boolean>)
@@ -3830,7 +3871,14 @@ function ProjectDetailPage() {
                                     total: step8FormProgress.total,
                                     effective: {},
                                   }
-                                : checklistItemsForStep.length > 0
+                                : step10FormProgress != null
+                                  ? {
+                                      allDone: step10Ready,
+                                      done: step10FormProgress.done,
+                                      total: step10FormProgress.total,
+                                      effective: {},
+                                    }
+                                  : checklistItemsForStep.length > 0
                       ? computeReactiveChecklistEffective(
                           current.step_number,
                           checklistItemsForStep,

@@ -25,13 +25,16 @@ import {
   getStep6ChecklistItems,
   STEP5_CHECKLIST_ITEMS,
   STEP9_CHECKLIST_ITEMS,
-  getStep10ChecklistItems,
 } from "@/lib/smart-checklist";
 import {
   isStep10RowInspectionPassed,
-  step10RowHasAllInstallmentDocs,
+  step10RowHasRequiredDocs,
   countStep10PassedInstallments,
   isStep10InspectionBeforeDelivery,
+  isStep10DeliveryBeforeContractStart,
+  isStep10InspectionBeforeSupervisorReport,
+  normalizeStep10InspectionResult,
+  STEP10_INSPECTION_RESULT_OPTIONS,
 } from "@/lib/step10-contract";
 import {
   countWorkdaysAfterStartISO,
@@ -1730,29 +1733,83 @@ export const EMPTY_STEP9_CONTRACT_SCHEDULE: Step9ContractSchedule = {
 };
 
 /** แถวตารางตรวจรับงวดงาน — ขั้นตอนที่ 10 */
+export type Step10ProjectType = "general" | "construction";
+
 export type Step10InspectionRow = {
   installment_no: number;
-  /** วันกำหนดเสร็จตามแผน — คำนวณจาก Gantt/ระยะเวลาสัญญา (Step 9) */
+  /** วันครบกำหนดส่งมอบประจำงวดตามสัญญา */
   planned_completion_date: string;
+  /** เลขที่หนังสือส่งมอบงาน */
+  delivery_letter_no: string;
   delivery_date: string;
   inspection_date: string;
+  /** ผลการตรวจรับ — passed | defects */
+  inspection_result: string;
+  /** อัตราค่าปรับต่อวัน (ร้อยละ) */
+  penalty_rate_pct: number | null;
+  /** งานก่อสร้าง — ชื่อผู้ควบคุมงาน */
+  supervisor_name: string;
+  /** งานก่อสร้าง — วันที่ผู้ควบคุมงานรายงานผลสำเร็จ */
+  supervisor_report_date: string;
   progress_pct: number | null;
-  /** ผลสะสมหน้างานจริง (จำนวนหน่วย) — แสดงหน่วยจาก Step 1 */
   progress_cumulative_units: number | null;
   inspector_note: string;
-  /** สถานะงวดงาน */
+  /** @deprecated ใช้ inspection_result */
   installment_status: string;
 };
 
 export type Step10FormData = {
   checklist?: Record<string, boolean>;
+  project_type?: Step10ProjectType;
   inspectionRows?: Step10InspectionRow[];
 };
+
+function normalizeStep10InspectionRow(
+  row: Partial<Step10InspectionRow>,
+  index: number,
+  projectType: Step10ProjectType = "general",
+): Step10InspectionRow {
+  const inspectionResult =
+    row.inspection_result?.trim() ||
+    (row.installment_status === "inspection_passed" ? "passed" : "");
+  const penaltyRate =
+    row.penalty_rate_pct != null && Number.isFinite(row.penalty_rate_pct)
+      ? row.penalty_rate_pct
+      : projectType === "construction"
+        ? 0.01
+        : 0.1;
+  return {
+    installment_no: row.installment_no ?? index + 1,
+    planned_completion_date: row.planned_completion_date?.trim() ?? "",
+    delivery_letter_no: row.delivery_letter_no?.trim() ?? "",
+    delivery_date: row.delivery_date?.trim() ?? "",
+    inspection_date: row.inspection_date?.trim() ?? "",
+    inspection_result: inspectionResult,
+    penalty_rate_pct: penaltyRate,
+    supervisor_name: row.supervisor_name?.trim() ?? "",
+    supervisor_report_date: row.supervisor_report_date?.trim() ?? "",
+    progress_pct:
+      row.progress_pct != null && Number.isFinite(row.progress_pct)
+        ? row.progress_pct
+        : null,
+    progress_cumulative_units:
+      row.progress_cumulative_units != null &&
+      Number.isFinite(row.progress_cumulative_units)
+        ? row.progress_cumulative_units
+        : null,
+    inspector_note: row.inspector_note?.trim() ?? "",
+    installment_status:
+      inspectionResult === "passed"
+        ? "inspection_passed"
+        : row.installment_status?.trim() ?? "",
+  };
+}
 
 export function buildStep10InspectionRows(
   totalInstallments: number,
   existing: Step10InspectionRow[] = [],
   plannedDates: string[] = [],
+  projectType: Step10ProjectType = "general",
 ): Step10InspectionRow[] {
   const n = Math.max(0, Math.min(99, Math.floor(totalInstallments)));
   return Array.from({ length: n }, (_, index) => {
@@ -1761,50 +1818,38 @@ export function buildStep10InspectionRows(
     const planned =
       plannedDates[index]?.trim() || prev?.planned_completion_date?.trim() || "";
     if (prev) {
-      return {
-        ...prev,
-        planned_completion_date: planned,
-      };
+      return normalizeStep10InspectionRow(
+        { ...prev, planned_completion_date: planned },
+        index,
+        projectType,
+      );
     }
-    return {
-      installment_no,
-      planned_completion_date: planned,
-      delivery_date: "",
-      inspection_date: "",
-      progress_pct: null,
-      progress_cumulative_units: null,
-      inspector_note: "",
-      installment_status: "",
-    };
+    return normalizeStep10InspectionRow(
+      {
+        installment_no,
+        planned_completion_date: planned,
+        penalty_rate_pct: projectType === "construction" ? 0.01 : 0.1,
+      },
+      index,
+      projectType,
+    );
   });
 }
 
 export function loadStep10FormFromNote(note: string | null): Step10FormData {
   const { form } = parseStepNote(note);
   const f = form as Step10FormData;
+  const projectType: Step10ProjectType =
+    f.project_type === "construction" ? "construction" : "general";
   const raw = f.inspectionRows ?? [];
   return {
     checklist: f.checklist,
-    inspectionRows: raw.map((row, index) => ({
-      installment_no: row.installment_no ?? index + 1,
-      planned_completion_date: row.planned_completion_date?.trim() ?? "",
-      delivery_date: row.delivery_date?.trim() ?? "",
-      inspection_date: row.inspection_date?.trim() ?? "",
-      progress_pct:
-        row.progress_pct != null && Number.isFinite(row.progress_pct)
-          ? row.progress_pct
-          : null,
-      progress_cumulative_units:
-        row.progress_cumulative_units != null &&
-        Number.isFinite(row.progress_cumulative_units)
-          ? row.progress_cumulative_units
-          : null,
-      inspector_note: row.inspector_note?.trim() ?? "",
-      installment_status: row.installment_status?.trim() ?? "",
-    })),
+    project_type: projectType,
+    inspectionRows: raw.map((row, index) =>
+      normalizeStep10InspectionRow(row, index, projectType),
+    ),
   };
 }
-
 export function resolveProjectTotalInstallmentCount(
   steps: Array<{ step_number?: number; note: string | null }>,
 ): number {
@@ -5365,38 +5410,70 @@ export function isStep9ReadyForNext(
 
 export type Step10ComplianceIssue = { id: string; message: string };
 
+/** ความพร้อมขั้นตอนที่ 10 — ฟิลด์รายงวด + เอกสารบังคับ (ไม่รวม Checklist เก่า) */
+export function countStep10FormRequiredProgress(
+  inspectionRows: Step10InspectionRow[],
+  opts: {
+    projectType?: Step10ProjectType;
+    stepDocs?: Array<{ document_type: string }>;
+    totalInstallmentCount: number;
+  },
+): { done: number; total: number } {
+  const projectType: Step10ProjectType =
+    opts.projectType === "construction" ? "construction" : "general";
+  const uploadedTypes = (opts.stepDocs ?? []).map((d) => d.document_type);
+  const expectedCount = Math.max(0, Math.floor(opts.totalInstallmentCount));
+  const fieldsPerRow = projectType === "construction" ? 9 : 6;
+  const total = expectedCount * fieldsPerRow;
+  let done = 0;
+
+  for (const row of inspectionRows) {
+    if (row.planned_completion_date?.trim()) done++;
+    if (row.delivery_letter_no?.trim()) done++;
+    if (row.delivery_date?.trim()) done++;
+    if (row.inspection_date?.trim()) done++;
+    if (normalizeStep10InspectionResult(row.inspection_result) === "passed") done++;
+    if (step10RowHasRequiredDocs(row.installment_no, uploadedTypes, projectType)) {
+      done++;
+    }
+    if (projectType === "construction") {
+      if (row.supervisor_name?.trim()) done++;
+      if (row.supervisor_report_date?.trim()) done++;
+      if (
+        uploadedTypes.some(
+          (t) =>
+            t.includes(`งวดที่ ${row.installment_no}`) &&
+            (t.includes("รายงานผลการปฏิบัติงานของผู้ควบคุมงาน") ||
+              t.includes("รายงานประจำวัน")),
+        )
+      ) {
+        done++;
+      }
+    }
+  }
+
+  return { done, total };
+}
+
 export function getStep10ComplianceIssues(
   inspectionRows: Step10InspectionRow[],
-  manualChecklist: Record<string, boolean> | null | undefined,
+  _manualChecklist: Record<string, boolean> | null | undefined,
   opts: {
     responsibleName: string;
     stepDocs?: Array<{ document_type: string }>;
     totalInstallmentCount: number;
+    projectType?: Step10ProjectType;
+    contractStartDate?: string | null;
     timelineCtx?: TimelineValidationContext;
   },
-  autoStates?: Record<string, boolean>,
+  _autoStates?: Record<string, boolean>,
 ): Step10ComplianceIssue[] {
   const issues: Step10ComplianceIssue[] = [];
   const uploadedTypes = (opts.stepDocs ?? []).map((d) => d.document_type);
   const expectedCount = Math.max(0, Math.floor(opts.totalInstallmentCount));
-  const checklistItems = getStep10ChecklistItems(
-    countStep10PassedInstallments(inspectionRows),
-    expectedCount,
-  );
-  const auto =
-    autoStates ??
-    computeAutoChecklistState({
-      stepNumber: 10,
-      step10InspectionRows: inspectionRows,
-      uploadedDocTypes: uploadedTypes,
-    });
-  const effective = buildEffectiveChecklist(
-    10,
-    manualChecklist,
-    auto,
-    opts.stepDocs,
-    checklistItems,
-  );
+  const projectType: Step10ProjectType =
+    opts.projectType === "construction" ? "construction" : "general";
+  const contractStart = opts.contractStartDate?.trim() ?? "";
 
   if (expectedCount <= 0) {
     issues.push({
@@ -5411,36 +5488,97 @@ export function getStep10ComplianceIssues(
     });
   }
 
-  checklistItems.forEach((item, index) => {
-    if (!effective[item.key]) {
-      const prefix =
-        item.mode === "auto" ? "ระบบตรวจพบยังไม่ครบ (Auto)" : "ยังไม่ได้แนบหลักฐาน";
+  inspectionRows.forEach((row) => {
+    const n = row.installment_no;
+    if (!row.planned_completion_date?.trim()) {
       issues.push({
-        id: `checklist-${item.key}`,
-        message: `${prefix} ข้อที่ ${index + 1}: ${item.label}`,
+        id: `installment-${n}-planned_date`,
+        message: `งวดที่ ${n}: กรุณาระบุวันครบกำหนดส่งมอบประจำงวดตามสัญญา`,
       });
     }
-  });
-
-  inspectionRows.forEach((row) => {
-    if (
-      isStep10InspectionBeforeDelivery(row.delivery_date, row.inspection_date)
+    if (!row.delivery_letter_no?.trim()) {
+      issues.push({
+        id: `installment-${n}-delivery_letter_no`,
+        message: `งวดที่ ${n}: กรุณาระบุเลขที่หนังสือส่งมอบงาน`,
+      });
+    }
+    if (!row.delivery_date?.trim()) {
+      issues.push({
+        id: `installment-${n}-delivery_date`,
+        message: `งวดที่ ${n}: กรุณาระบุวันที่คู่สัญญาส่งมอบงานจริง`,
+      });
+    } else if (
+      contractStart &&
+      isStep10DeliveryBeforeContractStart(contractStart, row.delivery_date)
     ) {
       issues.push({
-        id: `installment-${row.installment_no}-inspection_before_delivery`,
-        message: `งวดที่ ${row.installment_no}: วันตรวจรับต้องไม่ก่อนวันที่ผู้รับจ้างส่งมอบงานจริง`,
+        id: `installment-${n}-delivery_before_contract`,
+        message: `งวดที่ ${n}: วันที่ส่งมอบงานจริงต้องไม่ก่อนวันเริ่มต้นสัญญา (${formatThaiDateSlash(contractStart)})`,
       });
     }
-    if (!isStep10RowInspectionPassed(row)) {
+    if (!row.inspection_date?.trim()) {
       issues.push({
-        id: `installment-${row.installment_no}-status`,
-        message: `งวดที่ ${row.installment_no}: สถานะต้องเป็น "ตรวจรับผ่านแล้ว" ก่อนปิดโครงการ`,
+        id: `installment-${n}-inspection_date`,
+        message: `งวดที่ ${n}: กรุณาระบุวันที่คณะกรรมการตรวจรับจริง`,
       });
     }
-    if (!step10RowHasAllInstallmentDocs(row.installment_no, uploadedTypes)) {
+    if (isStep10InspectionBeforeDelivery(row.delivery_date, row.inspection_date)) {
       issues.push({
-        id: `installment-${row.installment_no}-docs`,
-        message: `งวดที่ ${row.installment_no}: กรุณาแนบหลักฐานครบ 3 ไฟล์ (รายงานผู้ควบคุมงาน / รูปหน้างาน / บก.11)`,
+        id: `installment-${n}-inspection_before_delivery`,
+        message: `งวดที่ ${n}: วันตรวจรับต้องไม่ก่อนวันที่คู่สัญญาส่งมอบงานจริง`,
+      });
+    }
+    const inspectionResult = normalizeStep10InspectionResult(row.inspection_result);
+    if (!inspectionResult) {
+      issues.push({
+        id: `installment-${n}-inspection_result`,
+        message: `งวดที่ ${n}: กรุณาเลือกผลการตรวจรับ`,
+      });
+    } else if (inspectionResult !== "passed") {
+      issues.push({
+        id: `installment-${n}-inspection_not_passed`,
+        message: `งวดที่ ${n}: ต้องผ่านการตรวจรับถูกต้องครบถ้วนก่อนปิดโครงการ`,
+      });
+    }
+    if (row.penalty_rate_pct == null || !Number.isFinite(row.penalty_rate_pct)) {
+      issues.push({
+        id: `installment-${n}-penalty_rate`,
+        message: `งวดที่ ${n}: กรุณาระบุอัตราค่าปรับต่อวัน (ร้อยละ)`,
+      });
+    }
+    if (projectType === "construction") {
+      if (!row.supervisor_name?.trim()) {
+        issues.push({
+          id: `installment-${n}-supervisor_name`,
+          message: `งวดที่ ${n}: กรุณาระบุชื่อ-นามสกุลผู้ควบคุมงานก่อสร้าง`,
+        });
+      }
+      if (!row.supervisor_report_date?.trim()) {
+        issues.push({
+          id: `installment-${n}-supervisor_report_date`,
+          message: `งวดที่ ${n}: กรุณาระบุวันที่ผู้ควบคุมงานรายงานผลสำเร็จ`,
+        });
+      }
+      if (
+        isStep10InspectionBeforeSupervisorReport(
+          row.supervisor_report_date,
+          row.inspection_date,
+        )
+      ) {
+        issues.push({
+          id: `installment-${n}-inspection_before_supervisor`,
+          message: `งวดที่ ${n}: วันตรวจรับต้องไม่ก่อนวันที่ผู้ควบคุมงานรายงานผลสำเร็จ`,
+        });
+      }
+    }
+    if (!step10RowHasRequiredDocs(n, uploadedTypes, projectType)) {
+      const docHint =
+        projectType === "construction"
+          ? "หนังสือส่งมอบงาน, ใบตรวจรับพัสดุ และรายงานผู้ควบคุมงาน"
+          : "หนังสือส่งมอบงานและใบตรวจรับพัสดุ";
+      issues.push({
+        id: `installment-${n}-docs`,
+        message: `งวดที่ ${n}: กรุณาแนบหลักฐานบังคับครบ (${docHint})`,
       });
     }
   });

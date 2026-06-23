@@ -1,6 +1,11 @@
 import { addCalendarDaysISO } from "@/lib/step-form";
-import type { Step10InspectionRow } from "@/lib/step-form";
+import type { Step10InspectionRow, Step10ProjectType } from "@/lib/step-form";
 import type { StepDocRecord } from "@/lib/doc-upload";
+import {
+  STEP10_CONSTRUCTION_MIN_PENALTY_PER_DAY_BAHT,
+  STEP10_PENALTY_RATE_CONSTRUCTION_DEFAULT,
+  STEP10_PENALTY_RATE_GENERAL_DEFAULT,
+} from "@/lib/step10-guideline";
 
 /** สถานะโครงการ — หลังปิดงานจ้าง อยู่ระหว่างค้ำประกัน 2 ปี */
 export const PROJECT_STATUS_WARRANTY = "warranty";
@@ -8,13 +13,28 @@ export const PROJECT_STATUS_WARRANTY = "warranty";
 export const PROJECT_WARRANTY_STATUS_LABEL =
   "ปิดงานจ้างสำเร็จ (อยู่ระหว่างค้ำประกันความชำรุด 2 ปี)";
 
-/** สถานะงวดงาน — ขั้นตอนที่ 10 */
 export type Step10InstallmentStatus =
   | "under_construction"
   | "delivered"
   | "inspection_passed"
   | "delayed";
 
+export const STEP10_PROJECT_TYPE_OPTIONS: {
+  value: Step10ProjectType;
+  label: string;
+}[] = [
+  { value: "general", label: "โครงการทั่วไป (ซื้อ/จ้าง)" },
+  { value: "construction", label: "โครงการประเภทงานก่อสร้าง" },
+];
+
+export const STEP10_INSPECTION_RESULT_OPTIONS = [
+  { value: "passed", label: "ผ่านการตรวจรับถูกต้องครบถ้วน" },
+  { value: "defects", label: "ตรวจพบข้อบกพร่องให้แก้ไข" },
+] as const;
+
+export type Step10InspectionResult = (typeof STEP10_INSPECTION_RESULT_OPTIONS)[number]["value"];
+
+/** @deprecated ใช้ STEP10_INSPECTION_RESULT_OPTIONS */
 export const STEP10_INSTALLMENT_STATUS_OPTIONS: {
   value: Step10InstallmentStatus;
   label: string;
@@ -30,12 +50,20 @@ export const STEP10_DAILY_REPORT_HINT =
 
 /** ประเภทเอกสารรายงวด — ขั้นตอนที่ 10 */
 export const STEP10_INSTALLMENT_DOC = {
+  deliveryLetter: (n: number) => `หนังสือส่งมอบงาน/ส่งมอบพัสดุจากคู่สัญญา (งวดที่ ${n})`,
+  inspectionReport: (n: number) => `ใบตรวจรับพัสดุ / รายงานผลการตรวจรับ (งวดที่ ${n})`,
+  sitePhotoEvidence: (n: number) => `ภาพถ่ายหลักฐานการตรวจรับพัสดุหน้างานจริง (งวดที่ ${n})`,
+  invoice: (n: number) => `ใบแจ้งหนี้ / ใบกำกับภาษี (งวดที่ ${n})`,
+  supervisorReport: (n: number) =>
+    `รายงานผลการปฏิบัติงานของผู้ควบคุมงานประจำงวด (งวดที่ ${n})`,
+  /** @deprecated */
   dailyReport: (n: number) => `รายงานประจำวันของผู้ควบคุมงาน (งวดที่ ${n})`,
+  /** @deprecated */
   sitePhoto: (n: number) => `รูปถ่ายหน้างานประกอบรายงาน (งวดที่ ${n})`,
+  /** @deprecated */
   bg11: (n: number) => `ใบแจ้งส่งมอบงาน/ใบตรวจรับ บก.11 (งวดที่ ${n})`,
 } as const;
 
-/** @deprecated ชื่อเอกสารเก่าใน DB */
 const STEP10_INSTALLMENT_DOC_LEGACY = {
   dailyReport: (n: number) => `รายงานประจำวันช่างคุมงาน (งวดที่ ${n})`,
   sitePhoto: (n: number) => `รูปถ่ายหน้างาน (งวดที่ ${n})`,
@@ -43,22 +71,56 @@ const STEP10_INSTALLMENT_DOC_LEGACY = {
 
 export const STEP10_GUARANTEE_RETURN_DOC = "บันทึกคืนหลักประกันสัญญา";
 
-export function step10InstallmentDailyDocTypes(n: number): string[] {
+export function step10DefaultPenaltyRatePct(projectType: Step10ProjectType): number {
+  return projectType === "construction"
+    ? STEP10_PENALTY_RATE_CONSTRUCTION_DEFAULT
+    : STEP10_PENALTY_RATE_GENERAL_DEFAULT;
+}
+
+export function step10InstallmentDeliveryLetterDocTypes(n: number): string[] {
+  return [STEP10_INSTALLMENT_DOC.deliveryLetter(n)];
+}
+
+export function step10InstallmentInspectionReportDocTypes(n: number): string[] {
   return [
-    STEP10_INSTALLMENT_DOC.dailyReport(n),
-    STEP10_INSTALLMENT_DOC_LEGACY.dailyReport(n),
+    STEP10_INSTALLMENT_DOC.inspectionReport(n),
+    STEP10_INSTALLMENT_DOC.bg11(n),
   ];
 }
 
-export function step10InstallmentPhotoDocTypes(n: number): string[] {
+export function step10InstallmentSitePhotoDocTypes(n: number): string[] {
   return [
+    STEP10_INSTALLMENT_DOC.sitePhotoEvidence(n),
     STEP10_INSTALLMENT_DOC.sitePhoto(n),
     STEP10_INSTALLMENT_DOC_LEGACY.sitePhoto(n),
   ];
 }
 
+export function step10InstallmentInvoiceDocTypes(n: number): string[] {
+  return [STEP10_INSTALLMENT_DOC.invoice(n)];
+}
+
+export function step10InstallmentSupervisorReportDocTypes(n: number): string[] {
+  return [
+    STEP10_INSTALLMENT_DOC.supervisorReport(n),
+    STEP10_INSTALLMENT_DOC.dailyReport(n),
+    STEP10_INSTALLMENT_DOC_LEGACY.dailyReport(n),
+  ];
+}
+
+/** @deprecated */
+export function step10InstallmentDailyDocTypes(n: number): string[] {
+  return step10InstallmentSupervisorReportDocTypes(n);
+}
+
+/** @deprecated */
+export function step10InstallmentPhotoDocTypes(n: number): string[] {
+  return step10InstallmentSitePhotoDocTypes(n);
+}
+
+/** @deprecated */
 export function step10InstallmentBg11DocTypes(n: number): string[] {
-  return [STEP10_INSTALLMENT_DOC.bg11(n)];
+  return step10InstallmentInspectionReportDocTypes(n);
 }
 
 function uploadedHasAnyType(uploadedTypes: string[], candidates: string[]): boolean {
@@ -67,13 +129,7 @@ function uploadedHasAnyType(uploadedTypes: string[], candidates: string[]): bool
 }
 
 export function isStep10InstallmentDocType(documentType: string): boolean {
-  return (
-    documentType.startsWith("รายงานประจำวันของผู้ควบคุมงาน (งวดที่ ") ||
-    documentType.startsWith("รายงานประจำวันช่างคุมงาน (งวดที่ ") ||
-    documentType.startsWith("รูปถ่ายหน้างานประกอบรายงาน (งวดที่ ") ||
-    documentType.startsWith("รูปถ่ายหน้างาน (งวดที่ ") ||
-    documentType.startsWith("ใบแจ้งส่งมอบงาน/ใบตรวจรับ บก.11 (งวดที่ ")
-  );
+  return /งวดที่\s*\d+/.test(documentType);
 }
 
 export function parseStep10InstallmentNoFromDocType(documentType: string): number | null {
@@ -97,7 +153,7 @@ function formatLocalISODate(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-/** จำนวนวันปฏิทินระหว่างสองวัน */
+/** จำนวนวันปฏิทินระหว่างสองวัน (เมื่อ to หลัง from) */
 export function countCalendarDaysBetweenISO(fromISO: string, toISO: string): number {
   const from = parseLocalISODate(fromISO);
   const to = parseLocalISODate(toISO);
@@ -105,6 +161,13 @@ export function countCalendarDaysBetweenISO(fromISO: string, toISO: string): num
   const ms = to.getTime() - from.getTime();
   if (ms <= 0) return 0;
   return Math.floor(ms / (24 * 60 * 60 * 1000));
+}
+
+export function isStep10DateBefore(aISO: string, bISO: string): boolean {
+  const a = parseLocalISODate(aISO);
+  const b = parseLocalISODate(bISO);
+  if (!a || !b) return false;
+  return a.getTime() < b.getTime();
 }
 
 /** วันกำหนดเสร็จตามแผนแต่ละงวด — แบ่งระยะเวลาสัญญาเท่าๆ กันจากวันเริ่มงาน */
@@ -126,59 +189,105 @@ export function computeStep10InstallmentPlannedDates(
   });
 }
 
-/** ค่าปรับสะสมงวด: วงเงินสัญญา x 0.001 x วันปฏิทินที่ส่งมอบเลท */
-export function computeStep10InstallmentPenalty(
-  contractAmount: number | null | undefined,
-  plannedISO: string,
-  actualDeliveryISO: string,
-): number {
-  const amount = contractAmount;
-  const planned = plannedISO?.trim() ?? "";
-  const actual = actualDeliveryISO?.trim() ?? "";
-  if (amount == null || !Number.isFinite(amount) || amount <= 0 || !planned || !actual) {
-    return 0;
+export type Step10PenaltyResult = {
+  daysLate: number;
+  penaltyBaht: number;
+};
+
+/** ค่าปรับรายงวด — วันปฏิทิน (รวมวันหยุด) */
+export function computeStep10InstallmentPenalty(opts: {
+  projectType: Step10ProjectType;
+  contractAmount: number | null | undefined;
+  totalInstallments: number;
+  penaltyRatePct: number | null | undefined;
+  plannedISO: string;
+  actualDeliveryISO: string;
+}): Step10PenaltyResult {
+  const planned = opts.plannedISO?.trim() ?? "";
+  const actual = opts.actualDeliveryISO?.trim() ?? "";
+  const rate = opts.penaltyRatePct;
+  const contractAmount = opts.contractAmount;
+  const totalN = Math.max(1, Math.floor(opts.totalInstallments));
+
+  if (!planned || !actual || actual <= planned) {
+    return { daysLate: 0, penaltyBaht: 0 };
   }
-  if (actual <= planned) return 0;
+  if (rate == null || !Number.isFinite(rate) || rate <= 0) {
+    return { daysLate: 0, penaltyBaht: 0 };
+  }
+  if (contractAmount == null || !Number.isFinite(contractAmount) || contractAmount <= 0) {
+    return { daysLate: 0, penaltyBaht: 0 };
+  }
+
   const daysLate = countCalendarDaysBetweenISO(planned, actual);
-  if (daysLate <= 0) return 0;
-  return Math.round(amount * 0.001 * daysLate * 100) / 100;
+  if (daysLate <= 0) return { daysLate: 0, penaltyBaht: 0 };
+
+  const baseAmount =
+    opts.projectType === "construction"
+      ? contractAmount
+      : contractAmount / totalN;
+
+  let penalty = baseAmount * (rate / 100) * daysLate;
+
+  if (opts.projectType === "construction") {
+    const minTotal = STEP10_CONSTRUCTION_MIN_PENALTY_PER_DAY_BAHT * daysLate;
+    penalty = Math.max(penalty, minTotal);
+  }
+
+  return {
+    daysLate,
+    penaltyBaht: Math.round(penalty * 100) / 100,
+  };
 }
 
-export function normalizeStep10InstallmentStatus(
+export function normalizeStep10InspectionResult(
   raw: string | null | undefined,
-): Step10InstallmentStatus | "" {
+): Step10InspectionResult | "" {
   if (!raw) return "";
-  const found = STEP10_INSTALLMENT_STATUS_OPTIONS.find((o) => o.value === raw);
+  const found = STEP10_INSPECTION_RESULT_OPTIONS.find((o) => o.value === raw);
   return found?.value ?? "";
 }
 
-export function hasStep10RowProgressRecorded(row: Step10InspectionRow): boolean {
-  return (
-    (row.progress_pct != null && Number.isFinite(row.progress_pct)) ||
-    !!row.delivery_date?.trim() ||
-    !!row.inspection_date?.trim() ||
-    !!row.inspector_note?.trim() ||
-    !!row.installment_status
-  );
-}
-
 export function isStep10RowInspectionPassed(row: Step10InspectionRow): boolean {
-  return row.installment_status === "inspection_passed";
+  return (
+    row.inspection_result === "passed" ||
+    row.installment_status === "inspection_passed"
+  );
 }
 
 export function countStep10PassedInstallments(rows: Step10InspectionRow[]): number {
   return rows.filter(isStep10RowInspectionPassed).length;
 }
 
+export function step10RowHasRequiredDocs(
+  installmentNo: number,
+  uploadedTypes: string[],
+  projectType: Step10ProjectType,
+): boolean {
+  const hasDelivery = uploadedHasAnyType(
+    uploadedTypes,
+    step10InstallmentDeliveryLetterDocTypes(installmentNo),
+  );
+  const hasInspection = uploadedHasAnyType(
+    uploadedTypes,
+    step10InstallmentInspectionReportDocTypes(installmentNo),
+  );
+  if (!hasDelivery || !hasInspection) return false;
+  if (projectType === "construction") {
+    return uploadedHasAnyType(
+      uploadedTypes,
+      step10InstallmentSupervisorReportDocTypes(installmentNo),
+    );
+  }
+  return true;
+}
+
+/** @deprecated */
 export function step10RowHasAllInstallmentDocs(
   installmentNo: number,
   uploadedTypes: string[],
 ): boolean {
-  return (
-    uploadedHasAnyType(uploadedTypes, step10InstallmentDailyDocTypes(installmentNo)) &&
-    uploadedHasAnyType(uploadedTypes, step10InstallmentPhotoDocTypes(installmentNo)) &&
-    uploadedHasAnyType(uploadedTypes, step10InstallmentBg11DocTypes(installmentNo))
-  );
+  return step10RowHasRequiredDocs(installmentNo, uploadedTypes, "general");
 }
 
 export function isStep10InspectionBeforeDelivery(
@@ -188,10 +297,39 @@ export function isStep10InspectionBeforeDelivery(
   const delivery = deliveryISO?.trim() ?? "";
   const inspection = inspectionISO?.trim() ?? "";
   if (!delivery || !inspection) return false;
-  return inspection < delivery;
+  return isStep10DateBefore(inspection, delivery);
 }
 
-/** วันตรวจรับของงวดสุดท้ายที่มีข้อมูล */
+export function isStep10InspectionBeforeSupervisorReport(
+  supervisorReportISO: string,
+  inspectionISO: string,
+): boolean {
+  const report = supervisorReportISO?.trim() ?? "";
+  const inspection = inspectionISO?.trim() ?? "";
+  if (!report || !inspection) return false;
+  return isStep10DateBefore(inspection, report);
+}
+
+export function isStep10DeliveryBeforeContractStart(
+  contractStartISO: string,
+  deliveryISO: string,
+): boolean {
+  const start = contractStartISO?.trim() ?? "";
+  const delivery = deliveryISO?.trim() ?? "";
+  if (!start || !delivery) return false;
+  return isStep10DateBefore(delivery, start);
+}
+
+/** @deprecated */
+export function hasStep10RowProgressRecorded(row: Step10InspectionRow): boolean {
+  return (
+    !!row.delivery_date?.trim() ||
+    !!row.inspection_date?.trim() ||
+    !!row.delivery_letter_no?.trim() ||
+    !!row.inspection_result
+  );
+}
+
 export function resolveLastInstallmentInspectionDate(rows: Step10InspectionRow[]): string {
   const withDate = rows.filter((r) => r.inspection_date?.trim());
   if (withDate.length === 0) return "";
@@ -199,7 +337,6 @@ export function resolveLastInstallmentInspectionDate(rows: Step10InspectionRow[]
   return withDate[0].inspection_date?.trim() ?? "";
 }
 
-/** วันสิ้นสุดค้ำประกัน = วันตรวจรับงวดสุดท้าย + 2 ปีปฏิทิน */
 export function computeWarrantyEndDateISO(lastInspectionISO: string): string | null {
   const d = parseLocalISODate(lastInspectionISO);
   if (!d) return null;
@@ -220,4 +357,8 @@ export function groupStep10DocsByInstallment(
     map.set(n, list);
   }
   return map;
+}
+
+export function step10RequiredDocCount(projectType: Step10ProjectType): number {
+  return projectType === "construction" ? 3 : 2;
 }

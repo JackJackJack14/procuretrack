@@ -68,15 +68,19 @@ import {
   STEP10_DAILY_REPORT_HINT,
   STEP10_GUARANTEE_RETURN_DOC,
   STEP10_INSTALLMENT_DOC,
-  STEP10_INSTALLMENT_STATUS_OPTIONS,
+  STEP10_INSPECTION_RESULT_OPTIONS,
+  STEP10_PROJECT_TYPE_OPTIONS,
   computeStep10InstallmentPenalty,
   computeWarrantyEndDateISO,
-  countStep10PassedInstallments,
-  groupStep10DocsByInstallment,
+  groupStep10DocsByInstallment,  isStep10DeliveryBeforeContractStart,
   isStep10InspectionBeforeDelivery,
+  isStep10InspectionBeforeSupervisorReport,
   PROJECT_STATUS_WARRANTY,
   PROJECT_WARRANTY_STATUS_LABEL,
   resolveLastInstallmentInspectionDate,
+  step10DefaultPenaltyRatePct,
+  step10RequiredDocCount,
+  step10RowHasRequiredDocs,
 } from "@/lib/step10-contract";
 import {
   FORM_AUDIT_TRAIL_STANDARD,
@@ -194,6 +198,7 @@ import {
   type Step9ContractSchedule,
   buildStep10InspectionRows,
   type Step10InspectionRow,
+  type Step10ProjectType,
   isStep5WinnerAnnouncementBeforeEvaluation,
   getStep5WinnerAnnouncementBeforeEvaluationMsg,
   STEP5_CONTRACT_AFTER_APPEAL_MSG,
@@ -4113,41 +4118,7 @@ function GenericStepChecklistPanel({
   );
 }
 
-/** Smart Checklist ขั้นตอนที่ 10 — label งวด (X / Y) แบบ dynamic */
-function Step10ChecklistPanel({
-  inspectionRows,
-  totalInstallmentCount,
-  manualChecklist,
-  onManualChange,
-  autoCheckStates,
-  readOnly,
-  docBinder,
-}: {
-  inspectionRows: Step10InspectionRow[];
-  totalInstallmentCount: number;
-  manualChecklist: Record<string, boolean>;
-  onManualChange: (key: string, checked: boolean) => void;
-  autoCheckStates: Record<string, boolean>;
-  readOnly?: boolean;
-  docBinder: SmartChecklistDocBinder;
-}) {
-  const passed = countStep10PassedInstallments(inspectionRows);
-  const items = getStep10ChecklistItems(passed, totalInstallmentCount);
-  return (
-    <SmartChecklist
-      stepNumber={10}
-      stepLabel={STEP10_FORM_HEADER}
-      items={items}
-      manualChecklist={manualChecklist}
-      autoStates={autoCheckStates}
-      onManualChange={onManualChange}
-      readOnly={readOnly}
-      docBinder={docBinder}
-    />
-  );
-}
-
-type GenericStepDetailFormProps = {
+/** Smart Checklist ขั้นตอนที่ 10 — ถูกแทนที่ด้วยฟอร์มรายงวด (ไม่ใช้แล้ว) */type GenericStepDetailFormProps = {
   stepNumber: number;
   manualChecklist: Record<string, boolean>;
   onManualChange: (key: string, checked: boolean) => void;
@@ -5334,30 +5305,25 @@ export function Step9DetailForm({
   );
 }
 
-function step10InstallmentStatusBadgeClass(status: string): string {
-  switch (status) {
-    case "inspection_passed":
+function step10InspectionResultBadgeClass(result: string): string {
+  switch (result) {
+    case "passed":
       return "bg-success/15 text-success border-success/30";
-    case "delayed":
+    case "defects":
       return "bg-orange-100 text-orange-800 border-orange-200 dark:bg-orange-950/40 dark:text-orange-200 dark:border-orange-800";
-    case "delivered":
-      return "bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-950/40 dark:text-blue-200 dark:border-blue-800";
-    case "under_construction":
-      return "bg-muted text-muted-foreground border-border";
     default:
       return "bg-muted/50 text-muted-foreground border-border";
   }
 }
 
-function step10InstallmentStatusLabel(status: string): string {
+function step10InspectionResultLabel(result: string): string {
   return (
-    STEP10_INSTALLMENT_STATUS_OPTIONS.find((o) => o.value === status)?.label ??
-    "ยังไม่ระบุ"
+    STEP10_INSPECTION_RESULT_OPTIONS.find((o) => o.value === result)?.label ?? "ยังไม่ระบุ"
   );
 }
 
-function step10DocsCountBadgeClass(count: number): string {
-  if (count >= 3) return "bg-success/10 text-success border-success/25";
+function step10DocsCountBadgeClass(count: number, required: number): string {
+  if (count >= required) return "bg-success/10 text-success border-success/25";
   if (count > 0) return "bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-950/40 dark:text-amber-200";
   return "bg-muted/50 text-muted-foreground border-border";
 }
@@ -5369,7 +5335,12 @@ type Step10DetailFormProps = Omit<
   totalInstallmentCount: number;
   inspectionRows: Step10InspectionRow[];
   onInspectionRowsChange: (rows: Step10InspectionRow[]) => void;
+  projectType: Step10ProjectType;
+  onProjectTypeChange: (type: Step10ProjectType) => void;
   contractAmount: number | null;
+  contractStartDate: string;
+  contractEndDate: string;
+  inspectionCommitteeDisplay: string;
   projectStatus: string;
   resultUnit?: string | null;
   executiveReportSource: ExecutiveReportProject;
@@ -5377,12 +5348,17 @@ type Step10DetailFormProps = Omit<
   warrantyStartedAt?: string | null;
 };
 
-/** ขั้นตอนที่ 10 — ตารางตรวจรับงวดงาน + แฟ้มหลักฐาน สตง. + ระยะค้ำประกัน */
+/** ขั้นตอนที่ 10 — บริหารสัญญาและตรวจรับพัสดุ (ข้อ 176–179) */
 export function Step10DetailForm({
   totalInstallmentCount,
   inspectionRows,
   onInspectionRowsChange,
+  projectType,
+  onProjectTypeChange,
   contractAmount,
+  contractStartDate,
+  contractEndDate,
+  inspectionCommitteeDisplay,
   projectStatus,
   resultUnit = null,
   executiveReportSource,
@@ -5390,6 +5366,15 @@ export function Step10DetailForm({
   warrantyStartedAt = null,
   ...genericProps
 }: Step10DetailFormProps) {
+  console.log(
+    "🛡️ [ขั้นตอนที่ 10 GRAND FINALE - CONSTRUCTION READY]: Terminology refactored. Dynamic Installment Loop, Calendar-Day Fine Calculator, and Conditional Construction Fields (Reg. 176) are fully functional.",
+  );
+
+  const contractStart = contractStartDate?.trim() ?? "";
+  const contractEnd = contractEndDate?.trim() ?? "";
+  const requiredDocsPerInstallment = step10RequiredDocCount(projectType);
+  const uploadedDocTypes = genericProps.docsForStep.map((d) => d.document_type);
+
   const patchRow = (installmentNo: number, patch: Partial<Step10InspectionRow>) => {
     onInspectionRowsChange(
       inspectionRows.map((row) =>
@@ -5399,12 +5384,27 @@ export function Step10DetailForm({
   };
 
   const patchDeliveryDate = (installmentNo: number, iso: string) => {
+    if (contractStart && iso && isStep10DeliveryBeforeContractStart(contractStart, iso)) {
+      toast.error("วันที่ส่งมอบงานจริงต้องไม่ก่อนวันเริ่มต้นสัญญา");
+      return;
+    }
     const row = inspectionRows.find((r) => r.installment_no === installmentNo);
     const next: Partial<Step10InspectionRow> = { delivery_date: iso };
     if (row && iso && row.inspection_date && isStep10InspectionBeforeDelivery(iso, row.inspection_date)) {
       next.inspection_date = "";
     }
     patchRow(installmentNo, next);
+  };
+
+  const handleProjectTypeChange = (nextType: Step10ProjectType) => {
+    onProjectTypeChange(nextType);
+    const defaultRate = step10DefaultPenaltyRatePct(nextType);
+    onInspectionRowsChange(
+      inspectionRows.map((row) => ({
+        ...row,
+        penalty_rate_pct: defaultRate,
+      })),
+    );
   };
 
   const installmentDocMap = useMemo(
@@ -5447,22 +5447,99 @@ export function Step10DetailForm({
     }
   };
 
-  const unitLabel = resultUnit?.trim() || "";
-
   return (
     <div className="space-y-4 max-w-6xl">
-      <Step10ChecklistPanel
-        inspectionRows={inspectionRows}
-        totalInstallmentCount={totalInstallmentCount}
-        manualChecklist={genericProps.manualChecklist}
-        onManualChange={genericProps.onManualChange}
-        autoCheckStates={genericProps.autoCheckStates}
-        readOnly={genericProps.readOnly || isWarrantyPhase}
-        docBinder={genericProps.docBinder}
-      />
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
+        <p className="text-sm font-medium text-foreground">
+          ข้อมูลสืบทอดจากขั้นตอนก่อนหน้า (อ่านอย่างเดียว)
+        </p>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <FieldRow label="วงเงินสัญญาจริง (บาท)">
+            <input
+              type="text"
+              readOnly
+              value={
+                contractAmount != null
+                  ? `${formatCurrencyDisplay(contractAmount)} บาท`
+                  : "— ยังไม่พบข้อมูลจากขั้นตอนที่ 8/9 —"
+              }
+              className={`${inputCls} bg-muted/50 cursor-not-allowed tabular-nums`}
+            />
+          </FieldRow>
+          <FieldRow label="จำนวนงวดงานทั้งหมด (จากขั้นตอนที่ 9)">
+            <input
+              type="text"
+              readOnly
+              value={totalInstallmentCount > 0 ? `${totalInstallmentCount} งวด` : "— ยังไม่ระบุ —"}
+              className={`${inputCls} bg-muted/50 cursor-not-allowed`}
+            />
+          </FieldRow>
+          <FieldRow label="วันเริ่มต้นสัญญา">
+            <input
+              type="text"
+              readOnly
+              value={
+                contractStart
+                  ? formatThaiDateSlash(contractStart)
+                  : "— กรุณาบันทึกในขั้นตอนที่ 9 —"
+              }
+              className={`${inputCls} bg-muted/50 cursor-not-allowed tabular-nums`}
+            />
+          </FieldRow>
+          <FieldRow label="วันสิ้นสุดสัญญา">
+            <input
+              type="text"
+              readOnly
+              value={
+                contractEnd
+                  ? formatThaiDateSlash(contractEnd)
+                  : "— กรุณาบันทึกในขั้นตอนที่ 9 —"
+              }
+              className={`${inputCls} bg-muted/50 cursor-not-allowed tabular-nums`}
+            />
+          </FieldRow>
+        </div>
+        <FieldRow label="คณะกรรมการตรวจรับพัสดุ (จากขั้นตอนที่ 4)">
+          <textarea
+            readOnly
+            rows={2}
+            value={inspectionCommitteeDisplay || "— ยังไม่พบรายชื่อจากขั้นตอนที่ 4 —"}
+            className="w-full px-3 py-2 rounded-md border border-input bg-muted/50 text-sm cursor-not-allowed resize-none"
+          />
+        </FieldRow>
+      </div>
 
-      <div className="rounded-lg border border-border bg-muted/20 p-4">
-        <p className="text-sm font-medium text-foreground">{STEP10_FORM_HEADER}</p>
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-3">
+        <p className="text-sm font-medium text-foreground">ประเภทโครงการ *</p>
+        <div className="flex flex-wrap gap-4">
+          {STEP10_PROJECT_TYPE_OPTIONS.map((opt) => (
+            <label
+              key={opt.value}
+              className={`flex items-center gap-2 text-sm cursor-pointer rounded-md border px-3 py-2 transition-colors ${
+                projectType === opt.value
+                  ? "border-primary bg-primary/5 font-medium"
+                  : "border-border hover:border-primary/40"
+              }`}
+            >
+              <input
+                type="radio"
+                name="step10_project_type"
+                value={opt.value}
+                checked={projectType === opt.value}
+                onChange={() => handleProjectTypeChange(opt.value)}
+                disabled={genericProps.readOnly || isWarrantyPhase}
+                className="accent-primary"
+              />
+              {opt.label}
+            </label>
+          ))}
+        </div>
+        {projectType === "construction" && (
+          <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+            โหมดงานก่อสร้าง — ต้องกรอกข้อมูลผู้ควบคุมงานและแนบรายงานผู้ควบคุมงานทุกงวด
+            (ระเบียบฯ ข้อ 176) · ค่าปรับคำนวณจากวงเงินรวมทั้งสัญญา ขั้นต่ำ 100 บาท/วัน
+          </p>
+        )}
       </div>
 
       <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 flex flex-wrap items-center justify-between gap-3">
@@ -5471,7 +5548,7 @@ export function Step10DetailForm({
             พิมพ์รายงานสรุปเสนอผู้บริหาร (PDF)
           </p>
           <p className="text-xs text-muted-foreground mt-1">
-            ดึงข้อมูลอัตโนมัติจากขั้นตอนที่ 1, 2, 4, 8 และตารางตรวจรับงวด — กรอกงวดล่าสุดแล้วกดพิมพ์ได้ทันที
+            ดึงข้อมูลอัตโนมัติจากขั้นตอนที่ 1, 2, 4, 8 และตารางตรวจรับงวด
           </p>
         </div>
         <button
@@ -5491,7 +5568,7 @@ export function Step10DetailForm({
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-3">
         <div>
-          <p className="text-sm font-medium text-foreground">ตารางตรวจรับงานตามงวด</p>
+          <p className="text-sm font-medium text-foreground">จัดการงวดงานและตรวจรับพัสดุ</p>
           <p className="text-xs text-muted-foreground mt-1">
             ระบบสร้าง {totalInstallmentCount > 0 ? totalInstallmentCount : "—"} งวดจากขั้นตอนที่ 9
             · คลิกแถบงวดงานเพื่อกางฟอร์มกรอกข้อมูล (เปิดได้ทีละ 1 งวด)
@@ -5499,21 +5576,34 @@ export function Step10DetailForm({
         </div>
         {totalInstallmentCount <= 0 ? (
           <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
-            กรุณาบันทึกจำนวนงวดงานทั้งหมดในขั้นตอนที่ 9 ก่อน — ระบบจะดีดตารางตรวจรับให้อัตโนมัติ
+            กรุณาบันทึกจำนวนงวดงานทั้งหมดในขั้นตอนที่ 9 ก่อน
           </p>
         ) : (
           <div className="space-y-2">
             {inspectionRows.map((row) => {
               const n = row.installment_no;
               const isOpen = expandedInstallment === n;
-              const docCount = (installmentDocMap.get(n) ?? []).length;
-              const penalty = computeStep10InstallmentPenalty(
-                contractAmount,
-                row.planned_completion_date,
-                row.delivery_date,
+              const installmentDocs = installmentDocMap.get(n) ?? [];
+              const docCount = installmentDocs.length;
+              const hasRequiredDocs = step10RowHasRequiredDocs(
+                n,
+                uploadedDocTypes,
+                projectType,
               );
-              const statusLabel = step10InstallmentStatusLabel(row.installment_status);
+              const penaltyResult = computeStep10InstallmentPenalty({
+                projectType,
+                contractAmount,
+                totalInstallments: totalInstallmentCount,
+                penaltyRatePct: row.penalty_rate_pct,
+                plannedISO: row.planned_completion_date,
+                actualDeliveryISO: row.delivery_date,
+              });
+              const resultLabel = step10InspectionResultLabel(row.inspection_result);
               const fieldsDisabled = genericProps.readOnly || isWarrantyPhase;
+              const inspectionMinDate =
+                projectType === "construction" && row.supervisor_report_date?.trim()
+                  ? row.supervisor_report_date
+                  : row.delivery_date;
 
               return (
                 <div
@@ -5540,209 +5630,253 @@ export function Step10DetailForm({
                     </span>
                     <span className="text-xs text-muted-foreground hidden sm:inline">·</span>
                     <span className="text-xs text-muted-foreground shrink-0">
-                      กำหนดเสร็จ{" "}
+                      ครบกำหนด{" "}
                       {row.planned_completion_date
                         ? formatThaiDateSlash(row.planned_completion_date)
                         : "—"}
                     </span>
                     <span
-                      className={`text-xs px-2 py-0.5 rounded-full border font-medium shrink-0 ${step10InstallmentStatusBadgeClass(row.installment_status)}`}
+                      className={`text-xs px-2 py-0.5 rounded-full border font-medium shrink-0 ${step10InspectionResultBadgeClass(row.inspection_result)}`}
                     >
-                      {statusLabel}
+                      {resultLabel}
                     </span>
-                    {row.progress_cumulative_units != null &&
-                      Number.isFinite(row.progress_cumulative_units) && (
-                        <span className="text-xs font-medium text-primary shrink-0 hidden md:inline">
-                          ผลสะสม{" "}
-                          {formatProgressWithUnit(
-                            row.progress_cumulative_units,
-                            unitLabel,
-                          )}
-                        </span>
-                      )}
+                    {penaltyResult.penaltyBaht > 0 && (
+                      <span className="text-xs font-semibold text-red-600 shrink-0">
+                        ค่าปรับ {formatBaht(penaltyResult.penaltyBaht)} บาท ({penaltyResult.daysLate} วัน)
+                      </span>
+                    )}
                     <span
-                      className={`text-xs px-2 py-0.5 rounded-full border font-medium shrink-0 ml-auto ${step10DocsCountBadgeClass(docCount)}`}
+                      className={`text-xs px-2 py-0.5 rounded-full border font-medium shrink-0 ml-auto ${step10DocsCountBadgeClass(docCount, requiredDocsPerInstallment)}`}
                     >
-                      Docs: {docCount}/3
+                      เอกสาร {hasRequiredDocs ? "ครบ" : `${docCount}/${requiredDocsPerInstallment}`}
                     </span>
                   </button>
 
-                  {/* คง DOM ไว้เสมอ — ซ่อนด้วย CSS เพื่อ retain state ฟอร์ม/อัปโหลด */}
                   <div
                     className={isOpen ? "block border-t border-border" : "hidden"}
                     aria-hidden={!isOpen}
                   >
                     <div className="p-4 space-y-4 bg-muted/5">
                       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                        <FieldRow label="วันที่ผู้รับจ้างส่งมอบงานจริง">
+                        <FieldRow
+                          label="วันครบกำหนดส่งมอบประจำงวดตามสัญญา *"
+                          complianceTarget={`installment-${n}-planned_date`}
+                        >
                           <ChronologicalDatePicker
                             stepNumber={10}
                             chronologicalCtx={genericProps.chronologicalCtx}
-                            value={row.delivery_date}
-                            onChange={(iso) => patchDeliveryDate(n, iso)}
+                            value={row.planned_completion_date}
+                            onChange={(iso) => patchRow(n, { planned_completion_date: iso })}
                             disabled={fieldsDisabled}
                             showChronologicalHint={false}
                           />
                         </FieldRow>
-                        <FieldRow label="วันที่คณะกรรมการตรวจรับเสร็จสิ้น">
+                        <FieldRow
+                          label="เลขที่หนังสือส่งมอบงาน *"
+                          complianceTarget={`installment-${n}-delivery_letter_no`}
+                        >
+                          <input
+                            type="text"
+                            value={row.delivery_letter_no}
+                            onChange={(e) => patchRow(n, { delivery_letter_no: e.target.value })}
+                            disabled={fieldsDisabled}
+                            className={inputCls}
+                            placeholder="เช่น กค 1234/2568"
+                          />
+                        </FieldRow>
+                        <FieldRow
+                          label="วันที่คู่สัญญาส่งมอบงานจริง *"
+                          complianceTarget={`installment-${n}-delivery_date`}
+                        >
                           <ChronologicalDatePicker
                             stepNumber={10}
                             chronologicalCtx={genericProps.chronologicalCtx}
-                            intraStepMinDate={row.delivery_date}
+                            additionalMinDates={contractStart ? [contractStart] : []}
+                            value={row.delivery_date}
+                            onChange={(iso) => patchDeliveryDate(n, iso)}
+                            disabled={fieldsDisabled}
+                            onInvalidDate={() =>
+                              toast.error("วันที่ส่งมอบงานจริงต้องไม่ก่อนวันเริ่มต้นสัญญา")
+                            }
+                            showChronologicalHint={false}
+                          />
+                        </FieldRow>
+                        <FieldRow
+                          label="วันที่คณะกรรมการตรวจรับจริง *"
+                          complianceTarget={`installment-${n}-inspection_date`}
+                        >
+                          <ChronologicalDatePicker
+                            stepNumber={10}
+                            chronologicalCtx={genericProps.chronologicalCtx}
+                            intraStepMinDate={inspectionMinDate}
                             value={row.inspection_date}
                             onChange={(iso) => patchRow(n, { inspection_date: iso })}
                             disabled={fieldsDisabled || !row.delivery_date?.trim()}
                             onInvalidDate={() =>
                               toast.error(
-                                "วันตรวจรับต้องไม่ก่อนวันที่ผู้รับจ้างส่งมอบงานจริงของงวดนี้",
+                                projectType === "construction"
+                                  ? "วันตรวจรับต้องไม่ก่อนวันส่งมอบงานและวันรายงานผู้ควบคุมงาน"
+                                  : "วันตรวจรับต้องไม่ก่อนวันที่คู่สัญญาส่งมอบงานจริง",
                               )
                             }
                             showChronologicalHint={false}
                           />
                         </FieldRow>
-                        <FieldRow label="ความก้าวหน้าหน้างานจริง (%)">
-                          <input
-                            type="number"
-                            min={0}
-                            max={100}
-                            step={1}
-                            value={row.progress_pct ?? ""}
-                            onChange={(e) => {
-                              const raw = e.target.value.replace(/[^\d]/g, "");
-                              patchRow(n, {
-                                progress_pct: raw ? Number(raw) : null,
-                              });
-                            }}
-                            disabled={fieldsDisabled}
-                            className={inputCls}
-                            placeholder="0–100"
-                          />
-                        </FieldRow>
                         <FieldRow
-                          label={
-                            unitLabel
-                              ? `ผลสะสมหน้างานจริง (จำนวนหน่วย — ${unitLabel})`
-                              : "ผลสะสมหน้างานจริง (จำนวนหน่วย)"
-                          }
+                          label="ผลการตรวจรับ *"
+                          complianceTarget={`installment-${n}-inspection_result`}
                         >
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="number"
-                              min={0}
-                              step="any"
-                              value={row.progress_cumulative_units ?? ""}
-                              onChange={(e) => {
-                                const raw = e.target.value.replace(/[^\d.]/g, "");
-                                patchRow(n, {
-                                  progress_cumulative_units: raw ? Number(raw) : null,
-                                });
-                              }}
-                              disabled={fieldsDisabled}
-                              className={inputCls}
-                              placeholder={unitLabel ? `เช่น 50` : "0"}
-                            />
-                            {unitLabel && (
-                              <span className="text-sm font-semibold text-primary shrink-0 px-2 py-1 rounded-md bg-primary/10">
-                                {unitLabel}
-                              </span>
-                            )}
-                          </div>
-                          {unitLabel &&
-                            row.progress_cumulative_units != null &&
-                            Number.isFinite(row.progress_cumulative_units) && (
-                              <p className="text-xs text-muted-foreground mt-1">
-                                แสดงผล:{" "}
-                                {formatProgressWithUnit(
-                                  row.progress_cumulative_units,
-                                  unitLabel,
-                                )}
-                              </p>
-                            )}
-                          {!unitLabel && (
-                            <p className="text-xs text-amber-700 mt-1">
-                              กรุณาเลือกหน่วยวัดผลใน Step 1 เพื่อแสดงหน่วยต่อท้ายอัตโนมัติ
-                            </p>
-                          )}
-                        </FieldRow>
-                        <FieldRow label="สถานะงวดงาน">
                           <select
-                            value={row.installment_status}
+                            value={row.inspection_result}
                             onChange={(e) =>
-                              patchRow(n, { installment_status: e.target.value })
+                              patchRow(n, {
+                                inspection_result: e.target.value,
+                                installment_status:
+                                  e.target.value === "passed" ? "inspection_passed" : "",
+                              })
                             }
                             disabled={fieldsDisabled}
                             className={inputCls}
                           >
-                            <option value="">— เลือกสถานะ —</option>
-                            {STEP10_INSTALLMENT_STATUS_OPTIONS.map((opt) => (
+                            <option value="">— เลือกผลการตรวจรับ —</option>
+                            {STEP10_INSPECTION_RESULT_OPTIONS.map((opt) => (
                               <option key={opt.value} value={opt.value}>
                                 {opt.label}
                               </option>
                             ))}
                           </select>
                         </FieldRow>
-                        <FieldRow label="ค่าปรับสะสมงวดนี้ (บาท)">
+                        <FieldRow
+                          label="อัตราค่าปรับต่อวัน (ร้อยละ) *"
+                          complianceTarget={`installment-${n}-penalty_rate`}
+                        >
                           <input
-                            type="text"
-                            readOnly
-                            value={penalty > 0 ? `${formatBaht(penalty)} บาท` : "—"}
-                            className={`${inputCls} bg-muted/50 cursor-not-allowed`}
-                            tabIndex={-1}
-                          />
-                        </FieldRow>
-                        <FieldRow label="วันกำหนดเสร็จตามแผน (อ้างอิง)">
-                          <input
-                            type="text"
-                            readOnly
-                            value={
-                              row.planned_completion_date
-                                ? formatThaiDateSlash(row.planned_completion_date)
-                                : "—"
-                            }
-                            className={`${inputCls} bg-muted/50 cursor-not-allowed`}
-                            tabIndex={-1}
+                            type="number"
+                            min={0}
+                            step={0.001}
+                            value={row.penalty_rate_pct ?? ""}
+                            onChange={(e) => {
+                              const raw = e.target.value;
+                              patchRow(n, {
+                                penalty_rate_pct: raw ? Number(raw) : null,
+                              });
+                            }}
+                            disabled={fieldsDisabled}
+                            className={inputCls}
                           />
                         </FieldRow>
                       </div>
+
+                      {penaltyResult.daysLate > 0 && (
+                        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                          <span className="font-semibold">⚠️ เกินกำหนด {penaltyResult.daysLate} วันปฏิทิน</span>
+                          {" · "}
+                          ค่าปรับงวดนี้{" "}
+                          <span className="font-bold tabular-nums">
+                            {formatBaht(penaltyResult.penaltyBaht)} บาท
+                          </span>
+                          {projectType === "construction" && (
+                            <span className="text-xs block mt-1">
+                              (คำนวณจากวงเงินรวมทั้งสัญญา × อัตราค่าปรับ × วันเลท — ขั้นต่ำ 100 บาท/วัน)
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {projectType === "construction" && (
+                        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 pt-2 border-t border-border/60">
+                          <FieldRow
+                            label="ชื่อ-นามสกุล ผู้ควบคุมงานก่อสร้าง *"
+                            complianceTarget={`installment-${n}-supervisor_name`}
+                          >
+                            <input
+                              type="text"
+                              value={row.supervisor_name}
+                              onChange={(e) => patchRow(n, { supervisor_name: e.target.value })}
+                              disabled={fieldsDisabled}
+                              className={inputCls}
+                            />
+                          </FieldRow>
+                          <FieldRow
+                            label="วันที่ผู้ควบคุมงานรายงานผลสำเร็จ *"
+                            complianceTarget={`installment-${n}-supervisor_report_date`}
+                          >
+                            <ChronologicalDatePicker
+                              stepNumber={10}
+                              chronologicalCtx={genericProps.chronologicalCtx}
+                              value={row.supervisor_report_date}
+                              onChange={(iso) => {
+                                patchRow(n, { supervisor_report_date: iso });
+                                if (
+                                  row.inspection_date?.trim() &&
+                                  isStep10InspectionBeforeSupervisorReport(iso, row.inspection_date)
+                                ) {
+                                  patchRow(n, { supervisor_report_date: iso, inspection_date: "" });
+                                }
+                              }}
+                              disabled={fieldsDisabled}
+                              showChronologicalHint={false}
+                            />
+                          </FieldRow>
+                        </div>
+                      )}
 
                       <FieldRow label="หมายเหตุผู้ตรวจ">
                         <input
                           type="text"
                           value={row.inspector_note}
-                          onChange={(e) =>
-                            patchRow(n, { inspector_note: e.target.value })
-                          }
+                          onChange={(e) => patchRow(n, { inspector_note: e.target.value })}
                           disabled={fieldsDisabled}
                           className={inputCls}
-                          placeholder="บันทึกผลตรวจรับ"
+                          placeholder="บันทึกผลตรวจรับเพิ่มเติม"
                         />
                       </FieldRow>
 
                       <div className="pt-2 border-t border-border/60 space-y-3">
                         <p className="text-xs font-medium text-muted-foreground">
-                          หลักฐานงวดที่ {n} (บังคับ 3 ไฟล์)
+                          หลักฐานงวดที่ {n}
                         </p>
-                        <div className="grid gap-3 lg:grid-cols-3">
-                          <div className="space-y-1">
-                            <InlineDocUpload
-                              project={genericProps.project}
-                              stepNumber={10}
-                              documentType={STEP10_INSTALLMENT_DOC.dailyReport(n)}
-                              label="1. รายงานประจำวันของผู้ควบคุมงาน (.pdf)"
-                              existing={genericProps.docsForStep}
-                              onChange={genericProps.onDocsChange}
-                              filePolicyId="pdf_only"
-                              compact
-                            />
-                            <p className="text-xs text-muted-foreground">
-                              {STEP10_DAILY_REPORT_HINT}
-                            </p>
-                          </div>
+                        <div className="grid gap-3 lg:grid-cols-2">
                           <InlineDocUpload
                             project={genericProps.project}
                             stepNumber={10}
-                            documentType={STEP10_INSTALLMENT_DOC.sitePhoto(n)}
-                            label="2. รูปถ่ายหน้างานประกอบรายงาน (.pdf/.jpg/.png)"
+                            documentType={STEP10_INSTALLMENT_DOC.deliveryLetter(n)}
+                            label="1. หนังสือส่งมอบงาน/ส่งมอบพัสดุจากคู่สัญญา (.pdf) *"
+                            existing={genericProps.docsForStep}
+                            onChange={genericProps.onDocsChange}
+                            filePolicyId="pdf_only"
+                            compact
+                          />
+                          <InlineDocUpload
+                            project={genericProps.project}
+                            stepNumber={10}
+                            documentType={STEP10_INSTALLMENT_DOC.inspectionReport(n)}
+                            label="2. ใบตรวจรับพัสดุ / รายงานผลการตรวจรับ (.pdf) *"
+                            existing={genericProps.docsForStep}
+                            onChange={genericProps.onDocsChange}
+                            filePolicyId="pdf_only"
+                            compact
+                          />
+                          {projectType === "construction" && (
+                            <div className="space-y-1">
+                              <InlineDocUpload
+                                project={genericProps.project}
+                                stepNumber={10}
+                                documentType={STEP10_INSTALLMENT_DOC.supervisorReport(n)}
+                                label="3. รายงานผลการปฏิบัติงานของผู้ควบคุมงานประจำงวด (.pdf) *"
+                                existing={genericProps.docsForStep}
+                                onChange={genericProps.onDocsChange}
+                                filePolicyId="pdf_only"
+                                compact
+                              />
+                              <p className="text-xs text-muted-foreground">{STEP10_DAILY_REPORT_HINT}</p>
+                            </div>
+                          )}
+                          <InlineDocUpload
+                            project={genericProps.project}
+                            stepNumber={10}
+                            documentType={STEP10_INSTALLMENT_DOC.sitePhotoEvidence(n)}
+                            label="ภาพถ่ายหลักฐานการตรวจรับพัสดุหน้างานจริง (ไม่บังคับ)"
                             existing={genericProps.docsForStep}
                             onChange={genericProps.onDocsChange}
                             filePolicyId="screenshot_evidence"
@@ -5751,8 +5885,8 @@ export function Step10DetailForm({
                           <InlineDocUpload
                             project={genericProps.project}
                             stepNumber={10}
-                            documentType={STEP10_INSTALLMENT_DOC.bg11(n)}
-                            label="3. ใบแจ้งส่งมอบงาน/ใบตรวจรับ บก.11 (.pdf)"
+                            documentType={STEP10_INSTALLMENT_DOC.invoice(n)}
+                            label="ใบแจ้งหนี้ / ใบกำกับภาษี (ไม่บังคับ)"
                             existing={genericProps.docsForStep}
                             onChange={genericProps.onDocsChange}
                             filePolicyId="pdf_only"
@@ -5763,64 +5897,6 @@ export function Step10DetailForm({
                     </div>
                   </div>
                 </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
-        <div>
-          <p className="text-sm font-medium text-foreground">คลังเอกสารแนบสำหรับ สตง.</p>
-          <p className="text-xs text-muted-foreground mt-1">
-            ระบบจัดหมวดหมู่ไฟล์หลักฐานรายงวดอัตโนมัติจากตารางด้านบน — กดดาวน์โหลดเพื่อตรวจสอบ
-          </p>
-        </div>
-        {totalInstallmentCount <= 0 ? (
-          <p className="text-sm text-muted-foreground">ยังไม่มีงวดงาน — รอข้อมูลจากขั้นตอนที่ 9</p>
-        ) : (
-          <div className="space-y-2">
-            {Array.from({ length: totalInstallmentCount }, (_, i) => i + 1).map((n) => {
-              const files = installmentDocMap.get(n) ?? [];
-              return (
-                <details
-                  key={n}
-                  className="rounded-md border border-border bg-background px-3 py-2"
-                  open={files.length > 0}
-                >
-                  <summary className="cursor-pointer text-sm font-medium select-none">
-                    📂 งวดที่ {n}
-                    <span className="ml-2 text-xs font-normal text-muted-foreground">
-                      ({files.length}/3 ไฟล์)
-                    </span>
-                  </summary>
-                  {files.length === 0 ? (
-                    <p className="text-xs text-muted-foreground mt-2 pl-1">
-                      ยังไม่มีไฟล์ — อัปโหลดในตารางด้านบน
-                    </p>
-                  ) : (
-                    <ul className="mt-2 space-y-1.5 pl-1">
-                      {files.map((f) => (
-                        <li
-                          key={f.id}
-                          className="flex items-center justify-between gap-2 text-xs text-foreground"
-                        >
-                          <span className="truncate">
-                            📄 {f.document_type} — {f.file_name}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => void downloadStepDocument(f)}
-                            className="shrink-0 inline-flex items-center gap-1 rounded border border-input px-2 py-0.5 hover:bg-accent"
-                          >
-                            <Download className="h-3 w-3" />
-                            ดาวน์โหลด
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </details>
               );
             })}
           </div>
@@ -5839,8 +5915,7 @@ export function Step10DetailForm({
               </p>
             )}
             <p className="text-xs text-muted-foreground mt-1">
-              ระบบคำนวณจากวันที่คณะกรรมการตรวจรับเสร็จสิ้นของงวดสุดท้าย + 2 ปีปฏิทิน
-              — การคืนหลักประกันสัญญาไม่บล็อกการปิดโครงการหลัก
+              ระบบคำนวณจากวันที่คณะกรรมการตรวจรับจริงของงวดสุดท้าย + 2 ปีปฏิทิน
             </p>
           </div>
           <div className="grid gap-3 sm:grid-cols-2 max-w-2xl">
@@ -5891,7 +5966,7 @@ export function Step10DetailForm({
       )}
 
       {!isWarrantyPhase && !previewWarrantyEnd && (
-        <div className="rounded-lg border border-dashed border-border bg-muted/10 p-4 space-y-2">
+        <div className="rounded-lg border border-dashed border-border bg-muted/10 p-4">
           <p className="text-sm font-medium text-muted-foreground">
             หลังปิดโครงการ — ระบบจะเปิดส่วนค้ำประกัน 2 ปี และช่องอัปโหลดคืนหลักประกันสัญญา
           </p>
@@ -5919,7 +5994,6 @@ export function Step10DetailForm({
     </div>
   );
 }
-
 /** ขั้นตอนที่ 10 — Checklist ด้านบน ฟอร์มด้านล่าง */
 export function GenericStepDetailForm({
   stepNumber,

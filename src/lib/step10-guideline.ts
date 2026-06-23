@@ -8,22 +8,18 @@ import {
 } from "@/lib/step-form";
 import { formatThaiDateSlash } from "@/lib/utils";
 
-export const STEP10_GUIDELINE_TODO = [
-  "บันทึกรายงานประจำวันของผู้ควบคุมงาน (ช่างคุมงานต้องอัปเดต % ความคืบหน้าจริงหน้างานทุกวัน)",
-  "เมื่อผู้รับจ้างส่งงวดงาน คณะกรรมการต้องลงพื้นที่ตรวจรับและทำรายงานผลภายในกำหนดวันทำการ",
-  "ตรวจสอบสถานะการงด/ลดค่าปรับ หรือการขยายเวลาสัญญา (ถ้ามี)",
-  "เมื่อส่งมอบงานงวดสุดท้ายและหมดระยะเวลาประกันความชำรุดบกพร่อง (ปกติ 2 ปี) ให้ทำเรื่องคืนหลักประกันสัญญา",
-] as const;
+export const STEP10_GUIDELINE_ACTION_TEXT =
+  "ติดตามและบันทึกการส่งมอบงานของคู่สัญญาในแต่ละงวดงานให้ตรงตามกำหนดเวลา พร้อมตรวจสอบรายงานผลการตรวจรับพัสดุของคณะกรรมการให้ถูกต้องครบถ้วนก่อนส่งเบิกจ่าย";
 
-export const STEP10_GUIDELINE_DURATION_REG176 = [
-  'ผู้ควบคุมงาน: บันทึกรายงานผลหน้างาน เสนอประธานกรรมการ "ทุกวันทำการ"',
-  "คณะกรรมการตรวจรับ: ต้องทำการตรวจรับให้เสร็จสิ้นโดยเร็ว (ตามเกณฑ์ปกติภายใน 3-5 วันทำการ นับถัดจากวันที่ผู้รับจ้างส่งมอบงาน)",
-] as const;
+export const STEP10_GUIDELINE_WARNING_AUDIT =
+  "หากคู่สัญญาส่งมอบงานเกินกว่ากำหนดเวลาประจำงวด บังคับคิดค่าปรับรายวันตามกฎหมายทันทีโดยคำนวณเป็นวันปฏิทิน (รวมวันหยุด) ห้ามละเว้นเด็ดขาด ทั้งนี้สำหรับงานก่อสร้างต้องคิดค่าปรับจากวงเงินรวมทั้งสัญญา และต้องตรวจสอบให้คณะกรรมการตรวจรับพัสดุเซ็นชื่อครบถ้วน พร้อมแนบภาพถ่ายหน้างานจริงทุกงวดงาน สำหรับงานก่อสร้าง คณะกรรมการตรวจรับพัสดุต้องถือรายงานของผู้ควบคุมงานก่อสร้างประกอบการพิจารณาตรวจรับทุกงวดงาน (ตามระเบียบฯ ข้อ 176)";
 
-export const STEP10_GUIDELINE_WARNING =
-  'หากผู้รับจ้างส่งงานเกินกำหนดสัญญา ระบบจะคิดค่าปรับรายวันทันทีในอัตรา "ร้อยละ 0.10 ต่อวัน" ของมูลค่าสัญญา — การนับวันปรับให้นับรวมวันหยุดเสาร์-อาทิตย์และวันหยุดนักขัตฤกษ์ด้วย (นับวันปฏิทิน ห้ามหักวันหยุดออกเด็ดขาด)';
+export const STEP10_SCHEDULE_INCOMPLETE_MSG =
+  "กรุณาบันทึกวันเริ่มต้นและวันสิ้นสุดสัญญาในขั้นตอนที่ 9 ก่อน — ระบบจะแสดงกรอบเวลารวมของโครงการให้อัตโนมัติ";
 
-export const STEP10_PENALTY_RATE_PERCENT = 0.1;
+export const STEP10_PENALTY_RATE_GENERAL_DEFAULT = 0.1;
+export const STEP10_PENALTY_RATE_CONSTRUCTION_DEFAULT = 0.01;
+export const STEP10_CONSTRUCTION_MIN_PENALTY_PER_DAY_BAHT = 100;
 
 type StepLike = {
   step_number?: number;
@@ -50,72 +46,7 @@ export function todayLocalISO(): string {
   return toLocalISO(new Date(d.getFullYear(), d.getMonth(), d.getDate()));
 }
 
-/** นับวันเสาร์-อาทิตย์ในช่วงวันที่ (รวมปลายทั้งสองด้าน) */
-export function countWeekendDaysInclusive(start: Date, end: Date): number {
-  const from = start <= end ? new Date(start) : new Date(end);
-  const to = start <= end ? new Date(end) : new Date(start);
-  let count = 0;
-  const cursor = new Date(from);
-  while (cursor <= to) {
-    const day = cursor.getDay();
-    if (day === 0 || day === 6) count++;
-    cursor.setDate(cursor.getDate() + 1);
-  }
-  return count;
-}
-
-export type Step10ContractStatus = {
-  endISO: string;
-  isOverdue: boolean;
-  daysRemaining: number | null;
-  daysOverdue: number | null;
-  weekendDaysInOverdue: number | null;
-  statusText: string;
-};
-
-/** สถานะสัญญา — นับถอยหลัง/เกินกำหนดเป็นวันปฏิทิน */
-export function computeStep10ContractStatus(
-  contractEndISO: string,
-  asOfISO: string = todayLocalISO(),
-): Step10ContractStatus | null {
-  const end = parseLocalISODate(contractEndISO);
-  const asOf = parseLocalISODate(asOfISO);
-  if (!end || !asOf) return null;
-
-  const diffDays = Math.floor((asOf.getTime() - end.getTime()) / 86_400_000);
-
-  if (diffDays <= 0) {
-    const remaining = -diffDays;
-    const statusText =
-      diffDays === 0
-        ? `ครบกำหนดวันนี้ (${formatThaiDateSlash(contractEndISO)}) — ต้องส่งมอบงานภายในวันนี้`
-        : `อยู่ระหว่างดำเนินการ — เหลือ ${remaining} วันปฏิทิน ก่อนวันสิ้นสุดสัญญา`;
-
-    return {
-      endISO: contractEndISO,
-      isOverdue: false,
-      daysRemaining: remaining,
-      daysOverdue: null,
-      weekendDaysInOverdue: null,
-      statusText,
-    };
-  }
-
-  const overdueStart = new Date(end);
-  overdueStart.setDate(overdueStart.getDate() + 1);
-  const weekendDays = countWeekendDaysInclusive(overdueStart, asOf);
-
-  return {
-    endISO: contractEndISO,
-    isOverdue: true,
-    daysRemaining: null,
-    daysOverdue: diffDays,
-    weekendDaysInOverdue: weekendDays,
-    statusText: `เกินกำหนดสัญญา ${diffDays} วันปฏิทิน (รวมวันเสาร์-อาทิตย์ ${weekendDays} วัน — นับเป็นวันปฏิทินสำหรับค่าปรับ)`,
-  };
-}
-
-/** วันสิ้นสุดสัญญาตัวจริง — จาก Step 9 (work_start + duration) หรือ due_date ขั้น 9 */
+/** วันสิ้นสุดสัญญาตัวจริง — จาก Step 9 */
 export function resolveProjectContractEndDate(
   steps: StepLike[],
   opts: {
@@ -143,4 +74,56 @@ export function resolveProjectContractEndDate(
   if (computed) return computed;
 
   return loadStepDraftFields(step9).dueDate?.trim() ?? "";
+}
+
+/** วันเริ่มต้นสัญญาจาก Step 9 */
+export function resolveProjectContractStartDate(steps: StepLike[]): string {
+  const step9 = steps.find((s) => s.step_number === 9);
+  if (!step9) return "";
+  const schedule = loadStep9FormFromNote(step9.note).contractSchedule;
+  return schedule?.work_start_date?.trim() ?? "";
+}
+
+export type Step10ContractStatus = {
+  endISO: string;
+  isOverdue: boolean;
+  daysRemaining: number | null;
+  daysOverdue: number | null;
+  statusText: string;
+};
+
+/** สถานะสัญญา — นับถอยหลัง/เกินกำหนดเป็นวันปฏิทิน */
+export function computeStep10ContractStatus(
+  contractEndISO: string,
+  asOfISO: string = todayLocalISO(),
+): Step10ContractStatus | null {
+  const end = parseLocalISODate(contractEndISO);
+  const asOf = parseLocalISODate(asOfISO);
+  if (!end || !asOf) return null;
+
+  const diffDays = Math.floor((asOf.getTime() - end.getTime()) / 86_400_000);
+
+  if (diffDays <= 0) {
+    const remaining = -diffDays;
+    const statusText =
+      diffDays === 0
+        ? `ครบกำหนดวันนี้ (${formatThaiDateSlash(contractEndISO)}) — ต้องส่งมอบงานภายในวันนี้`
+        : `อยู่ระหว่างดำเนินการ — เหลือ ${remaining} วันปฏิทิน ก่อนวันสิ้นสุดสัญญา`;
+
+    return {
+      endISO: contractEndISO,
+      isOverdue: false,
+      daysRemaining: remaining,
+      daysOverdue: null,
+      statusText,
+    };
+  }
+
+  return {
+    endISO: contractEndISO,
+    isOverdue: true,
+    daysRemaining: null,
+    daysOverdue: diffDays,
+    statusText: `เกินกำหนดสัญญา ${diffDays} วันปฏิทิน (นับรวมวันหยุดเสาร์-อาทิตย์และวันหยุดนักขัตฤกษ์)`,
+  };
 }
