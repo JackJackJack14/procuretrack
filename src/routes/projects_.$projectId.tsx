@@ -2,9 +2,8 @@ import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useState, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeft, Check, Upload, Eye, Trash2, FileText, Loader2, AlertTriangle,
+  ArrowLeft, Check, Upload, Eye, Trash2, FileText, Loader2,
   FolderOpen, Download, FileImage, FileSpreadsheet, File as FileLucide, RefreshCw,
-  ChevronRight,
 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
@@ -160,6 +159,7 @@ import {
   hasStep4EvaluationInspectionOrderDoc,
   hasSiteSupervisorOrderDoc,
   hasStep2MarketQuotesDoc,
+  hasStep2ReferencePriceDoc,
   isAppealBlocking,
   isAppealWorkflowLocked,
   isStep4ReadyForNext,
@@ -188,7 +188,8 @@ import {
   EMPTY_STEP9_CONTRACT_SCHEDULE,
   loadStep9FormFromNote,
   mergeStep9ScheduleFromSources,
-  computeStep9ContractEndDateISO,
+  resolveStep9ContractEndDateISO,
+  countStep9FormRequiredProgress,
   getStep9ComplianceIssues,
   buildProjectStep9ExternalCaptureFields,
   type Step9ExternalCaptureInput,
@@ -282,18 +283,18 @@ import {
 import {
   getRollbackConfirmMessage,
   getPreviousStepReopenPatch,
+  getProcurementStepColumnAvailability,
   getStepRollbackProcurementStepWipe,
   getStepRollbackProjectWipe,
+  updateProcurementStepWithSchemaFallback,
 } from "@/lib/step-rollback";
 import {
   canCompleteWorkflowStep,
-  canNavigateToStep,
-  canClickStepperTab,
   canRollbackWorkflowStep,
   canSaveHistoricalEdit,
   getStepWorkflowMode,
-  isStepForwardLocked,
   isWorkflowReadOnly,
+  STRICT_SEQUENTIAL_NAVIGATION_MSG,
   WORKFLOW_TOTAL_STEPS,
 } from "@/lib/step-workflow";
 import {
@@ -307,15 +308,46 @@ import {
   getBackendStepsSkippedOnAdvance,
   getPrevBackendStep,
   canNavigateToUiStep,
+  workflowProgressPercent,
 } from "@/lib/dynamic-stepper";
+import {
+  createProjectBasicsEditSessionState,
+  resolveWorkflowProcurementMethod,
+  shouldPreserveBasicsEditUnlock,
+} from "@/lib/project-workflow-core";
 import {
   EMPTY_STEP1_SPECIFIC_WORKFLOW,
   pruneTimelineForSpecificMethod,
   STEP1_SPECIFIC_STEP_HEADER_HINT,
   type Step1SpecificWorkflowFields,
 } from "@/lib/step1-specific-workflow";
+import { STEP2_SPECIFIC_STEP_HEADER_HINT } from "@/lib/step2-guideline";
+import {
+  EMPTY_STEP2_SPECIFIC_QUOTATION,
+  countStep2SpecificQuotationProgress,
+  hasStep2SpecificQuotationDoc,
+  type Step2SpecificQuotation,
+} from "@/lib/step2-specific-quotation";
 import { WorkflowStepper } from "@/components/WorkflowStepper";
 import { ProcurementMethodBadge } from "@/components/ProcurementMethodBadge";
+import { ProjectManagementActions } from "@/components/ProjectManagementActions";
+import { RollbackToEditProjectButton } from "@/components/RollbackToEditProjectButton";
+import {
+  getDownstreamResetBackendSteps,
+  hasCriticalProjectFieldChanges,
+  logProjectWorkflowAudit,
+  resetDownstreamWorkflowSteps,
+  resolvePerformerProfile,
+  rollbackProjectToBasicsEdit,
+  shouldShowRollbackToEditProjectButton,
+} from "@/lib/project-basics-edit";
+import {
+  buildProjectEgpIdSyncFields,
+  resolveEgpProjectId,
+  resolveEgpProjectIdForStep,
+  resolveStandardModelCode,
+} from "@/lib/project-refs";
+import { isEgpConstructionProjectType } from "@/lib/egp-project-type";
 
 export const Route = createFileRoute("/projects_/$projectId")({
   head: () => ({ meta: [{ title: "รายละเอียดโครงการ — ProcureTrack" }] }),
@@ -337,6 +369,9 @@ type Project = {
   created_at: string;
   district_office: string | null;
   design_code: string | null;
+  internal_project_code: string | null;
+  egp_project_id: string | null;
+  standard_model_code: string | null;
   approving_agency: string | null;
   procurement_agency: string | null;
   result_unit: string | null;
@@ -425,6 +460,7 @@ function ProjectDetailPage() {
   const [step1ProjectName, setStep1ProjectName] = useState("");
   const [step1Budget, setStep1Budget] = useState("");
   const [step1Method, setStep1Method] = useState("e_bidding");
+  const [step1MethodDirty, setStep1MethodDirty] = useState(false);
   const [step1Checklist, setStep1Checklist] = useState({ ...EMPTY_STEP1_CHECKLIST });
   const [step1Profile, setStep1Profile] = useState<Step1ProjectProfile>({
     ...EMPTY_STEP1_PROJECT_PROFILE,
@@ -448,6 +484,10 @@ function ProjectDetailPage() {
     ...EMPTY_STEP2_COMMITTEES,
   });
   const [step2ComplianceLog, setStep2ComplianceLog] = useState<Step2ComplianceLog>({});
+  const [step2SpecificQuotation, setStep2SpecificQuotation] =
+    useState<Step2SpecificQuotation>(EMPTY_STEP2_SPECIFIC_QUOTATION);
+  const patchStep2SpecificQuotation = (patch: Partial<Step2SpecificQuotation>) =>
+    setStep2SpecificQuotation((prev) => ({ ...prev, ...patch }));
   // ขั้นตอนที่ 3
   const [step3Checklist, setStep3Checklist] = useState({ ...EMPTY_STEP3_CHECKLIST });
   const [step3Announcement, setStep3Announcement] = useState<Step3Announcement>({
@@ -456,7 +496,9 @@ function ProjectDetailPage() {
   const [step3ComplianceLog, setStep3ComplianceLog] = useState<Step3ComplianceLog>({});
   const [step3Skipping, setStep3Skipping] = useState(false);
   const [historicalEditUnlocked, setHistoricalEditUnlocked] = useState(false);
+  const [basicsEditSessionActive, setBasicsEditSessionActive] = useState(false);
   const [rollingBack, setRollingBack] = useState(false);
+  const [rollingBackToEdit, setRollingBackToEdit] = useState(false);
   const [step4BidResult, setStep4BidResult] = useState<Step4BidResult>({
     ...EMPTY_STEP4_BID_RESULT,
   });
@@ -526,16 +568,16 @@ function ProjectDetailPage() {
   const committees = data?.committees ?? [];
 
   const workflowStep = project?.current_step ?? 1;
-  const procurementMethod = normalizeProcurementMethod(
-    project
-      ? activeStep === 1
-        ? step1Method || project.method
-        : project.method ?? step1Method
-      : step1Method,
-  );
+  const procurementMethod = resolveWorkflowProcurementMethod({
+    projectMethod: project?.method,
+    formMethod: step1Method,
+    formMethodDirty: step1MethodDirty,
+    activeUiStep: activeStep,
+  });
   const isSpecificShortWorkflow = isSpecificMethodShortWorkflow(procurementMethod);
   const workflowDisplayTotal = getWorkflowDisplayStepCount(procurementMethod);
   const workflowUiStep = backendStepToUiStep(workflowStep, procurementMethod);
+  const workflowProgressPct = workflowProgressPercent(workflowStep, procurementMethod);
   const viewedBackendStep = isSpecificShortWorkflow
     ? uiStepToBackendStep(activeStep, procurementMethod)
     : activeStep;
@@ -553,12 +595,29 @@ function ProjectDetailPage() {
   );
   const workflowReadOnly = isWorkflowReadOnly(workflowMode);
 
+  const resolvedEgpProjectId = useMemo(
+    () => resolveEgpProjectId(project),
+    [project?.egp_project_id, project?.project_code],
+  );
+  const resolvedStandardModelCode = useMemo(
+    () => resolveStandardModelCode(project),
+    [project?.standard_model_code, project?.design_code],
+  );
+  const isConstructionProject = isEgpConstructionProjectType(
+    step1Profile.project_type || project?.project_type,
+  );
+  const egpProjectIdForWorkflow = useMemo(
+    () => resolveEgpProjectIdForStep(activeStep, egpCode, project),
+    [activeStep, egpCode, project?.egp_project_id, project?.project_code],
+  );
+
   /** ล้าง state ฟอร์ม/workflow เมื่อสลับโครงการ — ป้องกัน Timeline และ Guideline ค้างจากโครงการเดิม */
   useEffect(() => {
     setActiveStep(1);
     setTab("detail");
     setError(null);
     setHistoricalEditUnlocked(false);
+    setBasicsEditSessionActive(false);
     setStep3Skipping(false);
     setRollingBack(false);
     setResponsibleName("");
@@ -567,7 +626,7 @@ function ProjectDetailPage() {
     setEgpCode("");
     setStep1ProjectName("");
     setStep1Budget("");
-    setStep1Method("e_bidding");
+    setStep1MethodDirty(false);
     setStep1Checklist({ ...EMPTY_STEP1_CHECKLIST });
     setStep1Profile({ ...EMPTY_STEP1_PROJECT_PROFILE });
     setStep1SpecificWorkflow({ ...EMPTY_STEP1_SPECIFIC_WORKFLOW });
@@ -576,6 +635,7 @@ function ProjectDetailPage() {
     setStep2MedianPrice({ ...EMPTY_STEP2_MEDIAN_PRICE });
     setStep2Committees({ ...EMPTY_STEP2_COMMITTEES });
     setStep2ComplianceLog({});
+    setStep2SpecificQuotation({ ...EMPTY_STEP2_SPECIFIC_QUOTATION });
     setStep3Checklist({ ...EMPTY_STEP3_CHECKLIST });
     setStep3Announcement({ ...EMPTY_STEP3_ANNOUNCEMENT });
     setStep3ComplianceLog({});
@@ -593,22 +653,17 @@ function ProjectDetailPage() {
   }, [projectId]);
 
   useEffect(() => {
+    if (!project) return;
+    setEgpCode(resolveEgpProjectId(project));
+  }, [project?.id, project?.egp_project_id, project?.project_code]);
+
+  useEffect(() => {
+    if (shouldPreserveBasicsEditUnlock(basicsEditSessionActive, activeStep)) return;
     setHistoricalEditUnlocked(false);
-  }, [activeStep]);
+  }, [activeStep, basicsEditSessionActive]);
 
   const handleStepNavigation = (stepNumber: number) => {
     if (!project) return;
-    const targetUi = isSpecificShortWorkflow ? stepNumber : stepNumber;
-    console.log(
-      "🔄 [STEPPER NAVIGATION FIXED] Project Current Step:",
-      project.current_step,
-      "Target Click Step:",
-      stepNumber,
-      "Is Allowed:",
-      isSpecificShortWorkflow
-        ? stepNumber <= workflowUiStep
-        : stepNumber <= project.current_step,
-    );
     if (
       !isSpecificShortWorkflow &&
       isAppealWorkflowLocked(step6Appeal) &&
@@ -619,14 +674,8 @@ function ProjectDetailPage() {
       );
       return;
     }
-    if (
-      isSpecificShortWorkflow
-        ? !canNavigateToUiStep(targetUi, workflowStep, procurementMethod, effectiveProcurementPath)
-        : !canNavigateToStep(stepNumber, workflowStep, effectiveProcurementPath)
-    ) {
-      toast.message(
-        "ไม่สามารถข้ามไปขั้นตอนถัดไปได้ — กรุณาดำเนินการตามลำดับและกด «บันทึกและไปขั้นตอนถัดไป»",
-      );
+    if (!canNavigateToUiStep(stepNumber, workflowStep, procurementMethod)) {
+      toast.message(STRICT_SEQUENTIAL_NAVIGATION_MSG);
       return;
     }
     setActiveStep(stepNumber);
@@ -634,18 +683,7 @@ function ProjectDetailPage() {
 
   const handlePrevStep = () => {
     if (activeStep <= 1) return;
-    const prev = activeStep - 1;
-    if (activeStep === 6 && prev === 5) {
-      console.log("⬅️ [NAV DEBUG] Prev Button Clicked! Navigating back from step 6 to 5");
-    }
-    setActiveStep(prev);
-  };
-
-  const handleNextStep = () => {
-    if (!project) return;
-    const maxUi = isSpecificShortWorkflow ? workflowUiStep : workflowStep;
-    if (activeStep >= maxUi || activeStep >= workflowDisplayTotal) return;
-    setActiveStep(activeStep + 1);
+    setActiveStep(activeStep - 1);
   };
 
   useEffect(() => {
@@ -696,6 +734,8 @@ function ProjectDetailPage() {
     setRollingBack(true);
     setError(null);
     try {
+      const columnAvailability = await getProcurementStepColumnAvailability(supabase);
+
       const stepDocs = docs.filter((d) => d.step_number === stepNum);
       if (stepDocs.length > 0) {
         const paths = stepDocs.map((d) => d.storage_path);
@@ -726,31 +766,20 @@ function ProjectDetailPage() {
         if (committeeErr) console.warn("[Rollback] committees delete failed", committeeErr);
       }
 
-      const wipePayload = getStepRollbackProcurementStepWipe(stepNum);
-      let { error: wipeErr } = await supabase
-        .from("procurement_steps")
-        .update(wipePayload)
-        .eq("id", current.id);
-      if (wipeErr) {
-        const msg = wipeErr.message;
-        const fallback = { ...wipePayload };
-        if (msg.includes("step3_checklist")) delete (fallback as { step3_checklist?: unknown }).step3_checklist;
-        if (msg.includes("step2_checklist")) delete (fallback as { step2_checklist?: unknown }).step2_checklist;
-        if (msg.includes("step1_checklist")) delete (fallback as { step1_checklist?: unknown }).step1_checklist;
-        if (msg.includes("responsible_officer_name") || msg.includes("step_notes")) {
-          delete (fallback as { responsible_officer_name?: unknown }).responsible_officer_name;
-          delete (fallback as { step_notes?: unknown }).step_notes;
-        }
-        const retry = await supabase.from("procurement_steps").update(fallback).eq("id", current.id);
-        wipeErr = retry.error;
-      }
-      if (wipeErr) throw new Error(wipeErr.message);
+      const wipePayload = getStepRollbackProcurementStepWipe(stepNum, columnAvailability);
+      const wipeResult = await updateProcurementStepWithSchemaFallback(
+        supabase,
+        current.id,
+        wipePayload,
+      );
+      if (wipeResult.error) throw new Error(wipeResult.error);
 
-      const { error: reopenErr } = await supabase
-        .from("procurement_steps")
-        .update(getPreviousStepReopenPatch())
-        .eq("id", prevStepRecord.id);
-      if (reopenErr) throw new Error(reopenErr.message);
+      const reopenResult = await updateProcurementStepWithSchemaFallback(
+        supabase,
+        prevStepRecord.id,
+        getPreviousStepReopenPatch(),
+      );
+      if (reopenResult.error) throw new Error(reopenResult.error);
 
       const projectUpdates: Record<string, unknown> = {
         current_step: prevStep,
@@ -791,6 +820,52 @@ function ProjectDetailPage() {
     }
   };
 
+  const handleRollbackToEditProject = async () => {
+    if (!project) return;
+    setRollingBackToEdit(true);
+    setError(null);
+    try {
+      const { data: auth } = await supabase.auth.getUser();
+      const userId = auth.user?.id;
+      if (!userId) throw new Error("ไม่พบผู้ใช้");
+
+      const performer = await resolvePerformerProfile(supabase, userId);
+      const result = await rollbackProjectToBasicsEdit({
+        supabase,
+        projectId: project.id,
+        organizationId: project.organization_id,
+        method: project.method,
+        currentBackendStep: project.current_step,
+        steps: steps.map((s) => ({ id: s.id, step_number: s.step_number })),
+        docs: docs.map((d) => ({
+          step_number: d.step_number,
+          storage_path: d.storage_path,
+          file_size: d.file_size,
+        })),
+        performer,
+      });
+      if (result.error) throw new Error(result.error);
+
+      const session = createProjectBasicsEditSessionState();
+      setBasicsEditSessionActive(true);
+      setHistoricalEditUnlocked(session.historicalEditUnlocked);
+      setTab(session.tab);
+      setActiveStep(session.activeUiStep);
+      setStep1MethodDirty(false);
+      setGenericManualChecklist({});
+      await invalidateAll();
+      toast.success(
+        "ถอยกลับไปขั้นตอนที่ 1 แล้ว — ขั้นตอนที่ 2-5 ถูกรีเซ็ต กรุณาแก้ไขข้อมูลสาระสำคัญแล้วบันทึก",
+      );
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "ถอยกลับเพื่อแก้ไขไม่สำเร็จ";
+      setError(message);
+      toast.error(message);
+    } finally {
+      setRollingBackToEdit(false);
+    }
+  };
+
   // Sync activeStep กับ current_step ของโครงการที่โหลดอยู่เสมอ (รวมเมื่อสลับโครงการ)
   useEffect(() => {
     if (!project || project.id !== projectId) return;
@@ -801,6 +876,7 @@ function ProjectDetailPage() {
   useEffect(() => {
     if (!project || project.id !== projectId) return;
     setStep1Method(normalizeProcurementMethod(project.method ?? "e_bidding"));
+    setStep1MethodDirty(false);
   }, [projectId, project?.id, project?.method]);
 
   const current = useMemo(
@@ -1001,7 +1077,8 @@ function ProjectDetailPage() {
     const bid = step4BidResult;
     return {
       name: project.name,
-      project_code: project.project_code,
+      project_code: resolveEgpProjectId(project),
+      standard_model_code: resolveStandardModelCode(project) || null,
       budget: Number(project.budget ?? 0),
       fiscal_year: project.fiscal_year,
       procurement_path: project.procurement_path,
@@ -1077,7 +1154,7 @@ function ProjectDetailPage() {
     if (!current || !project) return;
     if (current.step_number === 1) {
       setStep1ProjectName(project.name ?? "");
-      setEgpCode(project.project_code ?? "");
+      setEgpCode(resolveEgpProjectId(project));
       setStep1Budget(formatBudgetInput(String(project.budget ?? 0)));
       const m = normalizeProcurementMethod(project.method ?? "e_bidding");
       setStep1Method(m);
@@ -1114,6 +1191,9 @@ function ProjectDetailPage() {
         ),
       );
       setStep2ComplianceLog(step2Form.complianceLog ?? {});
+      setStep2SpecificQuotation(
+        step2Form.specificQuotation ?? { ...EMPTY_STEP2_SPECIFIC_QUOTATION },
+      );
       const draft2 = loadStepDraftFields(current);
       setNote(draft2.userNote);
       setDueDate("");
@@ -1313,14 +1393,12 @@ function ProjectDetailPage() {
 
   useEffect(() => {
     if (current?.step_number !== 9) return;
-    const endISO = computeStep9ContractEndDateISO(
-      step9ContractSchedule.work_start_date,
-      step9ContractSchedule.contract_duration_days,
-    );
+    const endISO = resolveStep9ContractEndDateISO(step9ContractSchedule);
     setDueDate(endISO ?? "");
   }, [
     current?.step_number,
     step9ContractSchedule.work_start_date,
+    step9ContractSchedule.contract_end_date,
     step9ContractSchedule.contract_duration_days,
   ]);
 
@@ -1566,22 +1644,54 @@ function ProjectDetailPage() {
 
     if (current.step_number === 1) {
       const budgetVal = parseCurrencyForDatabase(step1Budget) ?? 0;
+      const newMethod = normalizeProcurementMethod(step1Method);
+      const criticalChanged = hasCriticalProjectFieldChanges(
+        { budget: Number(project.budget), method: project.method },
+        { budget: budgetVal, method: newMethod },
+      );
+      if (criticalChanged && project.current_step > 1) {
+        const blockedMsg =
+          "กรุณาใช้ปุ่ม «ถอยกลับเพื่อแก้ไขโครงการ» ก่อนแก้ไขงบประมาณหรือวิธีจัดซื้อ";
+        setError(blockedMsg);
+        toast.error(blockedMsg);
+        return false;
+      }
       const formNote = serializeStepNote(note, {
         checklist: step1Checklist,
         specificMethodReason: step1SpecificWorkflow.reason,
         specificWorkflow: step1SpecificWorkflow,
       });
+      const trimmedEgpId = egpCode.trim() || resolvedEgpProjectId;
       const { error: pe } = await supabase
         .from("projects")
         .update({
           name: step1ProjectName.trim() || project.name,
-          project_code: egpCode.trim() || project.project_code,
+          ...buildProjectEgpIdSyncFields(trimmedEgpId),
           budget: budgetVal,
-          method: normalizeProcurementMethod(step1Method),
+          method: newMethod,
           ...buildProjectStep1ProfileFields(step1Profile),
         })
         .eq("id", project.id);
-      if (pe) {
+      if (pe && /egp_project_id|schema cache/i.test(pe.message)) {
+        const { error: fallbackErr } = await supabase
+          .from("projects")
+          .update({
+            name: step1ProjectName.trim() || project.name,
+            project_code: trimmedEgpId,
+            budget: budgetVal,
+            method: newMethod,
+            ...buildProjectStep1ProfileFields(step1Profile),
+          })
+          .eq("id", project.id);
+        if (fallbackErr) {
+          setError(fallbackErr.message);
+          toast.error(fallbackErr.message);
+          return false;
+        }
+        toast.warning(
+          "บันทึกแล้ว — รัน migration egp_project_id ใน Supabase เพื่อซิงก์คอลัมน์ใหม่",
+        );
+      } else if (pe) {
         setError(pe.message);
         toast.error(pe.message);
         return false;
@@ -1596,31 +1706,98 @@ function ProjectDetailPage() {
         toast.error(se.error.message);
         return false;
       }
+
+      if (criticalChanged) {
+        const backendStepsToReset = getDownstreamResetBackendSteps(
+          newMethod,
+          project.current_step,
+        );
+        const resetResult = await resetDownstreamWorkflowSteps({
+          supabase,
+          projectId: project.id,
+          organizationId: project.organization_id,
+          method: newMethod,
+          steps: steps.map((s) => ({ id: s.id, step_number: s.step_number })),
+          docs: docs.map((d) => ({
+            step_number: d.step_number,
+            storage_path: d.storage_path,
+            file_size: d.file_size,
+          })),
+          backendStepsToReset,
+        });
+        if (resetResult.error) {
+          setError(resetResult.error);
+          toast.error(resetResult.error);
+          return false;
+        }
+
+        const projectUpdate: Record<string, unknown> = {
+          ...resetResult.projectFieldWipe,
+        };
+        if (Object.keys(projectUpdate).length > 0) {
+          const { error: projResetErr } = await supabase
+            .from("projects")
+            .update(projectUpdate)
+            .eq("id", project.id);
+          if (projResetErr) {
+            setError(projResetErr.message);
+            toast.error(projResetErr.message);
+            return false;
+          }
+        }
+
+        const { data: auth } = await supabase.auth.getUser();
+        if (auth.user?.id) {
+          const performer = await resolvePerformerProfile(supabase, auth.user.id);
+          await logProjectWorkflowAudit(supabase, {
+            projectId: project.id,
+            organizationId: project.organization_id,
+            action: "critical_fields_saved_reset",
+            performedBy: performer.id,
+            performerName: performer.name,
+            details: {
+              budget_before: project.budget,
+              budget_after: budgetVal,
+              method_before: project.method,
+              method_after: newMethod,
+              reset_steps: backendStepsToReset,
+            },
+          });
+        }
+        toast.warning(
+          "บันทึกข้อมูลสาระสำคัญแล้ว — ระบบรีเซ็ตขั้นตอนที่ 2-5 ให้ตรวจสอบใหม่",
+        );
+      }
+
       if (!opts?.silent) draftSavedToast("ขั้นตอนที่ 1 ");
+      setBasicsEditSessionActive(false);
+      setStep1MethodDirty(false);
       await propagateResponsibleToStep1(effectiveResponsibleName);
       await invalidateAll();
       return true;
     }
 
     if (current.step_number === 2) {
-      const timelineBlock = getTimelineSaveBlockMessage(2, timelineValidationCtx, {
-        committeeOrder: step2CommitteeOrder,
-        medianPrice: step2MedianPrice,
-      });
-      if (timelineBlock) {
-        toast.error(timelineBlock);
-        setError(timelineBlock);
-        return false;
-      }
-      if (
-        isStep2MedianApprovalBeforeAppointment(
-          step2MedianPrice.median_price_approval_date ?? "",
-          step2CommitteeOrder.appointment_order_date ?? "",
-        )
-      ) {
-        toast.error(STEP2_MEDIAN_APPROVAL_BEFORE_APPOINTMENT_MSG);
-        setError(STEP2_MEDIAN_APPROVAL_BEFORE_APPOINTMENT_MSG);
-        return false;
+      if (!isSpecificShortWorkflow) {
+        const timelineBlock = getTimelineSaveBlockMessage(2, timelineValidationCtx, {
+          committeeOrder: step2CommitteeOrder,
+          medianPrice: step2MedianPrice,
+        });
+        if (timelineBlock) {
+          toast.error(timelineBlock);
+          setError(timelineBlock);
+          return false;
+        }
+        if (
+          isStep2MedianApprovalBeforeAppointment(
+            step2MedianPrice.median_price_approval_date ?? "",
+            step2CommitteeOrder.appointment_order_date ?? "",
+          )
+        ) {
+          toast.error(STEP2_MEDIAN_APPROVAL_BEFORE_APPOINTMENT_MSG);
+          setError(STEP2_MEDIAN_APPROVAL_BEFORE_APPOINTMENT_MSG);
+          return false;
+        }
       }
       const complianceLog = buildStep2ComplianceLog(
         step2CommitteeOrder,
@@ -1633,6 +1810,7 @@ function ProjectDetailPage() {
         medianPrice: step2MedianPrice,
         committees: step2Committees,
         complianceLog,
+        specificQuotation: step2SpecificQuotation,
       });
       const { error: e } = await patchStepDraft(
         current.id,
@@ -1646,7 +1824,15 @@ function ProjectDetailPage() {
 
       const { error: projErr } = await supabase
         .from("projects")
-        .update(buildProjectStep2Fields(step2CommitteeOrder, step2MedianPrice, step2Committees))
+        .update(
+          buildProjectStep2Fields(step2CommitteeOrder, step2MedianPrice, step2Committees, {
+            isConstructionProject: isConstructionProject,
+            referencePriceDocumentUrl: docs
+              .filter((d) => d.step_number === 2)
+              .find((d) => d.document_type === STEP2_DOC.REFERENCE_PRICE_SUMMARY)
+              ?.storage_path,
+          }),
+        )
         .eq("id", project.id);
       if (projErr) {
         console.warn("[Step2] project fields sync failed", projErr);
@@ -1929,10 +2115,7 @@ function ProjectDetailPage() {
         setError(timelineBlock);
         return false;
       }
-      const endISO = computeStep9ContractEndDateISO(
-        step9ContractSchedule.work_start_date,
-        step9ContractSchedule.contract_duration_days,
-      );
+      const endISO = resolveStep9ContractEndDateISO(step9ContractSchedule);
       const formNote = serializeStepNote(note, {
         checklist: genericManualChecklist,
         contractSchedule: step9ContractSchedule,
@@ -2238,9 +2421,14 @@ function ProjectDetailPage() {
           hasBg06Doc,
           hasIntegrityLetterDoc,
           hasMarketQuotesDoc,
+          hasReferencePriceDoc: hasStep2ReferencePriceDoc(step2Docs),
+          isConstructionProject: isConstructionProject,
           step1Budget: calcBudget,
           stepDocs: step2Docs,
           timelineCtx: timelineValidationCtx,
+          quotationOnly: isSpecificShortWorkflow,
+          specificQuotation: step2SpecificQuotation,
+          fiscalYear: project.fiscal_year,
         },
         step2AutoStates,
       );
@@ -2378,23 +2566,14 @@ function ProjectDetailPage() {
     }
     if (current.step_number === 9) {
       const step9Docs = docs.filter((d) => d.step_number === 9);
-      const complianceIssues = getStep9ComplianceIssues(
-        step9ContractSchedule,
-        genericManualChecklist,
-        {
-          responsibleName: effectiveResponsibleName,
-          stepDocs: step9Docs,
-          contractSignedDate,
-          procurementPath: effectiveProcurementPath,
-          externalCapture: step9ExternalCapture,
-          timelineCtx: timelineValidationCtx,
-        },
-        computeAutoChecklistState({
-          stepNumber: 9,
-          step9ContractSchedule,
-          uploadedDocTypes: step9Docs.map((d) => d.document_type),
-        }),
-      );
+      const complianceIssues = getStep9ComplianceIssues(step9ContractSchedule, {
+        responsibleName: effectiveResponsibleName,
+        stepDocs: step9Docs,
+        contractSignedDate,
+        procurementPath: effectiveProcurementPath,
+        externalCapture: step9ExternalCapture,
+        timelineCtx: timelineValidationCtx,
+      });
       if (complianceIssues.length > 0) {
         failStepCompliance(complianceIssues[0].message, complianceIssues[0].id);
         return;
@@ -2583,7 +2762,9 @@ function ProjectDetailPage() {
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div className="min-w-0 flex-1">
               <h1 className="text-2xl font-semibold">{project.name}</h1>
-              <p className="text-sm text-muted-foreground mt-1">{project.project_code}</p>
+              <p className="text-sm text-muted-foreground mt-1">
+                {resolvedEgpProjectId}
+              </p>
               {project.description && (
                 <p className="text-sm mt-3 max-w-2xl">{project.description}</p>
               )}
@@ -2598,7 +2779,18 @@ function ProjectDetailPage() {
                 <Info label="วิธีจัดซื้อ" value={METHOD_LABEL[project.method] ?? project.method} />
                 <Info label="ปีงบประมาณ" value={String(project.fiscal_year)} />
                 {project.district_office && <Info label="หน่วยงานส่วนภูมิภาค / เขตที่รับผิดชอบ" value={project.district_office} />}
-                {project.design_code && <Info label="รหัสแบบ/รหัสโครงการ" value={project.design_code} />}
+                {resolvedEgpProjectId && (
+                  <Info
+                    label="เลขที่โครงการ e-GP / รหัสโครงการภายใน"
+                    value={resolvedEgpProjectId}
+                  />
+                )}
+                {resolvedStandardModelCode && isConstructionProject && (
+                  <Info
+                    label="รหัสแบบมาตรฐาน (งานก่อสร้าง)"
+                    value={resolvedStandardModelCode}
+                  />
+                )}
                 {project.approving_agency && <Info label="หน่วยงานที่อนุมัติเบิกจ่าย" value={project.approving_agency} />}
                 {project.procurement_agency && <Info label="หน่วยงานที่ดำเนินการจัดซื้อจัดจ้าง" value={project.procurement_agency} />}
                 {project.result_unit && (
@@ -2607,6 +2799,27 @@ function ProjectDetailPage() {
               </div>
             </div>
             <div className="flex flex-col items-end gap-2">
+              <ProjectManagementActions
+                projectId={project.id}
+                projectName={project.name}
+                currentStep={project.current_step}
+                onEditProject={() => {
+                  const session = createProjectBasicsEditSessionState();
+                  setBasicsEditSessionActive(true);
+                  setTab(session.tab);
+                  setActiveStep(session.activeUiStep);
+                  setHistoricalEditUnlocked(session.historicalEditUnlocked);
+                  setStep1MethodDirty(false);
+                  toast.message(
+                    "โหมดแก้ไขข้อมูลโครงการ — ปรับข้อมูลพื้นฐานแล้วกด «บันทึก» เพื่ออัปเดตลงระบบ",
+                  );
+                }}
+                onRollbackToEdit={handleRollbackToEditProject}
+                rollbackLoading={rollingBackToEdit}
+                onDeleted={() => {
+                  void queryClient.invalidateQueries({ queryKey: ["projects"] });
+                }}
+              />
               <div className="flex items-center gap-2">
                 <span className="text-xs px-2.5 py-1 rounded-full bg-primary/10 text-primary font-medium">
                   {STATUS_LABEL[project.status] ?? project.status}
@@ -2643,18 +2856,29 @@ function ProjectDetailPage() {
           </h3>
           <p className="text-xs text-muted-foreground mb-4">
             {isExternalProcurementMode
-              ? "โหมดสัญญาจากส่วนกลาง/สพข. — คลิก Tab ใดก็ได้ (ข้ามขั้นตอนที่ 1–7 ไปเริ่มขั้นตอนที่ 9 ได้ทันที)"
+              ? "โหมดสัญญาจากส่วนกลาง/สพข. — ดำเนินการตามลำดับขั้นตอน ไปขั้นถัดไปผ่าน «บันทึกและไปขั้นตอนถัดไป» เท่านั้น"
               : isSpecificShortWorkflow
-                ? "โหมดวิธีเฉพาะเจาะจง — แสดง 5 ขั้นตอนหลัก (ข้ามขั้นตอน e-bidding / อุทธรณ์ / เปิดซอง)"
-                : "คลิกขั้นตอนที่เคยทำแล้วเพื่อย้อนกลับดู/แก้ไขได้ — ขั้นตอนในอนาคตล็อกจนกว่าจะกด «บันทึกและไปขั้นตอนถัดไป»"}
+                ? "โหมดวิธีเฉพาะเจาะจง — คลิกขั้นตอนที่ทำแล้วเพื่อย้อนกลับดูได้ ห้ามข้ามล่วงหน้า ไปขั้นถัดไปผ่าน «บันทึกและไปขั้นตอนถัดไป» เท่านั้น"
+                : "คลิกขั้นตอนที่ทำแล้วเพื่อย้อนกลับดูได้ — ห้ามข้ามล่วงหน้า ไปขั้นถัดไปผ่าน «บันทึกและไปขั้นตอนถัดไป» เท่านั้น"}
           </p>
+          <div className="flex items-center gap-3 mb-4">
+            <div className="flex-1 h-2 rounded-full bg-muted overflow-hidden">
+              <div
+                className="h-full rounded-full bg-primary transition-all duration-500"
+                style={{ width: `${workflowProgressPct}%` }}
+              />
+            </div>
+            <span className="text-xs font-medium text-muted-foreground shrink-0 w-10 text-right">
+              {workflowProgressPct}%
+            </span>
+          </div>
           <WorkflowStepper
             method={procurementMethod}
             currentBackendStep={workflowStep}
             activeUiStep={activeStep}
-            procurementPath={effectiveProcurementPath}
             step6Appeal={step6Appeal}
             onNavigate={handleStepNavigation}
+            onBlockedNavigate={(msg) => toast.message(msg)}
           />
         </div>
 
@@ -2663,6 +2887,7 @@ function ProjectDetailPage() {
           key={projectId}
           projectId={projectId}
           project={project}
+          method={procurementMethod}
           steps={steps}
           activeStep={activeStep}
           step3Note={step3Record?.note ?? null}
@@ -2761,7 +2986,7 @@ function ProjectDetailPage() {
           const autoCheckStates = computeAutoChecklistState({
             stepNumber: current.step_number,
             responsibleName: effectiveResponsibleName,
-            egpCode,
+            egpCode: egpProjectIdForWorkflow,
             budget: step1Budget,
             projectName: step1ProjectName,
             method: normalizeProcurementMethod(step1Method),
@@ -2844,10 +3069,14 @@ function ProjectDetailPage() {
                     (d) => d.document_type === STEP2_DOC.INTEGRITY_LETTER,
                   ),
                   hasMarketQuotesDoc: hasStep2MarketQuotesDoc(docsForStep),
+                  hasReferencePriceDoc: hasStep2ReferencePriceDoc(docsForStep),
+                  isConstructionProject: isConstructionProject,
                   step1Budget: calcBudget,
                   stepDocs: docsForStep,
                   timelineCtx: timelineValidationCtx,
                   quotationOnly: isSpecificShortWorkflow,
+                  specificQuotation: step2SpecificQuotation,
+                  fiscalYear: project.fiscal_year,
                 }
               : null;
           const step2ReadyForGate =
@@ -2869,8 +3098,12 @@ function ProjectDetailPage() {
             <StepWorkflowBanner
               mode={workflowMode}
               stepNumber={current.step_number}
-              currentWorkflowStep={workflowStep}
+              currentWorkflowStep={isSpecificShortWorkflow ? workflowUiStep : workflowStep}
               onUnlockEdit={() => setHistoricalEditUnlocked(true)}
+              disableUnlockEdit={
+                current.step_number === 1 && workflowStep > 1
+              }
+              unlockBlockedHint="การแก้ไขงบประมาณและวิธีจัดซื้อต้องถอยกลับไปขั้นตอนที่ 1 — กดปุ่ม «ถอยกลับเพื่อแก้ไขโครงการ»"
             />
             {!isStepCompletedView && current.step_number <= 9 && (
               <div className="flex justify-end">
@@ -2895,6 +3128,11 @@ function ProjectDetailPage() {
               }
               contractSignedDate={
                 current.step_number === 9 ? contractSignedDate : undefined
+              }
+              step9EgpPublicationDate={
+                current.step_number === 9
+                  ? step9ContractSchedule.egp_essential_publication_date
+                  : undefined
               }
               contractEndDate={
                 current.step_number === 10 ? contractEndDate : undefined
@@ -2995,7 +3233,9 @@ function ProjectDetailPage() {
                         ? "ระยะเวลา/ข้อควรระวัง: รับฟังความคิดเห็นร่างประกาศ/TOR ตามวงเงินงบประมาณ (ดูกล่องไกด์ไลน์ด้านบน)"
                         : isSpecificShortWorkflow && current.step_number === 1
                           ? STEP1_SPECIFIC_STEP_HEADER_HINT
-                          : `ระยะเวลา/ข้อควรระวัง: ${EGP_STEP_LEGAL_HINTS[current.step_number - 1]}`}
+                          : isSpecificShortWorkflow && current.step_number === 2
+                            ? STEP2_SPECIFIC_STEP_HEADER_HINT
+                            : `ระยะเวลา/ข้อควรระวัง: ${EGP_STEP_LEGAL_HINTS[current.step_number - 1]}`}
                     </p>
                     </div>
                     <div className="flex flex-col items-end gap-2">
@@ -3019,8 +3259,11 @@ function ProjectDetailPage() {
                       onEgpCodeChange={setEgpCode}
                       budget={step1Budget}
                       onBudgetChange={setStep1Budget}
-                      method={procurementMethod}
-                      onMethodChange={(v) => setStep1Method(normalizeProcurementMethod(v))}
+                      method={step1Method}
+                      onMethodChange={(v) => {
+                        setStep1MethodDirty(true);
+                        setStep1Method(normalizeProcurementMethod(v));
+                      }}
                       specificMethodReason={step1SpecificWorkflow.reason}
                       onSpecificMethodReasonChange={(v) =>
                         patchStep1SpecificWorkflow({ reason: v })
@@ -3042,6 +3285,11 @@ function ProjectDetailPage() {
                   {current.step_number === 2 && (
                     <Step2DetailForm
                       specificQuotationMode={isSpecificShortWorkflow}
+                      specificQuotation={step2SpecificQuotation}
+                      onSpecificQuotationChange={patchStep2SpecificQuotation}
+                      specificWorkflow={step1SpecificWorkflow}
+                      fiscalYear={project.fiscal_year}
+                      projectType={step1Profile.project_type || project.project_type || ""}
                       checklist={step2Checklist}
                       onChecklistChange={setStep2Check}
                       autoCheckStates={autoCheckStates}
@@ -3220,6 +3468,10 @@ function ProjectDetailPage() {
                       appealDeadlineISO={step7AppealDeadlineISO}
                       notificationDeadlineISO={step7NotificationDeadlineISO}
                       letterDateTooLate={step7LetterDateTooLate}
+                      egpProjectId={resolvedEgpProjectId}
+                      standardModelCode={
+                        isConstructionProject ? resolvedStandardModelCode : undefined
+                      }
                       readOnly={workflowReadOnly}
                       docBinder={{
                         project,
@@ -3253,6 +3505,10 @@ function ProjectDetailPage() {
                       step7SigningDeadlineISO={step7SigningDeadlineISO}
                       earliestSigningISO={step8EarliestSigningISO}
                       appealDeadlineISO={step8AppealDeadlineISO}
+                      egpProjectId={resolvedEgpProjectId}
+                      standardModelCode={
+                        isConstructionProject ? resolvedStandardModelCode : undefined
+                      }
                       readOnly={workflowReadOnly}
                       docBinder={{
                         project,
@@ -3290,6 +3546,16 @@ function ProjectDetailPage() {
                       onDocsChange={invalidateAll}
                       projectName={project.name}
                       contractSignedDate={contractSignedDate}
+                      winningBidderName={
+                        mergedStep4BidResult.winning_bidder_name ||
+                        project.winning_bidder_name ||
+                        ""
+                      }
+                      contractAmount={step10ContractAmount}
+                      egpProjectId={resolvedEgpProjectId}
+                      standardModelCode={
+                        isConstructionProject ? resolvedStandardModelCode : undefined
+                      }
                       procurementPath={effectiveProcurementPath}
                       projectProfile={step1Profile}
                       onProjectProfileChange={patchStep1Profile}
@@ -3337,7 +3603,8 @@ function ProjectDetailPage() {
                       executiveReportSource={
                         executiveReportSource ?? {
                           name: project.name,
-                          project_code: project.project_code,
+                          project_code: resolvedEgpProjectId,
+                          standard_model_code: resolvedStandardModelCode || null,
                           budget: Number(project.budget ?? 0),
                         }
                       }
@@ -3501,7 +3768,7 @@ function ProjectDetailPage() {
                     ? getStep1ComplianceIssues(
                         step1Checklist,
                         {
-                          egpCode,
+                          egpCode: egpProjectIdForWorkflow,
                           budget: step1Budget,
                           responsibleName: effectiveResponsibleName,
                           projectName: step1ProjectName,
@@ -3519,7 +3786,7 @@ function ProjectDetailPage() {
                   isStep1ReadyForNext(
                     step1Checklist,
                     {
-                      egpCode,
+                      egpCode: egpProjectIdForWorkflow,
                       budget: step1Budget,
                       responsibleName: effectiveResponsibleName,
                       projectName: step1ProjectName,
@@ -3696,34 +3963,24 @@ function ProjectDetailPage() {
                   );
                 const step9ComplianceIssues =
                   current.step_number === 9
-                    ? getStep9ComplianceIssues(
-                        step9ContractSchedule,
-                        genericManualChecklist,
-                        {
-                          responsibleName: effectiveResponsibleName,
-                          stepDocs: docsForStep,
-                          contractSignedDate,
-                          procurementPath: effectiveProcurementPath,
-                          externalCapture: step9ExternalCapture,
-                          timelineCtx: timelineValidationCtx,
-                        },
-                        autoCheckStates,
-                      )
+                    ? getStep9ComplianceIssues(step9ContractSchedule, {
+                        responsibleName: effectiveResponsibleName,
+                        stepDocs: docsForStep,
+                        contractSignedDate,
+                        procurementPath: effectiveProcurementPath,
+                        externalCapture: step9ExternalCapture,
+                        timelineCtx: timelineValidationCtx,
+                      })
                     : [];
                 const step9Ready =
                   current.step_number !== 9 ||
-                  isStep9ReadyForNext(
-                    step9ContractSchedule,
-                    genericManualChecklist,
-                    {
-                      responsibleName: effectiveResponsibleName,
-                      stepDocs: docsForStep,
-                      contractSignedDate,
-                      procurementPath: effectiveProcurementPath,
-                      externalCapture: step9ExternalCapture,
-                    },
-                    autoCheckStates,
-                  );
+                  isStep9ReadyForNext(step9ContractSchedule, {
+                    responsibleName: effectiveResponsibleName,
+                    stepDocs: docsForStep,
+                    contractSignedDate,
+                    procurementPath: effectiveProcurementPath,
+                    externalCapture: step9ExternalCapture,
+                  });
                 const step10ComplianceIssues =
                   current.step_number === 10
                     ? getStep10ComplianceIssues(
@@ -3755,6 +4012,13 @@ function ProjectDetailPage() {
                     autoCheckStates,
                   );
 
+                const step9FormProgress =
+                  current.step_number === 9
+                    ? countStep9FormRequiredProgress(step9ContractSchedule, {
+                        stepDocs: docsForStep,
+                        contractSignedDate,
+                      })
+                    : null;
                 const step10FormProgress =
                   current.step_number === 10
                     ? countStep10FormRequiredProgress(step10InspectionRows, {
@@ -3810,7 +4074,7 @@ function ProjectDetailPage() {
                 const step1FormProgress =
                   current.step_number === 1
                     ? countStep1FormRequiredProgress({
-                        egpCode,
+                        egpCode: egpProjectIdForWorkflow,
                         budget: step1Budget,
                         responsibleName: effectiveResponsibleName,
                         projectName: step1ProjectName,
@@ -3821,17 +4085,37 @@ function ProjectDetailPage() {
                       })
                     : null;
                 const step2CoreDocsProgress =
-                  current.step_number === 2 && step2ComplianceOpts
+                  current.step_number === 2 && isSpecificShortWorkflow
+                    ? {
+                        done: hasStep2SpecificQuotationDoc(docsForStep) ? 1 : 0,
+                        total: 1,
+                      }
+                    : current.step_number === 2 && step2ComplianceOpts
                     ? countStep2CoreDocumentsReady({
                         hasAppointmentOrderDoc: step2HasAppointmentDoc,
                         hasBoqDoc: step2HasBoqDoc,
                         hasIntegrityLetterDoc: step2HasIntegrityLetterDoc,
                         hasBg06Doc: step2HasBg06Doc,
                         stepDocs: docsForStep,
+                        isConstructionProject: isConstructionProject,
                       })
                     : null;
                 const step2FormProgress =
-                  current.step_number === 2 && step2ComplianceOpts
+                  current.step_number === 2 && isSpecificShortWorkflow
+                    ? (() => {
+                        const q = countStep2SpecificQuotationProgress({
+                          quotation: step2SpecificQuotation,
+                          approvedBudget: calcBudget,
+                          fiscalYear: project.fiscal_year,
+                          stepDocs: docsForStep,
+                        });
+                        const responsibleDone = effectiveResponsibleName.trim() ? 1 : 0;
+                        return {
+                          done: q.done + responsibleDone,
+                          total: q.total + 1,
+                        };
+                      })()
+                    : current.step_number === 2 && step2ComplianceOpts
                     ? countStep2FormRequiredProgress(step2ComplianceOpts)
                     : null;
                 const step4CoreDocsProgress =
@@ -3953,7 +4237,14 @@ function ProjectDetailPage() {
                                     total: step8FormProgress.total,
                                     effective: {},
                                   }
-                                : step10FormProgress != null
+                                : step9FormProgress != null
+                                  ? {
+                                      allDone: step9Ready,
+                                      done: step9FormProgress.done,
+                                      total: step9FormProgress.total,
+                                      effective: {},
+                                    }
+                                  : step10FormProgress != null
                                   ? {
                                       allDone: step10Ready,
                                       done: step10FormProgress.done,
@@ -4060,8 +4351,6 @@ function ProjectDetailPage() {
                     ? "ปิดโครงการจ้างสำเร็จ (Archive Project)"
                     : "บันทึกและไปขั้นตอนถัดไป";
                 const showBackButton = activeStep > 1;
-                const showNextNavButton =
-                  isViewingPastStep && activeStep < workflowDisplayTotal;
                 const checklistProgressPct =
                   reactiveChecklist.total > 0
                     ? Math.round((reactiveChecklist.done / reactiveChecklist.total) * 100)
@@ -4087,6 +4376,13 @@ function ProjectDetailPage() {
                             ย้อนกลับ
                           </button>
                         )}
+                        {shouldShowRollbackToEditProjectButton(project.current_step) && (
+                          <RollbackToEditProjectButton
+                            onConfirm={handleRollbackToEditProject}
+                            loading={rollingBackToEdit}
+                            size="default"
+                          />
+                        )}
                         {showSaveDraft && (
                           <button
                             onClick={saveDraft}
@@ -4098,17 +4394,6 @@ function ProjectDetailPage() {
                         )}
                       </div>
                       <div className="flex flex-wrap gap-3 ml-auto">
-                        {showNextNavButton && (
-                          <button
-                            type="button"
-                            onClick={() => handleNextStep()}
-                            title="ดูขั้นตอนถัดไป (ไม่บันทึกข้อมูล)"
-                            className="h-10 px-4 rounded-md border border-blue-600 bg-blue-50 text-sm font-medium text-blue-700 hover:bg-blue-100 flex items-center gap-2"
-                          >
-                            ไปขั้นตอนถัดไป
-                            <ChevronRight className="h-4 w-4" />
-                          </button>
-                        )}
                         {showCompleteBtn && (
                           <button
                             onClick={() => completeStep()}
@@ -4125,185 +4410,6 @@ function ProjectDetailPage() {
                         ⚠️ มีผู้ยื่นอุทธรณ์ — ระบบล็อกการไปขั้นตอน 7–8 จนกว่าจะเลือกผลวินิจฉัย
                         «อุทธรณ์ฟังไม่ขึ้น» (หรือเปลี่ยนเป็น «ไม่มีผู้ยื่นอุทธรณ์»)
                       </p>
-                    )}
-                    {current.step_number === 3 &&
-                      !isCompleted &&
-                      showStep3HearingForm &&
-                      !step3Ready &&
-                      step3ComplianceIssues.length > 0 && (
-                      <div className="text-sm text-muted-foreground mt-3 space-y-1 rounded-md border border-dashed border-border bg-muted/30 p-3">
-                        <p className="font-medium text-foreground flex items-center gap-1.5">
-                          <AlertTriangle className="h-4 w-4 text-warning shrink-0" />
-                          กรุณาดำเนินการให้ครบก่อนไปขั้นถัดไป:
-                        </p>
-                        <ul className="list-disc list-inside space-y-0.5 text-xs">
-                          {step3ComplianceIssues.slice(0, 4).map((issue) => (
-                            <li key={issue.id}>{issue.message}</li>
-                          ))}
-                          {step3ComplianceIssues.length > 4 && (
-                            <li>และอีก {step3ComplianceIssues.length - 4} รายการ...</li>
-                          )}
-                        </ul>
-                      </div>
-                    )}
-                    {current.step_number === 2 && !isCompleted && !step2Ready && step2ComplianceIssues.length > 0 && (
-                      <div className="text-sm text-muted-foreground mt-3 space-y-1 rounded-md border border-dashed border-border bg-muted/30 p-3">
-                        <p className="font-medium text-foreground flex items-center gap-1.5">
-                          <AlertTriangle className="h-4 w-4 text-warning shrink-0" />
-                          กรุณาดำเนินการให้ครบก่อนไปขั้นถัดไป:
-                        </p>
-                        <ul className="list-disc list-inside space-y-0.5 text-xs">
-                          {step2ComplianceIssues.slice(0, 4).map((issue) => (
-                            <li key={issue.id}>{issue.message}</li>
-                          ))}
-                          {step2ComplianceIssues.length > 4 && (
-                            <li>และอีก {step2ComplianceIssues.length - 4} รายการ...</li>
-                          )}
-                        </ul>
-                      </div>
-                    )}
-                    {current.step_number === 1 && !isCompleted && !step1Ready && step1ComplianceIssues.length > 0 && (
-                      <div className="text-sm text-muted-foreground mt-3 space-y-1 rounded-md border border-dashed border-border bg-muted/30 p-3">
-                        <p className="font-medium text-foreground flex items-center gap-1.5">
-                          <AlertTriangle className="h-4 w-4 text-warning shrink-0" />
-                          กรุณาดำเนินการให้ครบก่อนไปขั้นถัดไป:
-                        </p>
-                        <ul className="list-disc list-inside space-y-0.5 text-xs">
-                          {step1ComplianceIssues.slice(0, 4).map((issue) => (
-                            <li key={issue.id}>{issue.message}</li>
-                          ))}
-                          {step1ComplianceIssues.length > 4 && (
-                            <li>และอีก {step1ComplianceIssues.length - 4} รายการ...</li>
-                          )}
-                        </ul>
-                      </div>
-                    )}
-                    {current.step_number === 4 && !isCompleted && !step4Ready && step4ComplianceIssues.length > 0 && (
-                      <div className="text-sm text-muted-foreground mt-3 space-y-1 rounded-md border border-dashed border-border bg-muted/30 p-3">
-                        <p className="font-medium text-foreground flex items-center gap-1.5">
-                          <AlertTriangle className="h-4 w-4 text-warning shrink-0" />
-                          กรุณาดำเนินการให้ครบก่อนไปขั้นถัดไป:
-                        </p>
-                        <ul className="list-disc list-inside space-y-0.5 text-xs">
-                          {step4ComplianceIssues.slice(0, 4).map((issue) => (
-                            <li key={issue.id}>{issue.message}</li>
-                          ))}
-                          {step4ComplianceIssues.length > 4 && (
-                            <li>และอีก {step4ComplianceIssues.length - 4} รายการ...</li>
-                          )}
-                        </ul>
-                      </div>
-                    )}
-                    {current.step_number === 5 && !isCompleted && !step5Ready && step5ComplianceIssues.length > 0 && (
-                      <div className="text-sm text-muted-foreground mt-3 space-y-1 rounded-md border border-dashed border-border bg-muted/30 p-3">
-                        <p className="font-medium text-foreground flex items-center gap-1.5">
-                          <AlertTriangle className="h-4 w-4 text-warning shrink-0" />
-                          กรุณาดำเนินการให้ครบก่อนไปขั้นถัดไป:
-                        </p>
-                        <ul className="list-disc list-inside space-y-0.5 text-xs">
-                          {step5ComplianceIssues.slice(0, 4).map((issue) => (
-                            <li key={issue.id}>{issue.message}</li>
-                          ))}
-                          {step5ComplianceIssues.length > 4 && (
-                            <li>และอีก {step5ComplianceIssues.length - 4} รายการ...</li>
-                          )}
-                        </ul>
-                      </div>
-                    )}
-                    {current.step_number === 6 &&
-                      !isCompleted &&
-                      !step6Ready &&
-                      step6ComplianceIssues.length > 0 && (
-                      <div className="text-sm text-muted-foreground mt-3 space-y-1 rounded-md border border-dashed border-border bg-muted/30 p-3">
-                        <p className="font-medium text-foreground flex items-center gap-1.5">
-                          <AlertTriangle className="h-4 w-4 text-warning shrink-0" />
-                          กรุณาดำเนินการให้ครบก่อนไปขั้นถัดไป:
-                        </p>
-                        <ul className="list-disc list-inside space-y-0.5 text-xs">
-                          {step6ComplianceIssues.slice(0, 4).map((issue) => (
-                            <li key={issue.id}>{issue.message}</li>
-                          ))}
-                          {step6ComplianceIssues.length > 4 && (
-                            <li>และอีก {step6ComplianceIssues.length - 4} รายการ...</li>
-                          )}
-                        </ul>
-                      </div>
-                    )}
-                    {current.step_number === 7 &&
-                      !isCompleted &&
-                      !step7Ready &&
-                      step7ComplianceIssues.length > 0 && (
-                      <div className="text-sm text-muted-foreground mt-3 space-y-1 rounded-md border border-dashed border-border bg-muted/30 p-3">
-                        <p className="font-medium text-foreground flex items-center gap-1.5">
-                          <AlertTriangle className="h-4 w-4 text-warning shrink-0" />
-                          กรุณาดำเนินการให้ครบก่อนไปขั้นถัดไป:
-                        </p>
-                        <ul className="list-disc list-inside space-y-0.5 text-xs">
-                          {step7ComplianceIssues.slice(0, 4).map((issue) => (
-                            <li key={issue.id}>{issue.message}</li>
-                          ))}
-                          {step7ComplianceIssues.length > 4 && (
-                            <li>และอีก {step7ComplianceIssues.length - 4} รายการ...</li>
-                          )}
-                        </ul>
-                      </div>
-                    )}
-                    {current.step_number === 8 &&
-                      !isCompleted &&
-                      !step8Ready &&
-                      step8ComplianceIssues.length > 0 && (
-                      <div className="text-sm text-muted-foreground mt-3 space-y-1 rounded-md border border-dashed border-border bg-muted/30 p-3">
-                        <p className="font-medium text-foreground flex items-center gap-1.5">
-                          <AlertTriangle className="h-4 w-4 text-warning shrink-0" />
-                          กรุณาดำเนินการให้ครบก่อนไปขั้นถัดไป:
-                        </p>
-                        <ul className="list-disc list-inside space-y-0.5 text-xs">
-                          {step8ComplianceIssues.slice(0, 4).map((issue) => (
-                            <li key={issue.id}>{issue.message}</li>
-                          ))}
-                          {step8ComplianceIssues.length > 4 && (
-                            <li>และอีก {step8ComplianceIssues.length - 4} รายการ...</li>
-                          )}
-                        </ul>
-                      </div>
-                    )}
-                    {current.step_number === 9 &&
-                      !isCompleted &&
-                      !step9Ready &&
-                      step9ComplianceIssues.length > 0 && (
-                      <div className="text-sm text-muted-foreground mt-3 space-y-1 rounded-md border border-dashed border-border bg-muted/30 p-3">
-                        <p className="font-medium text-foreground flex items-center gap-1.5">
-                          <AlertTriangle className="h-4 w-4 text-warning shrink-0" />
-                          กรุณาดำเนินการให้ครบก่อนไปขั้นถัดไป:
-                        </p>
-                        <ul className="list-disc list-inside space-y-0.5 text-xs">
-                          {step9ComplianceIssues.slice(0, 4).map((issue) => (
-                            <li key={issue.id}>{issue.message}</li>
-                          ))}
-                          {step9ComplianceIssues.length > 4 && (
-                            <li>และอีก {step9ComplianceIssues.length - 4} รายการ...</li>
-                          )}
-                        </ul>
-                      </div>
-                    )}
-                    {current.step_number === 10 &&
-                      !isCompleted &&
-                      !step10Ready &&
-                      step10ComplianceIssues.length > 0 && (
-                      <div className="text-sm text-muted-foreground mt-3 space-y-1 rounded-md border border-dashed border-border bg-muted/30 p-3">
-                        <p className="font-medium text-foreground flex items-center gap-1.5">
-                          <AlertTriangle className="h-4 w-4 text-warning shrink-0" />
-                          กรุณาดำเนินการให้ครบก่อนปิดโครงการ:
-                        </p>
-                        <ul className="list-disc list-inside space-y-0.5 text-xs">
-                          {step10ComplianceIssues.slice(0, 4).map((issue) => (
-                            <li key={issue.id}>{issue.message}</li>
-                          ))}
-                          {step10ComplianceIssues.length > 4 && (
-                            <li>และอีก {step10ComplianceIssues.length - 4} รายการ...</li>
-                          )}
-                        </ul>
-                      </div>
                     )}
                   </div>
                 );
@@ -4915,6 +5021,7 @@ function ContractForm({ project, onSaved }: { project: Project; onSaved: () => P
 function ProjectTimeline({
   projectId,
   project,
+  method,
   steps,
   activeStep,
   step3Note,
@@ -4926,6 +5033,7 @@ function ProjectTimeline({
 }: {
   projectId: string;
   project: Project;
+  method: string;
   steps: Step[];
   activeStep: number;
   step3Note?: string | null;
@@ -4995,7 +5103,8 @@ function ProjectTimeline({
     [timelineInput],
   );
 
-  const isSpecificTimeline = isSpecificMethodShortWorkflow(project.method);
+  const isSpecificTimeline = isSpecificMethodShortWorkflow(method);
+  const timelineProgressUi = backendStepToUiStep(project.current_step, method);
   const displayItems = useMemo(() => {
     if (!isSpecificTimeline) {
       return items.map((it) => ({
@@ -5040,10 +5149,11 @@ function ProjectTimeline({
   }, [activeStep, project?.current_step, project]);
 
   const timelineStepColor = (
-    stepNumber: number,
+    uiStep: number,
     isActiveView: boolean,
+    isCompleted: boolean,
   ) => {
-    if (stepNumber < project.current_step) return "#16A34A";
+    if (isCompleted) return "#16A34A";
     if (isActiveView) return "#2563EB";
     return "#9CA3AF";
   };
@@ -5062,10 +5172,11 @@ function ProjectTimeline({
               ? it.uiStep === activeStep
               : it.backendStep === activeStep;
             const isStepCompleted = isSpecificTimeline
-              ? it.backendStep < project.current_step
+              ? it.uiStep < timelineProgressUi
               : it.backendStep < project.current_step;
-            const isWorkflowStep =
-              it.backendStep === project.current_step && !isStepCompleted;
+            const isWorkflowStep = isSpecificTimeline
+              ? it.uiStep === timelineProgressUi && !isStepCompleted
+              : it.backendStep === project.current_step && !isStepCompleted;
             return (
             <div key={stepKey} className="flex items-start gap-2">
               <div className="flex flex-col items-center w-28">
@@ -5078,7 +5189,11 @@ function ProjectTimeline({
                         : "border-background"
                   }`}
                   style={{
-                    backgroundColor: timelineStepColor(it.backendStep, isActiveView),
+                    backgroundColor: timelineStepColor(
+                      it.uiStep,
+                      isActiveView,
+                      isStepCompleted,
+                    ),
                   }}
                 />
                 <p

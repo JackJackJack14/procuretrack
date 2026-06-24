@@ -13,8 +13,10 @@ import { fetchOrganizationProjects } from "@/lib/organization-projects";
 import { AppShell } from "@/components/AppShell";
 import { MilestoneTimeline } from "@/components/MilestoneTimeline";
 import { fetchAlerts } from "@/lib/alerts";
-import { EGP_TOTAL_STEPS, milestoneProgressPercent } from "@/lib/egp-milestones";
+import { workflowProgressPercent, backendStepToUiStep, getWorkflowDisplayStepCount } from "@/lib/dynamic-stepper";
+import { resolveWorkflowProcurementMethod } from "@/lib/project-workflow-core";
 import { formatBaht, STATUS_LABEL } from "@/lib/procurement";
+import { resolveEgpProjectId } from "@/lib/project-refs";
 
 export const Route = createFileRoute("/executive")({
   head: () => ({ meta: [{ title: "ภาพรวมผู้บริหาร — ProcureTrack" }] }),
@@ -25,10 +27,12 @@ type Project = {
   id: string;
   name: string;
   project_code: string;
+  egp_project_id?: string | null;
   budget: number;
   status: string;
   current_step: number;
   fiscal_year: number;
+  method: string;
 };
 
 function ExecutiveDashboardPage() {
@@ -39,7 +43,7 @@ function ExecutiveDashboardPage() {
     queryKey: ["projects"],
     queryFn: async () => {
       const result = await fetchOrganizationProjects<Project>(
-        "id, name, project_code, budget, status, current_step, fiscal_year",
+        "id, name, project_code, egp_project_id, budget, status, current_step, fiscal_year, method",
       );
       if (result.errorCode === "NOT_AUTH") {
         navigate({ to: "/login" });
@@ -71,16 +75,30 @@ function ExecutiveDashboardPage() {
       projects.length === 0
         ? 0
         : Math.round(
-            projects.reduce((s, p) => s + milestoneProgressPercent(p.current_step), 0) /
-              projects.length,
+            projects.reduce((s, p) => {
+              const method = resolveWorkflowProcurementMethod({ projectMethod: p.method });
+              return s + workflowProgressPercent(p.current_step, method);
+            }, 0) / projects.length,
           );
-    const atStep = (n: number) => projects.filter((p) => p.current_step === n).length;
+    const atStep = (n: number) =>
+      projects.filter((p) => {
+        const method = resolveWorkflowProcurementMethod({ projectMethod: p.method });
+        return backendStepToUiStep(p.current_step, method) === n;
+      }).length;
+    const maxDisplaySteps = Math.max(
+      ...projects.map((p) =>
+        getWorkflowDisplayStepCount(
+          resolveWorkflowProcurementMethod({ projectMethod: p.method }),
+        ),
+      ),
+      10,
+    );
     return {
       total: projects.length,
       active: active.length,
       avgProgress,
       urgent: redCount,
-      stepDistribution: Array.from({ length: EGP_TOTAL_STEPS }, (_, i) => atStep(i + 1)),
+      stepDistribution: Array.from({ length: maxDisplaySteps }, (_, i) => atStep(i + 1)),
     };
   }, [projects, redCount]);
 
@@ -95,7 +113,7 @@ function ExecutiveDashboardPage() {
             </div>
             <h1 className="text-2xl font-semibold">Dashboard สรุปภาพรวมโครงการ</h1>
             <p className="text-sm text-muted-foreground mt-1">
-              ติดตาม Milestone 10 ขั้นตอน (e-GP e-bidding) — ไม่ต้องคีย์ข้อมูลซ้ำในระบบนี้
+              ติดตามความคืบหน้าโครงการตามวิธีจัดซื้อ (e-bidding 10 ขั้น / เฉพาะเจาะจง 5 ขั้น)
             </p>
           </div>
           <select
@@ -129,7 +147,7 @@ function ExecutiveDashboardPage() {
         <div className="bg-card border rounded-[10px] shadow-sm p-5">
           <h2 className="font-semibold mb-4">ภาพรวม Milestone ทั้งหน่วยงาน</h2>
           <p className="text-xs text-muted-foreground mb-4">
-            จำนวนโครงการที่อยู่ในแต่ละขั้นตอนปัจจุบัน (1–10)
+            จำนวนโครงการที่อยู่ในแต่ละขั้นตอนปัจจุบัน (UI step — 5 หรือ 10 ตามวิธีจัดซื้อ)
           </p>
           <div className="flex gap-1 items-end h-24">
             {metrics.stepDistribution.map((count, i) => {
@@ -184,7 +202,7 @@ function ProjectMilestoneCard({ project }: { project: Project }) {
             {project.name}
           </Link>
           <p className="text-xs text-muted-foreground mt-0.5">
-            {project.project_code} · ปีงบ {project.fiscal_year} · {formatBaht(project.budget)} บาท
+            {resolveEgpProjectId(project)} · ปีงบ {project.fiscal_year} · {formatBaht(project.budget)} บาท
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -200,7 +218,10 @@ function ProjectMilestoneCard({ project }: { project: Project }) {
         </div>
       </div>
 
-      <MilestoneTimeline currentStep={project.current_step} />
+      <MilestoneTimeline
+        currentStep={project.current_step}
+        method={resolveWorkflowProcurementMethod({ projectMethod: project.method })}
+      />
     </div>
   );
 }

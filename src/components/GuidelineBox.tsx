@@ -24,8 +24,10 @@ type Props = {
   step4Timeline?: Step4Timeline | null;
   /** ขั้นตอนที่ 6 — วันประกาศผู้ชนะจากขั้นตอนที่ 5 */
   winnerAnnouncementDate?: string | null;
-  /** ขั้นตอนที่ 9 — วันลงนามสัญญาจริงจาก Step 8 */
+  /** ขั้นตอนที่ 9 — วันลงนามสัญญาจริงจากขั้นตอนที่ 8 */
   contractSignedDate?: string | null;
+  /** ขั้นตอนที่ 9 — วันที่ประกาศ หส.1 จากฟอร์ม */
+  step9EgpPublicationDate?: string | null;
   /** ขั้นตอนที่ 10 — วันสิ้นสุดสัญญาจริงจาก Step 9 */
   contractEndDate?: string | null;
   /** ขั้นตอนที่ 10 — วันเริ่มต้นสัญญาจาก Step 9 */
@@ -57,6 +59,7 @@ export function GuidelineBox({
   step4Timeline,
   winnerAnnouncementDate,
   contractSignedDate,
+  step9EgpPublicationDate,
   contractEndDate,
   contractStartDate,
   step3PublicationStartDate,
@@ -75,7 +78,7 @@ export function GuidelineBox({
   }
 
   if (stepNumber === 2) {
-    return <Step2GuidelineBox />;
+    return <Step2GuidelineBox method={method} />;
   }
 
   if (stepNumber === 3) {
@@ -120,7 +123,12 @@ export function GuidelineBox({
   }
 
   if (stepNumber === 9) {
-    return <Step9GuidelineBox contractSignedDate={contractSignedDate} />;
+    return (
+      <Step9GuidelineBox
+        contractSignedDate={contractSignedDate}
+        egpPublicationDate={step9EgpPublicationDate}
+      />
+    );
   }
 
   if (stepNumber === 10) {

@@ -1,36 +1,38 @@
 import { clampStep, EGP_MILESTONES, EGP_MILESTONE_SHORT } from "@/lib/egp-milestones";
-import { isExternalProcurement } from "@/lib/procurement-path";
+import {
+  canNavigateToWorkflowUiStep,
+} from "@/lib/step-workflow";
 
 /** วิธีเฉพาะเจาะจง — แสดง 5 ขั้นตอนบน UI แต่บันทึกลง procurement_steps เดิม */
 export const SPECIFIC_METHOD_STEP_MAP = [
   {
     ui: 1,
     backend: 1,
-    title: "เตรียมโครงการและรายงานขอซื้อขอจ้าง",
+    title: "เตรียมโครงการ (บันทึกข้อมูลพื้นฐาน งบประมาณ ประเภทงาน)",
     short: "เตรียมโครงการ",
   },
   {
     ui: 2,
     backend: 2,
-    title: "บันทึกใบเสนอราคา (Quotation)",
-    short: "ใบเสนอราคา",
+    title: "บันทึกผลการสืบราคาและเจรจาต่อรอง (กรอกใบเสนอราคา 3 รายตามสเปกใหม่)",
+    short: "สืบราคา/เจรจา",
   },
   {
     ui: 3,
     backend: 4,
-    title: "รายงานผลการพิจารณาและอนุมัติสั่งซื้อสั่งจ้าง",
+    title: "รายงานผลการพิจารณาและอนุมัติสั่งซื้อสั่งจ้าง (ทำเล่มรายงานตามระเบียบข้อ 25)",
     short: "พิจารณา/อนุมัติ",
   },
   {
     ui: 4,
     backend: 5,
-    title: "ประกาศผู้ชนะ และ ออกใบสั่งซื้อ/สั่งจ้าง (PO)",
+    title: "ประกาศผู้ชนะและออกใบสั่งซื้อ/สั่งจ้าง (พิมพ์ใบ PO / ควบคุมงวดงาน)",
     short: "ผู้ชนะ/PO",
   },
   {
     ui: 5,
     backend: 10,
-    title: "บริหารสัญญาและการตรวจรับพัสดุ",
+    title: "บริหารสัญญาและการตรวจรับพัสดุ (ส่งมอบงาน ตรวจรับจบโครงการ)",
     short: "สัญญา/ตรวจรับ",
   },
 ] as const;
@@ -46,36 +48,76 @@ export type StepperDisplayItem = {
   shortLabel: string;
 };
 
+/** ตรวจว่าค่า method (raw จาก DB/Dropdown) คือวิธีเฉพาะเจาะจงหรือไม่ — ใช้ keyword includes เป็นหลัก */
+export function methodIndicatesSpecificProcurement(
+  method: string | null | undefined,
+): boolean {
+  if (!method?.trim()) return false;
+  const raw = method.trim();
+  if (raw.includes("เฉพาะเจาะจง")) return true;
+  const lower = raw.toLowerCase();
+  return (
+    lower === "specific" ||
+    lower === "specific_under_500k" ||
+    lower === "specific_under_500000" ||
+    lower.startsWith("specific")
+  );
+}
+
+/** ตรวจว่าค่า method คือ e-bidding — ใช้ keyword includes เป็นหลัก */
+export function methodIndicatesEBiddingProcurement(
+  method: string | null | undefined,
+): boolean {
+  if (!method?.trim()) return true;
+  const raw = method.trim();
+  if (methodIndicatesSpecificProcurement(raw)) return false;
+  const lower = raw.toLowerCase();
+  return (
+    raw.includes("e-bidding") ||
+    lower === "e_bidding" ||
+    lower.includes("ประกวดราคา") ||
+    lower.includes("ebidding")
+  );
+}
+
 /** แปลงค่า method จาก DB/UI ให้เป็นค่ามาตรฐานเดียวกัน */
 export function normalizeProcurementMethod(
   method: string | null | undefined,
 ): string {
   const raw = method?.trim() ?? "";
   if (!raw) return "e_bidding";
+  if (methodIndicatesSpecificProcurement(raw)) return "specific";
   const lower = raw.toLowerCase();
-  if (
-    lower === "specific" ||
-    lower === "specific_under_500k" ||
-    lower === "specific_under_500000" ||
-    raw === "วิธีเฉพาะเจาะจง" ||
-    raw.includes("เฉพาะเจาะจง")
-  ) {
-    return "specific";
-  }
   if (lower === "e_market") return "selection";
+  if (methodIndicatesEBiddingProcurement(raw)) return "e_bidding";
+  if (lower === "selection" || raw.includes("คัดเลือก")) return "selection";
   return raw;
 }
 
 export function isSpecificMethodShortWorkflow(
   method: string | null | undefined,
 ): boolean {
-  return normalizeProcurementMethod(method) === "specific";
+  const raw = method?.trim() ?? "";
+  if (raw.includes("เฉพาะเจาะจง")) return true;
+  return methodIndicatesSpecificProcurement(method);
+}
+
+export function isEBiddingFullWorkflow(
+  method: string | null | undefined,
+): boolean {
+  if (isSpecificMethodShortWorkflow(method)) return false;
+  const raw = method?.trim() ?? "";
+  if (!raw) return true;
+  return methodIndicatesEBiddingProcurement(raw);
 }
 
 export function getWorkflowDisplayStepCount(
   method: string | null | undefined,
 ): number {
-  return isSpecificMethodShortWorkflow(method) ? SPECIFIC_METHOD_STEP_MAP.length : 10;
+  if (isSpecificMethodShortWorkflow(method)) {
+    return SPECIFIC_METHOD_STEP_MAP.length;
+  }
+  return 10;
 }
 
 export function getStepperDisplayItems(
@@ -184,11 +226,18 @@ export function canNavigateToUiStep(
   targetUiStep: number,
   currentBackendStep: number,
   method: string | null | undefined,
-  procurementPath?: string | null,
 ): boolean {
   const total = getWorkflowDisplayStepCount(method);
-  if (targetUiStep < 1 || targetUiStep > total) return false;
-  if (isExternalProcurement(procurementPath)) return true;
   const workflowUi = backendStepToUiStep(currentBackendStep, method);
-  return targetUiStep <= workflowUi;
+  return canNavigateToWorkflowUiStep(targetUiStep, workflowUi, total);
+}
+
+/** ความคืบหน้า % ตามจำนวนขั้นตอนที่แสดง (5 สำหรับเฉพาะเจาะจง / 10 สำหรับ e-bidding) */
+export function workflowProgressPercent(
+  currentBackendStep: number,
+  method: string | null | undefined,
+): number {
+  const ui = backendStepToUiStep(currentBackendStep, method);
+  const total = getWorkflowDisplayStepCount(method);
+  return Math.round((ui / total) * 100);
 }

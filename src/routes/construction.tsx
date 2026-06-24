@@ -10,6 +10,7 @@ import {
   buildConstructionProjectSummary,
   formatConstructionDueWarning,
 } from "@/lib/construction-tracking";
+import { resolveEgpProjectId } from "@/lib/project-refs";
 
 export const Route = createFileRoute("/construction")({
   head: () => ({ meta: [{ title: `${CONSTRUCTION_TRACKING_MENU_LABEL} — ProcureTrack` }] }),
@@ -22,7 +23,7 @@ function ConstructionListPage() {
     queryFn: async () => {
       const { data: projectRows } = await supabase
         .from("projects")
-        .select("id, name, project_code, budget, current_step, status, project_type")
+        .select("id, name, project_code, egp_project_id, budget, current_step, status, project_type")
         .gte("current_step", 10)
         .order("created_at", { ascending: false });
 

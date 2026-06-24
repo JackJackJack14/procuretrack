@@ -209,23 +209,7 @@ const STEP8_INLINE: ChecklistInlineEvidence[] = [
   },
 ];
 
-const STEP9_INLINE: ChecklistInlineEvidence[] = [
-  {
-    checklistKey: "egp_essential_publication_attached",
-    documentType: "ใบประกาศสาระสำคัญสัญญาจาก e-GP",
-    uploadLabel: "แนบใบประกาศสาระสำคัญ (.pdf/.png/.jpg)",
-    filePolicyId: "egp_screenshot",
-    uploadDriven: true,
-    legacyDocumentTypes: ["สรุปสาระสำคัญสัญญา (วงเงิน/ระยะเวลา/งวดงาน)"],
-  },
-  {
-    checklistKey: "notice_to_proceed_attached",
-    documentType: "หนังสือแจ้งเริ่มงาน",
-    uploadLabel: "แนบหนังสือแจ้งเริ่มงาน (.pdf)",
-    filePolicyId: "pdf_only",
-    uploadDriven: true,
-  },
-];
+const STEP9_INLINE: ChecklistInlineEvidence[] = [];
 
 const STEP10_INLINE: ChecklistInlineEvidence[] = [];
 

@@ -1,10 +1,10 @@
 import {
-  computeStep9ContractEndDateISO,
   EMPTY_STEP9_CONTRACT_SCHEDULE,
   loadStep7FormFromNote,
   loadStep9FormFromNote,
   loadStepDraftFields,
   mergeStep9ScheduleFromSources,
+  resolveStep9ContractEndDateISO,
 } from "@/lib/step-form";
 import { formatThaiDateSlash } from "@/lib/utils";
 
@@ -69,10 +69,7 @@ export function resolveProjectContractEndDate(
     },
   );
 
-  const computed = computeStep9ContractEndDateISO(
-    schedule.work_start_date,
-    schedule.contract_duration_days,
-  );
+  const computed = resolveStep9ContractEndDateISO(schedule);
   if (computed) return computed;
 
   return loadStepDraftFields(step9).dueDate?.trim() ?? "";

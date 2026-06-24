@@ -1,5 +1,6 @@
 import { supabase } from "@/integrations/supabase/client";
 import { uploadStepDocument, type ProjectDocRef } from "@/lib/doc-upload";
+import { resolveEgpProjectId } from "@/lib/project-refs";
 import {
   buildStep10InspectionRows,
   loadStep10FormFromNote,
@@ -288,6 +289,7 @@ export function buildConstructionProjectSummary(
     id: string;
     name: string;
     project_code: string;
+    egp_project_id?: string | null;
     budget: number;
     current_step: number;
     status: string;
@@ -310,7 +312,7 @@ export function buildConstructionProjectSummary(
   return {
     id: project.id,
     name: project.name,
-    project_code: project.project_code,
+    project_code: resolveEgpProjectId(project),
     budget: Number(project.budget ?? 0),
     current_step: project.current_step,
     status: project.status,

@@ -1,3 +1,5 @@
+import { isSpecificMethodShortWorkflow } from "@/lib/dynamic-stepper";
+
 export function isThaiHoliday(date: Date): boolean {
   const year = date.getFullYear();
   const month = date.getMonth() + 1;
@@ -327,7 +329,7 @@ export function getMinDays(method: string, budget: number): StepMinDays {
   /** ข้อ 161 — ออกหนังสือแจ้งทำสัญญาหลังพ้นอุทธรณ์ */
   const contractNotification: StepMinDays = { step7: CONTRACT_NOTIFICATION_WORKDAYS };
 
-  if (method === "specific" || budget <= 500_000) {
+  if (isSpecificMethodShortWorkflow(method) || budget <= 500_000) {
     return { ...flexibleSteps, step3: 0, ...appealPeriod, ...contractNotification };
   }
 

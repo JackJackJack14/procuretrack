@@ -1,28 +1,43 @@
 import { Check } from "lucide-react";
 import {
-  EGP_MILESTONES,
-  EGP_TOTAL_STEPS,
-  clampStep,
-  getMilestoneStatus,
-  milestoneProgressPercent,
-} from "@/lib/egp-milestones";
+  backendStepToUiStep,
+  getStepperDisplayItems,
+  getWorkflowDisplayStepCount,
+  isSpecificMethodShortWorkflow,
+  workflowProgressPercent,
+} from "@/lib/dynamic-stepper";
+import { getMilestoneStatus } from "@/lib/egp-milestones";
+import { resolveWorkflowProcurementMethod } from "@/lib/project-workflow-core";
 import { cn } from "@/lib/utils";
 
 type MilestoneTimelineProps = {
   currentStep: number;
+  method?: string | null;
   className?: string;
 };
 
-/** Timeline 10 ขั้น e-GP — แบบกล่อง ไฮไลต์ขั้นปัจจุบัน */
-export function MilestoneTimeline({ currentStep, className }: MilestoneTimelineProps) {
-  const cur = clampStep(currentStep);
-  const pct = milestoneProgressPercent(cur);
+/** Timeline ขั้นตอนโครงการ — 5 ขั้นสำหรับวิธีเฉพาะเจาะจง / 10 ขั้นสำหรับ e-bidding */
+export function MilestoneTimeline({
+  currentStep,
+  method,
+  className,
+}: MilestoneTimelineProps) {
+  const resolvedMethod = resolveWorkflowProcurementMethod({ projectMethod: method });
+  const items = getStepperDisplayItems(resolvedMethod);
+  const total = getWorkflowDisplayStepCount(resolvedMethod);
+  const cur = isSpecificMethodShortWorkflow(resolvedMethod)
+    ? backendStepToUiStep(currentStep, resolvedMethod)
+    : Math.min(total, Math.max(1, currentStep));
+  const pct = workflowProgressPercent(currentStep, resolvedMethod);
 
   return (
     <div className={cn("space-y-3", className)}>
       <div className="flex items-center justify-between text-xs text-muted-foreground">
         <span>
-          ขั้นตอนที่ {cur}/{EGP_TOTAL_STEPS}
+          ขั้นตอนที่ {cur}/{total}
+          {isSpecificMethodShortWorkflow(resolvedMethod) && (
+            <span className="ml-1 text-emerald-700">(เฉพาะเจาะจง)</span>
+          )}
         </span>
         <span className="font-medium text-foreground">{pct}%</span>
       </div>
@@ -34,14 +49,20 @@ export function MilestoneTimeline({ currentStep, className }: MilestoneTimelineP
         />
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2">
-        {EGP_MILESTONES.map((name, i) => {
-          const stepNum = i + 1;
-          const status = getMilestoneStatus(stepNum, cur);
+      <div
+        className={cn(
+          "grid gap-2",
+          isSpecificMethodShortWorkflow(resolvedMethod)
+            ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-5"
+            : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-5",
+        )}
+      >
+        {items.map((item) => {
+          const status = getMilestoneStatus(item.uiStep, cur);
 
           return (
             <div
-              key={stepNum}
+              key={item.uiStep}
               className={cn(
                 "flex items-start gap-2 rounded-md border px-2 py-1.5 text-xs min-h-[2.75rem]",
                 status === "done" && "border-primary/30 bg-primary/5",
@@ -57,9 +78,9 @@ export function MilestoneTimeline({ currentStep, className }: MilestoneTimelineP
                   status === "upcoming" && "bg-muted text-muted-foreground",
                 )}
               >
-                {status === "done" ? <Check className="h-3 w-3" /> : stepNum}
+                {status === "done" ? <Check className="h-3 w-3" /> : item.uiStep}
               </div>
-              <span className="leading-snug">{name}</span>
+              <span className="leading-snug">{item.shortLabel}</span>
             </div>
           );
         })}

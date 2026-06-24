@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { formatBaht } from "@/lib/procurement";
 import { getMilestoneLabel } from "@/lib/egp-milestones";
 import { formatThaiDate } from "@/lib/utils";
+import { resolveEgpProjectId } from "@/lib/project-refs";
 
 export const Route = createFileRoute("/procurement")({
   head: () => ({ meta: [{ title: "จัดซื้อจัดจ้าง — ProcureTrack" }] }),
@@ -18,6 +19,7 @@ type ProcurementProject = {
   id: string;
   name: string;
   project_code: string;
+  egp_project_id?: string | null;
   budget: number;
   allocated_budget?: number | null;
   current_step: number;
@@ -27,7 +29,7 @@ type ProcurementProject = {
 
 /** คอลัมน์พื้นฐาน — มีในทุกฐานข้อมูล (budget แทน allocated_budget จนกว่าจะรัน migration) */
 const PROCUREMENT_COLUMNS_BASE =
-  "id, name, project_code, budget, current_step, status, updated_at";
+  "id, name, project_code, egp_project_id, budget, current_step, status, updated_at";
 
 const PROCUREMENT_COLUMNS_WITH_ALLOCATED =
   `${PROCUREMENT_COLUMNS_BASE}, allocated_budget`;
@@ -84,7 +86,7 @@ function ProcurementListPage() {
     return active.filter(
       (p) =>
         p.name.toLowerCase().includes(q) ||
-        p.project_code.toLowerCase().includes(q),
+        resolveEgpProjectId(p).toLowerCase().includes(q),
     );
   }, [projectResult?.projects, search]);
 
@@ -180,7 +182,7 @@ function ProcurementRow({ project }: { project: ProcurementProject }) {
           <span className="font-medium text-foreground group-hover:text-primary transition-colors">
             {project.name}
           </span>
-          <span className="block text-xs text-muted-foreground mt-0.5">{project.project_code}</span>
+          <span className="block text-xs text-muted-foreground mt-0.5">{resolveEgpProjectId(project)}</span>
         </Link>
       </td>
       <td className="px-4 py-3 whitespace-nowrap font-medium">

@@ -14,6 +14,7 @@ import { formatThaiDateSlash } from "@/lib/utils";
 export type ExecutiveReportProject = {
   name: string;
   project_code: string;
+  standard_model_code?: string | null;
   budget: number;
   fiscal_year?: number | null;
   procurement_path?: string | null;
@@ -148,6 +149,14 @@ function buildReportHtml(input: ExecutiveReportInput): string {
         ${sectionTitle(1, "ข้อมูลโครงการและหน่วยงาน (Step 1)")}
         ${formRow("ชื่อโครงการ", `<strong>${displayText(input.project.name)}</strong>`)}
         ${formRow("รหัส e-GP / โครงการ", displayText(input.project.project_code))}
+        ${
+          input.project.standard_model_code?.trim()
+            ? formRow(
+                "รหัสแบบมาตรฐาน (งานก่อสร้าง)",
+                displayText(input.project.standard_model_code),
+              )
+            : ""
+        }
         ${formRow("ปีงบประมาณ", input.project.fiscal_year ? String(input.project.fiscal_year) : "—")}
         ${formRow("หน่วยงานส่วนภูมิภาค / เขตที่รับผิดชอบ", displayText(profile.district_office))}
         ${formRow("หน่วยงานที่อนุมัติเบิกจ่าย", displayText(profile.approving_agency))}

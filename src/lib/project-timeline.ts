@@ -4,6 +4,7 @@
 import {
   resolveCommitteeReviewWorkdays,
 } from "@/lib/step-form";
+import { resolveWorkflowProcurementMethod } from "@/lib/project-workflow-core";
 import {
   isoDatePart,
   resolveStepMilestoneEndISO,
@@ -69,7 +70,7 @@ export function snapshotTimelineProject(
 ): ProjectTimelineProject {
   return {
     id: project.id,
-    method: project.method ?? "e_bidding",
+    method: resolveWorkflowProcurementMethod({ projectMethod: project.method }),
     budget: Number(project.budget) || 0,
     current_step: project.current_step ?? 1,
     created_at: project.created_at ?? null,

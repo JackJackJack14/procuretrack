@@ -7,6 +7,11 @@ export const STEP2_DOC = {
   EVALUATION_INSPECTION_ORDER: "คำสั่งแต่งตั้งคณะกรรมการพิจารณาผลและตรวจรับ",
   SITE_SUPERVISOR_ORDER: "คำสั่งแต่งตั้งผู้ควบคุมงานหน้างาน",
   MARKET_QUOTES: "ใบเสนอราคาท้องตลาดอย่างน้อย 3 ราย",
+  /** งานจ้างก่อสร้าง — สรุปราคารวมตามงบประมาณผูกพัน (แทนใบเสนอราคาท้องตลาด 3 ราย) */
+  REFERENCE_PRICE_SUMMARY:
+    "ตารางสรุปราคารวม ปร.4/ปร.5/ปร.6 หรือเล่ม BOQ",
+  /** ใบเสนอราคารายเดียว — วิธีเฉพาะเจาะจง */
+  SPECIFIC_QUOTATION: "ใบเสนอราคา (วิธีเฉพาะเจาะจง)",
 } as const;
 
 export const STEP2_APPOINTMENT_ORDER_UPLOAD_LABEL =
@@ -29,6 +34,21 @@ export const STEP2_SITE_SUPERVISOR_ORDER_UPLOAD_LABEL =
 
 export const STEP2_MARKET_QUOTES_UPLOAD_LABEL =
   "📎 แนบไฟล์ใบเสนอราคาท้องตลาดอย่างน้อย 3 ราย (PDF/ZIP)";
+
+export const STEP2_REFERENCE_PRICE_UPLOAD_LABEL =
+  "📎 อัปโหลดเอกสารตารางสรุปราคารวม ปร.4, ปร.5, ปร.6 หรือเล่ม BOQ (PDF)";
+
+export function hasStep2ReferencePriceDoc(
+  stepDocs?: Array<{ document_type: string }>,
+): boolean {
+  return (
+    stepDocs?.some((d) => d.document_type === STEP2_DOC.REFERENCE_PRICE_SUMMARY) ??
+    false
+  );
+}
+
+export const STEP2_SPECIFIC_QUOTATION_UPLOAD_LABEL =
+  "📎 แนบไฟล์ PDF ใบเสนอราคา *";
 
 const STEP2_MARKET_QUOTE_DOC_PREFIX = `${STEP2_DOC.MARKET_QUOTES} (รายที่ `;
 
@@ -297,10 +317,15 @@ export const STEP8_DOC_LEGACY = {
   POWER_OF_ATTORNEY: "หนังสือมอบอำนาจ (ถ้ามี)",
 } as const;
 
-/** ประเภทเอกสารขั้นตอนที่ 9 — สาระสำคัญสัญญา */
+/** ประเภทเอกสารขั้นตอนที่ 9 — สาระสำคัญสัญญา (มาตรา 98) */
 export const STEP9_DOC = {
+  HS1_ESSENTIAL_CONTRACT: "ประกาศสาระสำคัญของสัญญา (แบบ หส.1) (PDF)",
+  EGP_CONTRACT_STATUS_SCREENSHOT: "ภาพถ่ายหน้าจอสถานะการบันทึกสัญญาใน e-GP (PDF/Image)",
+  /** @deprecated ใช้ HS1_ESSENTIAL_CONTRACT */
   GANTT_CHART: "แผนปฏิบัติการก่อสร้าง (Gantt)",
+  /** @deprecated ใช้ HS1_ESSENTIAL_CONTRACT */
   EGP_ESSENTIAL_PUBLICATION: "ใบประกาศสาระสำคัญสัญญาจาก e-GP",
+  /** @deprecated ไม่ใช้ในขั้นตอนที่ 9 รุ่นใหม่ */
   NOTICE_TO_PROCEED: "หนังสือแจ้งเริ่มงาน",
 } as const;
 
@@ -315,6 +340,18 @@ export function isStep9GanttDocType(documentType: string): boolean {
     documentType === STEP9_DOC.GANTT_CHART ||
     documentType === STEP9_DOC_LEGACY.GANTT
   );
+}
+
+export function isStep9Hs1DocType(documentType: string): boolean {
+  return (
+    documentType === STEP9_DOC.HS1_ESSENTIAL_CONTRACT ||
+    documentType === STEP9_DOC.EGP_ESSENTIAL_PUBLICATION ||
+    documentType === STEP9_DOC_LEGACY.CONTRACT_SUMMARY
+  );
+}
+
+export function hasStep9Hs1Doc(docs: Array<{ document_type: string }>): boolean {
+  return docs.some((d) => isStep9Hs1DocType(d.document_type));
 }
 
 /** ประเภทเอกสารขั้นตอนที่ 10 — บริหารสัญญา (คืนหลักประกัน) */

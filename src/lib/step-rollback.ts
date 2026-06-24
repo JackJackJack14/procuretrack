@@ -1,3 +1,4 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   EMPTY_STEP1_CHECKLIST,
   EMPTY_STEP2_CHECKLIST,
@@ -9,6 +10,93 @@ import {
   EMPTY_STEP5_ANNOUNCEMENT,
   EMPTY_STEP6_APPEAL,
 } from "@/lib/step-form";
+
+/** คอลัมน์เสริมบน procurement_steps — อาจยังไม่มีบน Supabase Cloud จนกว่าจะรัน migration */
+export const OPTIONAL_PROCUREMENT_STEP_COLUMNS = [
+  "step1_checklist",
+  "step2_checklist",
+  "step3_checklist",
+  "responsible_officer_name",
+  "step_notes",
+] as const;
+
+export type ProcurementStepColumnAvailability = Record<
+  (typeof OPTIONAL_PROCUREMENT_STEP_COLUMNS)[number],
+  boolean
+>;
+
+let columnAvailabilityCache: ProcurementStepColumnAvailability | null = null;
+let columnAvailabilityProbe: Promise<ProcurementStepColumnAvailability> | null =
+  null;
+
+function isColumnMissingError(errorMessage: string, column: string): boolean {
+  const msg = errorMessage.toLowerCase();
+  const col = column.toLowerCase();
+  return (
+    msg.includes(col) &&
+    (msg.includes("schema cache") ||
+      msg.includes("could not find") ||
+      msg.includes("does not exist") ||
+      msg.includes("column"))
+  );
+}
+
+async function probeProcurementStepColumn(
+  supabase: SupabaseClient,
+  column: string,
+): Promise<boolean> {
+  const { error } = await supabase
+    .from("procurement_steps")
+    .select(column)
+    .limit(0);
+
+  if (!error) return true;
+  if (isColumnMissingError(error.message, column)) return false;
+
+  console.warn(`[SchemaProbe] ไม่แน่ใจว่ามีคอลัมน์ ${column}:`, error.message);
+  return false;
+}
+
+/** ตรวจสอบคอลัมน์ที่มีอยู่จริงบน procurement_steps (cache ต่อ session) */
+export async function getProcurementStepColumnAvailability(
+  supabase: SupabaseClient,
+): Promise<ProcurementStepColumnAvailability> {
+  if (columnAvailabilityCache) return columnAvailabilityCache;
+
+  if (!columnAvailabilityProbe) {
+    columnAvailabilityProbe = (async () => {
+      const availability = {} as ProcurementStepColumnAvailability;
+      for (const column of OPTIONAL_PROCUREMENT_STEP_COLUMNS) {
+        availability[column] = await probeProcurementStepColumn(supabase, column);
+      }
+      columnAvailabilityCache = availability;
+      console.info("[SchemaProbe] procurement_steps optional columns:", availability);
+      return availability;
+    })();
+  }
+
+  return columnAvailabilityProbe;
+}
+
+/** ล้าง cache — ใช้หลังรัน migration สำเร็จ */
+export function resetProcurementStepColumnAvailabilityCache(): void {
+  columnAvailabilityCache = null;
+  columnAvailabilityProbe = null;
+}
+
+/** ตัดคอลัมน์ที่ไม่มีใน DB ออกจาก payload ก่อน update */
+export function filterProcurementStepPayloadByAvailability(
+  payload: Record<string, unknown>,
+  availability: ProcurementStepColumnAvailability,
+): Record<string, unknown> {
+  const filtered = { ...payload };
+  for (const column of OPTIONAL_PROCUREMENT_STEP_COLUMNS) {
+    if (!availability[column] && column in filtered) {
+      delete filtered[column];
+    }
+  }
+  return filtered;
+}
 
 /** ข้อความยืนยันก่อน Hard Rollback */
 export function getRollbackConfirmMessage(stepNumber: number): string {
@@ -51,34 +139,49 @@ export function getStepRollbackProjectWipe(
   }
 }
 
-type ProcurementStepWipe = {
-  status: string;
-  note: null;
-  step_notes: null;
-  due_date: null;
-  responsible_officer_name: null;
-  completed_at: null;
-  completed_by: null;
-  step1_checklist?: typeof EMPTY_STEP1_CHECKLIST;
-  step2_checklist?: typeof EMPTY_STEP2_CHECKLIST;
-  step3_checklist?: typeof EMPTY_STEP3_CHECKLIST;
-};
-
-/** ค่า default สำหรับล้างแถว procurement_steps ของขั้นที่ถูก rollback */
-export function getStepRollbackProcurementStepWipe(stepNumber: number): ProcurementStepWipe {
-  const base: ProcurementStepWipe = {
+/** คอลัมน์หลักที่มีอยู่เสมอบน procurement_steps */
+function buildCoreProcurementStepWipe(): Record<string, unknown> {
+  return {
     status: "pending",
     note: null,
-    step_notes: null,
     due_date: null,
-    responsible_officer_name: null,
     completed_at: null,
     completed_by: null,
   };
-  if (stepNumber === 1) return { ...base, step1_checklist: { ...EMPTY_STEP1_CHECKLIST } };
-  if (stepNumber === 2) return { ...base, step2_checklist: { ...EMPTY_STEP2_CHECKLIST } };
-  if (stepNumber === 3) return { ...base, step3_checklist: { ...EMPTY_STEP3_CHECKLIST } };
-  return base;
+}
+
+/**
+ * ค่า default สำหรับล้างแถว procurement_steps
+ * — ใส่เฉพาะคอลัมน์ที่ probe ยืนยันแล้วว่ามีจริง
+ */
+export function getStepRollbackProcurementStepWipe(
+  stepNumber: number,
+  availability?: ProcurementStepColumnAvailability,
+): Record<string, unknown> {
+  const payload = buildCoreProcurementStepWipe();
+
+  const setIfAvailable = (column: string, value: unknown) => {
+    if (availability && !availability[column as keyof ProcurementStepColumnAvailability]) {
+      return;
+    }
+    if (!availability) return;
+    payload[column] = value;
+  };
+
+  setIfAvailable("step_notes", null);
+  setIfAvailable("responsible_officer_name", null);
+
+  if (stepNumber === 1) {
+    setIfAvailable("step1_checklist", { ...EMPTY_STEP1_CHECKLIST });
+  }
+  if (stepNumber === 2) {
+    setIfAvailable("step2_checklist", { ...EMPTY_STEP2_CHECKLIST });
+  }
+  if (stepNumber === 3) {
+    setIfAvailable("step3_checklist", { ...EMPTY_STEP3_CHECKLIST });
+  }
+
+  return payload;
 }
 
 /** เปิดขั้นก่อนหน้าให้แก้ไขได้อีกครั้งหลัง rollback */
@@ -88,4 +191,54 @@ export function getPreviousStepReopenPatch() {
     completed_at: null,
     completed_by: null,
   };
+}
+
+/** ตัดคอลัมน์ที่ schema cache ยังไม่มีออกจาก payload ตามข้อความ error */
+export function stripMissingProcurementStepColumns(
+  errorMessage: string,
+  payload: Record<string, unknown>,
+): boolean {
+  let changed = false;
+
+  for (const key of OPTIONAL_PROCUREMENT_STEP_COLUMNS) {
+    if (isColumnMissingError(errorMessage, key) && key in payload) {
+      delete payload[key];
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
+/**
+ * อัปเดต procurement_steps — probe คอลัมน์ก่อน + retry ตัดคอลัมน์ที่ไม่มี
+ */
+export async function updateProcurementStepWithSchemaFallback(
+  supabase: SupabaseClient,
+  stepId: string,
+  payload: Record<string, unknown>,
+): Promise<{ error?: string }> {
+  const availability = await getProcurementStepColumnAvailability(supabase);
+  const working = filterProcurementStepPayloadByAvailability(payload, availability);
+
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const { error } = await supabase
+      .from("procurement_steps")
+      .update(working)
+      .eq("id", stepId);
+
+    if (!error) return {};
+
+    if (!stripMissingProcurementStepColumns(error.message, working)) {
+      return { error: error.message };
+    }
+
+    for (const column of OPTIONAL_PROCUREMENT_STEP_COLUMNS) {
+      if (!(column in working)) {
+        availability[column] = false;
+      }
+    }
+  }
+
+  return { error: "อัปเดตขั้นตอนไม่สำเร็จ — schema ไม่ตรงกับระบบ" };
 }

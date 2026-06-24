@@ -272,17 +272,17 @@ export function getStep9TimelineDateFields(schedule: Step9ContractSchedule): Ste
     {
       id: "work_start_date",
       iso: schedule.work_start_date ?? "",
-      label: "วันที่เริ่มปฏิบัติงานหน้างาน",
+      label: "วันเริ่มต้นสัญญา",
     },
     {
-      id: "notice_to_proceed_date",
-      iso: schedule.notice_to_proceed_date ?? "",
-      label: "วันที่แจ้งให้เริ่มปฏิบัติงาน",
+      id: "contract_end_date",
+      iso: schedule.contract_end_date ?? "",
+      label: "วันสิ้นสุดสัญญา",
     },
     {
       id: "egp_essential_publication_date",
       iso: schedule.egp_essential_publication_date ?? "",
-      label: "วันที่ประกาศสาระสำคัญสัญญาใน e-GP",
+      label: "วันที่ประกาศเผยแพร่สาระสำคัญในระบบ e-GP",
     },
   ];
 }

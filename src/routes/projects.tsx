@@ -11,8 +11,8 @@ import {
   METHOD_OPTIONS, METHOD_LABEL, STATUS_LABEL,
   formatBaht, progressColor,
 } from "@/lib/procurement";
-import { EGP_MILESTONES, getMilestoneLabel, milestoneProgressPercent } from "@/lib/egp-milestones";
-import { getWorkflowDisplayStepCount, backendStepToUiStep } from "@/lib/dynamic-stepper";
+import { getWorkflowDisplayStepCount, backendStepToUiStep, getWorkflowStepTitle, normalizeProcurementMethod } from "@/lib/dynamic-stepper";
+import { resolveWorkflowProcurementMethod } from "@/lib/project-workflow-core";
 import { APPEAL_STATUS_LABELS, isStep1ResultUnitSubmitBlocked, shouldShowStep1SpecificMethodBudgetComplianceWarning, STEP1_SPECIFIC_METHOD_BUDGET_COMPLIANCE_WARNING_MSG } from "@/lib/step-form";
 import { ResultUnitSelect } from "@/components/ResultUnitSelect";
 import {
@@ -20,8 +20,18 @@ import {
   EGP_PROJECT_TYPE_CONSTRUCTION,
   EGP_PROJECT_TYPE_OPTIONS,
   isCapitalBudgetCategory,
+  isEgpConstructionProjectType,
   suggestEgpProjectTypeFromBudgetCategory,
 } from "@/lib/egp-project-type";
+import { resolveEgpProjectId } from "@/lib/project-refs";
+import {
+  coerceProcurementMethodForBudget,
+  isLowBudgetElectronicMethodConflict,
+  isLowBudgetProcurement,
+  isProcurementMethodBlockedForLowBudget,
+  parseProcurementBudgetAmount,
+  STEP1_LOW_BUDGET_EBIDDING_BLOCKED_MSG,
+} from "@/lib/procurement-budget-rules";
 
 export const Route = createFileRoute("/projects")({
   head: () => ({ meta: [{ title: "โครงการทั้งหมด — ProcureTrack" }] }),
@@ -32,6 +42,7 @@ type Project = {
   id: string;
   name: string;
   project_code: string;
+  egp_project_id?: string | null;
   budget: number;
   status: string;
   method: string;
@@ -54,7 +65,7 @@ function ProjectsPage() {
     queryKey: ["projects"],
     queryFn: async () => {
       const result = await fetchOrganizationProjects<Project>(
-        "id, name, project_code, budget, status, method, fiscal_year, current_step, appeal_status",
+        "id, name, project_code, egp_project_id, budget, status, method, fiscal_year, current_step, appeal_status",
       );
       if (result.errorCode === "NOT_AUTH") {
         navigate({ to: "/login" });
@@ -71,7 +82,7 @@ function ProjectsPage() {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return projects.filter((p) => {
-      if (q && !(p.name.toLowerCase().includes(q) || p.project_code.toLowerCase().includes(q))) return false;
+      if (q && !(p.name.toLowerCase().includes(q) || resolveEgpProjectId(p).toLowerCase().includes(q))) return false;
       if (yearFilter !== "all" && String(p.fiscal_year) !== yearFilter) return false;
       if (statusFilter !== "all" && p.status !== statusFilter) return false;
       if (methodFilter !== "all" && p.method !== methodFilter) return false;
@@ -85,7 +96,7 @@ function ProjectsPage() {
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
             <h1 className="text-2xl font-semibold">โครงการทั้งหมด</h1>
-            <p className="text-sm text-muted-foreground mt-1">บริหารโครงการจัดซื้อจัดจ้าง 10 ขั้นตอน</p>
+            <p className="text-sm text-muted-foreground mt-1">บริหารโครงการจัดซื้อจัดจ้างตามวิธีจัดซื้อ (e-bidding / เฉพาะเจาะจง)</p>
           </div>
           <button
             onClick={() => setShowCreate(true)}
@@ -175,8 +186,9 @@ function FilterSelect({ value, onChange, options }: {
 }
 
 function ProjectCard({ project }: { project: Project }) {
-  const displayStep = backendStepToUiStep(project.current_step, project.method);
-  const displayTotal = getWorkflowDisplayStepCount(project.method);
+  const method = resolveWorkflowProcurementMethod({ projectMethod: project.method });
+  const displayStep = backendStepToUiStep(project.current_step, method);
+  const displayTotal = getWorkflowDisplayStepCount(method);
   const pct = Math.round((displayStep / displayTotal) * 100);
   return (
     <Link
@@ -187,7 +199,7 @@ function ProjectCard({ project }: { project: Project }) {
       <div className="flex items-start justify-between gap-3 mb-2">
         <div className="min-w-0 flex-1">
           <h3 className="font-semibold truncate">{project.name}</h3>
-          <p className="text-xs text-muted-foreground mt-0.5">{project.project_code}</p>
+          <p className="text-xs text-muted-foreground mt-0.5">{resolveEgpProjectId(project)}</p>
         </div>
         <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary whitespace-nowrap">
           {STATUS_LABEL[project.status] ?? project.status}
@@ -200,7 +212,7 @@ function ProjectCard({ project }: { project: Project }) {
       <div className="mt-3">
         <div className="flex items-center justify-between text-xs mb-1.5 gap-2">
           <span className="text-muted-foreground truncate">
-            ขั้น {displayStep}: {getMilestoneLabel(project.current_step, true)}
+            ขั้น {displayStep}: {getWorkflowStepTitle(displayStep, method)}
           </span>
           <div className="flex items-center gap-1.5 shrink-0">
             {project.current_step >= 6 && project.appeal_status === "pending" && (
@@ -227,13 +239,13 @@ function ProjectCard({ project }: { project: Project }) {
 function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }) {
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
-  const [code, setCode] = useState("");
+  const [egpProjectId, setEgpProjectId] = useState("");
+  const [standardModelCode, setStandardModelCode] = useState("");
   const [description, setDescription] = useState("");
   const [budget, setBudget] = useState("");
   const [fiscalYear, setFiscalYear] = useState(2568);
   const [method, setMethod] = useState("e_bidding");
   const [districtOffice, setDistrictOffice] = useState("");
-  const [designCode, setDesignCode] = useState("");
   const [approvingAgency, setApprovingAgency] = useState("");
   const [procurementAgency, setProcurementAgency] = useState("");
   const [resultUnit, setResultUnit] = useState("");
@@ -247,30 +259,52 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
 
   useEffect(() => {
     console.log(
-      "🛡️ [PROJECT INITIALIZATION ACTIVE]: Master project creation form with auto-reset constraints and compliance validators is fully deployed.",
+      "🛡️ [COMPLIANCE DATA FIX DEPLOYED]: egp_project_id and standard_model_code columns with construction-only conditional UI are active.",
     );
   }, []);
+
+  const showStandardModelCode = isEgpConstructionProjectType(egpProjectType);
+
+  useEffect(() => {
+    if (!showStandardModelCode) {
+      setStandardModelCode("");
+    }
+  }, [showStandardModelCode]);
+
+  const budgetAmount = parseProcurementBudgetAmount(budget);
+  const lowBudgetLocked = isLowBudgetProcurement(budgetAmount);
+  const lowBudgetMethodConflict = isLowBudgetElectronicMethodConflict(budget, method);
+
+  useEffect(() => {
+    if (lowBudgetLocked && isProcurementMethodBlockedForLowBudget(method)) {
+      setMethod("specific");
+    }
+  }, [lowBudgetLocked, method]);
 
   const submit = async () => {
     setLoading(true); setError(null);
     try {
+      if (isLowBudgetElectronicMethodConflict(budget, method)) {
+        throw new Error(STEP1_LOW_BUDGET_EBIDDING_BLOCKED_MSG);
+      }
       const { data: u } = await supabase.auth.getUser();
       if (!u.user) throw new Error("ไม่พบผู้ใช้");
       const { data: prof } = await supabase.from("profiles").select("organization_id").eq("id", u.user.id).single();
       if (!prof?.organization_id) throw new Error("ยังไม่ได้ตั้งค่าหน่วยงาน");
 
       const newId = (globalThis.crypto as Crypto).randomUUID();
-      const { error: insErr } = await supabase.from("projects").insert({
+      const trimmedEgpId = egpProjectId.trim();
+      const trimmedStandardModel = standardModelCode.trim();
+      const baseInsert = {
         id: newId,
         organization_id: prof.organization_id,
         name,
-        project_code: code,
+        project_code: trimmedEgpId,
         description: description || null,
-        budget: Number(budget.replace(/,/g, "")),
+        budget: budgetAmount,
         fiscal_year: fiscalYear,
-        method,
+        method: normalizeProcurementMethod(coerceProcurementMethodForBudget(budget, method)),
         district_office: districtOffice || null,
-        design_code: designCode || null,
         approving_agency: approvingAgency || null,
         procurement_agency: procurementAgency || null,
         result_unit: resultUnit || null,
@@ -280,7 +314,34 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
         current_step: 1,
         status: "active",
         created_by: u.user.id,
-      });
+      };
+      const extendedInsert = {
+        ...baseInsert,
+        egp_project_id: trimmedEgpId,
+        standard_model_code:
+          showStandardModelCode && trimmedStandardModel ? trimmedStandardModel : null,
+      };
+
+      let insErr = (
+        await supabase.from("projects").insert(extendedInsert)
+      ).error;
+
+      const missingNewColumns =
+        !!insErr?.message &&
+        (insErr.message.includes("egp_project_id") ||
+          insErr.message.includes("standard_model_code") ||
+          insErr.message.includes("schema cache"));
+
+      if (missingNewColumns) {
+        insErr = (await supabase.from("projects").insert(baseInsert)).error;
+        if (!insErr) {
+          toast.warning(
+            "บันทึกโครงการแล้ว — รัน npm run db:apply-egp-columns (หรือ SQL ใน Supabase Dashboard) เพื่อเปิดใช้คอลัมน์ egp_project_id",
+            { duration: 8000 },
+          );
+        }
+      }
+
       if (insErr) throw insErr;
 
       // Auto-create 10 procurement steps (in case DB trigger not attached)
@@ -339,9 +400,6 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
           <Field label="ชื่อโครงการ *">
             <input value={name} onChange={(e) => setName(e.target.value)} className={inputCls} />
           </Field>
-          <Field label="เลขที่โครงการ e-GP / รหัสโครงการภายใน *">
-            <input value={code} onChange={(e) => setCode(e.target.value)} className={inputCls} />
-          </Field>
           <Field label="คำอธิบาย">
             <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3}
               className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
@@ -384,9 +442,13 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
               value={egpProjectType}
               onChange={(e) => {
                 setEgpProjectTypeTouched(true);
-                setEgpProjectType(e.target.value);
+                const next = e.target.value;
+                setEgpProjectType(next);
                 setResultUnit("");
                 setResultUnitOtherPending(false);
+                if (!isEgpConstructionProjectType(next)) {
+                  setStandardModelCode("");
+                }
               }}
               className={inputCls}
             >
@@ -396,6 +458,33 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
               ))}
             </select>
           </Field>
+
+          <Field label="เลขที่โครงการ e-GP / รหัสโครงการภายใน *">
+            <input
+              value={egpProjectId}
+              onChange={(e) => setEgpProjectId(e.target.value)}
+              placeholder="เช่น P6805001234"
+              className={inputCls}
+            />
+            <p className="text-xs text-muted-foreground mt-1">
+              บังคับกรอกสำหรับทุกประเภทงาน — ใช้อ้างอิงในระบบ e-GP และภายในหน่วยงาน
+            </p>
+          </Field>
+
+          {showStandardModelCode && (
+            <Field label="รหัสแบบมาตรฐาน (กรณีงานก่อสร้าง)">
+              <input
+                value={standardModelCode}
+                onChange={(e) => setStandardModelCode(e.target.value)}
+                placeholder="เช่น ฝ. ฉช.0168"
+                className={inputCls}
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                ไม่บังคับ — กรอกเมื่อมีรหัสแบบมาตรฐานอ้างอิงสำหรับงานจ้างก่อสร้าง
+              </p>
+            </Field>
+          )}
+
           <div className="grid grid-cols-2 gap-3">
             <Field label="ปีงบประมาณ">
               <select value={fiscalYear} onChange={(e) => setFiscalYear(Number(e.target.value))} className={inputCls}>
@@ -403,19 +492,41 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
               </select>
             </Field>
             <Field label="วิธีจัดซื้อ">
-              <select value={method} onChange={(e) => setMethod(e.target.value)} className={inputCls}>
-                {METHOD_OPTIONS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+              <select
+                value={method}
+                onChange={(e) => setMethod(e.target.value)}
+                className={inputCls}
+              >
+                {METHOD_OPTIONS.map((m) => (
+                  <option
+                    key={m.value}
+                    value={m.value}
+                    disabled={lowBudgetLocked && isProcurementMethodBlockedForLowBudget(m.value)}
+                  >
+                    {m.label}
+                  </option>
+                ))}
               </select>
+              {lowBudgetLocked && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  วงเงินไม่เกิน 500,000 บาท — ใช้ได้เฉพาะวิธีเฉพาะเจาะจง
+                </p>
+              )}
+              {lowBudgetMethodConflict && (
+                <p className="text-sm text-destructive mt-2 font-medium">
+                  {STEP1_LOW_BUDGET_EBIDDING_BLOCKED_MSG}
+                </p>
+              )}
             </Field>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="หน่วยงานส่วนภูมิภาค / เขตที่รับผิดชอบ">
-              <input value={districtOffice} onChange={(e) => setDistrictOffice(e.target.value)} placeholder="เช่น สพข.6 เชียงใหม่" className={inputCls} />
-            </Field>
-            <Field label="รหัสแบบ/รหัสโครงการ">
-              <input value={designCode} onChange={(e) => setDesignCode(e.target.value)} placeholder="เช่น ฝ. ฉช.0168 / 01268" className={inputCls} />
-            </Field>
-          </div>
+          <Field label="หน่วยงานส่วนภูมิภาค / เขตที่รับผิดชอบ">
+            <input
+              value={districtOffice}
+              onChange={(e) => setDistrictOffice(e.target.value)}
+              placeholder="เช่น สพข.6 เชียงใหม่"
+              className={inputCls}
+            />
+          </Field>
           <Field label="หน่วยงานที่อนุมัติเบิกจ่าย">
             <input value={approvingAgency} onChange={(e) => setApprovingAgency(e.target.value)} className={inputCls} />
           </Field>
@@ -452,12 +563,13 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
             onClick={submit}
             disabled={
               !name
-              || !code
+              || !egpProjectId.trim()
               || !budget
               || !budgetCategory
               || !egpProjectType
               || !targetQuantity
               || isStep1ResultUnitSubmitBlocked(resultUnit, resultUnitOtherPending)
+              || lowBudgetMethodConflict
               || loading
             }
             className="flex-1 h-10 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 flex items-center justify-center gap-2"

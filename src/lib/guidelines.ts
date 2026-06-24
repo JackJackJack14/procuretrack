@@ -1,3 +1,5 @@
+import { isSpecificMethodShortWorkflow } from "@/lib/dynamic-stepper";
+
 export type StepGuideline = {
   todo: string[];
   duration: string;
@@ -95,7 +97,7 @@ export const STEP_GUIDELINES: StepGuideline[] = [
 
 /** ระยะประกาศขั้นต่ำขั้นที่ 3 (เดิมขั้น 5) ตามวงเงิน e-bidding */
 export function getStep5Duration(method: string, budget: number): string {
-  if (method === "specific" || budget <= 500_000) {
+  if (isSpecificMethodShortWorkflow(method) || budget <= 500_000) {
     return "เฉพาะเจาะจง (≤500,000 บาท): ไม่ต้องประกาศ";
   }
   if (method === "selection") {

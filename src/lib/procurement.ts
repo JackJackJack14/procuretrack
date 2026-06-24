@@ -15,6 +15,7 @@ import {
   STEP6_DOC,
   STEP7_DOC,
   STEP8_DOC,
+  STEP9_DOC,
 } from "@/lib/step-doc-types";
 import { STEP1_EGP_PLAN_PUBLICATION_DOCUMENT_TYPE } from "@/lib/checklist-inline-evidence";
 
@@ -74,9 +75,8 @@ export const STEP_DOCS_DETAILED: DocItem[][] = [
     { name: STEP8_DOC.SIGNED_CONTRACT, required: true },
   ],
   [
-    { name: "ใบประกาศสาระสำคัญสัญญาจาก e-GP", required: false },
-    { name: "หนังสือแจ้งเริ่มงาน", required: false },
-    { name: "แผนปฏิบัติการก่อสร้าง (Gantt)", required: false },
+    { name: STEP9_DOC.HS1_ESSENTIAL_CONTRACT, required: true },
+    { name: STEP9_DOC.EGP_CONTRACT_STATUS_SCREENSHOT, required: false },
   ],
   [],
 ];

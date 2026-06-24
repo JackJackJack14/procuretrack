@@ -5,24 +5,25 @@ import {
   isSpecificMethodShortWorkflow,
   canNavigateToUiStep,
 } from "@/lib/dynamic-stepper";
+import { STRICT_SEQUENTIAL_NAVIGATION_MSG } from "@/lib/step-workflow";
 import { isAppealWorkflowLocked, type Step6AppealState } from "@/lib/step-form";
 
 type WorkflowStepperProps = {
   method: string;
   currentBackendStep: number;
   activeUiStep: number;
-  procurementPath?: string | null;
   step6Appeal: Step6AppealState;
   onNavigate: (uiStep: number) => void;
+  onBlockedNavigate?: (message: string) => void;
 };
 
 export function WorkflowStepper({
   method,
   currentBackendStep,
   activeUiStep,
-  procurementPath,
   step6Appeal,
   onNavigate,
+  onBlockedNavigate,
 }: WorkflowStepperProps) {
   const isSpecific = isSpecificMethodShortWorkflow(method);
   const items = getStepperDisplayItems(method);
@@ -42,24 +43,29 @@ export function WorkflowStepper({
           isAppealWorkflowLocked(step6Appeal) &&
           (item.backendStep === 7 || item.backendStep === 8);
         const canNav =
-          canNavigateToUiStep(
-            item.uiStep,
-            currentBackendStep,
-            method,
-            procurementPath,
-          ) && !isAppealLocked;
+          canNavigateToUiStep(item.uiStep, currentBackendStep, method) &&
+          !isAppealLocked;
+
+        const handleClick = () => {
+          if (isAppealLocked) return;
+          if (!canNav) {
+            onBlockedNavigate?.(STRICT_SEQUENTIAL_NAVIGATION_MSG);
+            return;
+          }
+          onNavigate(item.uiStep);
+        };
 
         return (
           <button
             key={item.uiStep}
             type="button"
             disabled={!canNav}
-            onClick={() => onNavigate(item.uiStep)}
+            onClick={handleClick}
             title={
               isAppealLocked
                 ? "ล็อก — รอผลวินิจฉัยอุทธรณ์ฟังไม่ขึ้น หรือยืนยันไม่มีผู้ยื่นอุทธรณ์"
                 : !canNav
-                  ? "ล็อก — ดำเนินการตามลำดับและกด «บันทึกและไปขั้นตอนถัดไป»"
+                  ? STRICT_SEQUENTIAL_NAVIGATION_MSG
                   : isStepCompleted
                     ? "คลิกเพื่อย้อนกลับดูข้อมูลขั้นตอนนี้"
                     : isActive

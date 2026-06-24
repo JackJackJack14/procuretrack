@@ -631,6 +631,7 @@ export type Database = {
           appeal_report_letter_no: string | null
           appeal_status: string | null
           approved_median_price: number | null
+          approved_reference_price: number | null
           approving_agency: string | null
           budget: number
           committee_appointment_mode: string | null
@@ -650,12 +651,14 @@ export type Database = {
           district_office: string | null
           egp_bid_submission_count: number | null
           egp_doc_request_count: number | null
+          egp_project_id: string | null
           estimated_price: number | null
           evaluation_report_approval_date: string | null
           evaluation_report_letter_no: string | null
           final_agreed_amount: number | null
           fiscal_year: number
           id: string
+          internal_project_code: string | null
           method: string
           median_price_approval_date: string | null
           median_approval_letter_no: string | null
@@ -669,6 +672,7 @@ export type Database = {
           project_type: string | null
           budget_category: string | null
           target_quantity: number | null
+          reference_price_document_url: string | null
           result_unit: string | null
           site_district: string | null
           site_engineer_name: string | null
@@ -678,6 +682,7 @@ export type Database = {
           site_supervisor_affiliation: string | null
           site_supervisor_name: string | null
           site_village: string | null
+          standard_model_code: string | null
           status: string
           updated_at: string
           warranty_end_date: string | null
@@ -696,6 +701,7 @@ export type Database = {
           appeal_report_letter_no?: string | null
           appeal_status?: string | null
           approved_median_price?: number | null
+          approved_reference_price?: number | null
           approving_agency?: string | null
           budget: number
           committee_appointment_mode?: string | null
@@ -715,12 +721,14 @@ export type Database = {
           district_office?: string | null
           egp_bid_submission_count?: number | null
           egp_doc_request_count?: number | null
+          egp_project_id?: string | null
           estimated_price?: number | null
           evaluation_report_approval_date?: string | null
           evaluation_report_letter_no?: string | null
           final_agreed_amount?: number | null
           fiscal_year: number
           id?: string
+          internal_project_code?: string | null
           method?: string
           median_price_approval_date?: string | null
           median_approval_letter_no?: string | null
@@ -734,6 +742,7 @@ export type Database = {
           project_type?: string | null
           budget_category?: string | null
           target_quantity?: number | null
+          reference_price_document_url?: string | null
           result_unit?: string | null
           site_district?: string | null
           site_engineer_name?: string | null
@@ -743,6 +752,7 @@ export type Database = {
           site_supervisor_affiliation?: string | null
           site_supervisor_name?: string | null
           site_village?: string | null
+          standard_model_code?: string | null
           status?: string
           updated_at?: string
           warranty_end_date?: string | null
@@ -761,6 +771,7 @@ export type Database = {
           appeal_report_letter_no?: string | null
           appeal_status?: string | null
           approved_median_price?: number | null
+          approved_reference_price?: number | null
           approving_agency?: string | null
           budget?: number
           committee_appointment_mode?: string | null
@@ -780,12 +791,14 @@ export type Database = {
           district_office?: string | null
           egp_bid_submission_count?: number | null
           egp_doc_request_count?: number | null
+          egp_project_id?: string | null
           estimated_price?: number | null
           evaluation_report_approval_date?: string | null
           evaluation_report_letter_no?: string | null
           final_agreed_amount?: number | null
           fiscal_year?: number
           id?: string
+          internal_project_code?: string | null
           method?: string
           median_price_approval_date?: string | null
           median_approval_letter_no?: string | null
@@ -799,6 +812,7 @@ export type Database = {
           project_type?: string | null
           budget_category?: string | null
           target_quantity?: number | null
+          reference_price_document_url?: string | null
           result_unit?: string | null
           site_district?: string | null
           site_engineer_name?: string | null
@@ -808,6 +822,7 @@ export type Database = {
           site_supervisor_affiliation?: string | null
           site_supervisor_name?: string | null
           site_village?: string | null
+          standard_model_code?: string | null
           status?: string
           updated_at?: string
           warranty_end_date?: string | null

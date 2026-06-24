@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Plus, Trash2, Download, ChevronDown, FileText, Loader2, FolderOpen, CheckCircle2 } from "lucide-react";
 import { ChronologicalDatePicker } from "@/components/ChronologicalDatePicker";
+import { ThaiDatePicker } from "@/components/ThaiDatePicker";
 import { formatThaiDate, formatThaiDateSlash } from "@/lib/utils";
 import {
   countWorkdaysAfterStartISO,
@@ -43,6 +44,7 @@ import {
   STEP2_DOC,
   STEP2_APPOINTMENT_ORDER_UPLOAD_LABEL,
   STEP2_BOQ_UPLOAD_LABEL,
+  STEP2_REFERENCE_PRICE_UPLOAD_LABEL,
   STEP2_BG06_UPLOAD_LABEL,
   STEP2_INTEGRITY_LETTER_UPLOAD_LABEL,
   STEP2_EVALUATION_INSPECTION_ORDER_UPLOAD_LABEL,
@@ -50,6 +52,7 @@ import {
   step2MarketQuoteDocType,
   step2MarketQuoteUploadLabel,
   countStep2MarketQuoteDocsUploaded,
+  STEP2_SPECIFIC_QUOTATION_UPLOAD_LABEL,
   STEP5_DOC,
   STEP5_ALL_BIDDERS_RESULT_UPLOAD_LABEL,
   STEP4_DOC,
@@ -199,7 +202,8 @@ import {
   isStep8SignedOutsideAllowedRange,
   hasStep8SignedContractDoc,
   hasStep8GuaranteeVerificationDoc,
-  computeStep9ContractEndDateISO,
+  computeStep9ContractDurationDays,
+  syncStep9ContractDurationFromDates,
   syncStep9WorkStartDate,
   sanitizeStep9WorkStartAgainstSignedDate,
   isISODateBefore,
@@ -224,7 +228,7 @@ import {
   computeStep9EgpDeadlineISO,
   getStep9EgpPublicationTooLateMsg,
   isStep9EgpPublicationTooLate,
-  STEP9_EGP_DEADLINE_CALENDAR_DAYS,
+  STEP9_ARTICLE_98_DEADLINE_CALENDAR_DAYS,
 } from "@/lib/step9-guideline";
 import { toast } from "sonner";
 import { formatBaht } from "@/lib/procurement";
@@ -263,6 +267,13 @@ import {
   isExternalProcurement,
 } from "@/lib/procurement-path";
 import { ProvinceSearchSelect } from "@/components/ProvinceSearchSelect";
+import {
+  isLowBudgetElectronicMethodConflict,
+  isLowBudgetProcurement,
+  isProcurementMethodBlockedForLowBudget,
+  parseProcurementBudgetAmount,
+  STEP1_LOW_BUDGET_EBIDDING_BLOCKED_MSG,
+} from "@/lib/procurement-budget-rules";
 import { hasStep1PlanPublicationDoc, STEP1_EGP_PLAN_PUBLICATION_DOCUMENT_TYPE } from "@/lib/checklist-inline-evidence";
 import {
   EMPTY_STEP1_SPECIFIC_WORKFLOW,
@@ -272,6 +283,19 @@ import {
   type Step1SpecificInspector,
   type Step1SpecificWorkflowFields,
 } from "@/lib/step1-specific-workflow";
+import {
+  buildStep2SpecificQuotationSummary,
+  isStep2SpecificFinalOverOriginal,
+  isStep2SpecificQuotationOverBudget,
+  STEP2_SPECIFIC_QUOTATION_DATE_HINT,
+  STEP2_SPECIFIC_QUOTATION_DATE_INVALID_MSG,
+  isStep2SpecificQuotationDateValid,
+  resolveStep2SpecificQuotationDateBounds,
+  STEP2_QUOTATION_SOURCE_OPTIONS,
+  STEP2_SPECIFIC_FINAL_OVER_ORIGINAL_MSG,
+  STEP2_SPECIFIC_QUOTATION_OVER_BUDGET_MSG,
+  type Step2SpecificQuotation,
+} from "@/lib/step2-specific-quotation";
 import { isSpecificMethodShortWorkflow } from "@/lib/dynamic-stepper";
 import {
   STEP8_FORM_HEADER,
@@ -712,6 +736,15 @@ export function Step1DetailForm({
   const showSpecificMethodBudgetWarning =
     shouldShowStep1SpecificMethodBudgetComplianceWarning(budget, method);
   const isSpecificMethod = isSpecificMethodShortWorkflow(method);
+  const budgetAmount = parseProcurementBudgetAmount(budget);
+  const lowBudgetLocked = isLowBudgetProcurement(budgetAmount);
+  const lowBudgetMethodConflict = isLowBudgetElectronicMethodConflict(budget, method);
+
+  useEffect(() => {
+    if (!readOnly && lowBudgetLocked && isProcurementMethodBlockedForLowBudget(method)) {
+      onMethodChange("specific");
+    }
+  }, [lowBudgetLocked, method, onMethodChange, readOnly]);
   const siteDetailRequired = !isStep1SiteDetailOptional(projectProfile.project_type);
   const siteDetailLabelSuffix = siteDetailRequired ? " *" : "";
   const [profilePosition, setProfilePosition] = useState<string | null>(null);
@@ -914,14 +947,28 @@ export function Step1DetailForm({
           className={inputCls}
         >
           {STEP1_METHOD_OPTIONS.map((m) => (
-            <option key={m.value} value={m.value}>
+            <option
+              key={m.value}
+              value={m.value}
+              disabled={lowBudgetLocked && isProcurementMethodBlockedForLowBudget(m.value)}
+            >
               {m.label}
             </option>
           ))}
         </select>
-        {!isSpecificMethod && (
+        {lowBudgetLocked && (
+          <p className="text-xs text-muted-foreground mt-1">
+            วงเงินไม่เกิน 500,000 บาท — ใช้ได้เฉพาะวิธีเฉพาะเจาะจงตามระเบียบพัสดุ
+          </p>
+        )}
+        {!isSpecificMethod && !lowBudgetLocked && (
           <p className="text-xs text-muted-foreground mt-1">
             ใช้ร่วมกับวงเงินงบประมาณในการคำนวณวันทำการขั้นต่ำของระบบ
+          </p>
+        )}
+        {lowBudgetMethodConflict && (
+          <p className="text-sm text-destructive mt-2 font-medium">
+            {STEP1_LOW_BUDGET_EBIDDING_BLOCKED_MSG}
           </p>
         )}
         {showSpecificMethodBudgetWarning && (
@@ -1087,7 +1134,7 @@ export function Step1DetailForm({
               className={inputCls}
             />
           </FieldRow>
-          <FieldRow label="จังหวัด (ลำพูน) *">
+          <FieldRow label="จังหวัด *">
             <ProvinceSearchSelect
               value={projectProfile.site_province}
               onChange={(v) => onProjectProfileChange({ site_province: v })}
@@ -1143,6 +1190,13 @@ type Step2FormProps = {
   };
   /** วิธีเฉพาะเจาะจง — แสดงเฉพาะกลุ่มใบเสนอราคา */
   specificQuotationMode?: boolean;
+  specificQuotation?: Step2SpecificQuotation;
+  onSpecificQuotationChange?: (patch: Partial<Step2SpecificQuotation>) => void;
+  specificWorkflow?: Step1SpecificWorkflowFields;
+  /** ปีงบประมาณโครงการ — ใช้กำหนดขอบเขตวันที่ใบเสนอราคา (วิธีเฉพาะเจาะจง) */
+  fiscalYear?: number;
+  /** ประเภทโครงการ e-GP จากขั้นตอนที่ 1 — กำหนดฟอร์มสืบราคาตลาด vs งานก่อสร้าง */
+  projectType?: string;
 } & ChronologicalFormProps;
 
 function CommitteeMemberList({
@@ -1390,7 +1444,7 @@ function Step2MarketQuotesModal({
   );
 }
 
-/** ขั้นตอนที่ 2 — แต่งตั้งคณะกรรมการและกำหนดราคากลาง */
+/** ขั้นตอนที่ 2 — แต่งตั้งคณะกรรมการและกำหนดราคากลาง (e-Bidding) / บันทึกผลการสืบราคา (วิธีเฉพาะเจาะจง) */
 export function Step2DetailForm({
   checklist: _checklist,
   onChecklistChange: _onChecklistChange,
@@ -1417,7 +1471,14 @@ export function Step2DetailForm({
   step2GateDebug,
   chronologicalCtx,
   specificQuotationMode = false,
+  specificQuotation,
+  onSpecificQuotationChange,
+  specificWorkflow,
+  fiscalYear = 0,
+  projectType = "",
 }: Step2FormProps) {
+  const isConstructionWorkflow = isEgpConstructionProjectType(projectType);
+  const showMarketQuotesGroup = !isConstructionWorkflow;
   const medianOverBudget = isStep2MedianPriceOverBudget(
     medianPrice.approved_median_price,
     step1Budget,
@@ -1449,6 +1510,34 @@ export function Step2DetailForm({
     (q) => !!q.supplier_name.trim() && q.quoted_price != null && q.quoted_price > 0,
   ).length;
 
+  const quotationOverBudget =
+    specificQuotationMode &&
+    isStep2SpecificQuotationOverBudget(specificQuotation?.final_price, step1Budget);
+  const finalOverOriginal =
+    specificQuotationMode &&
+    isStep2SpecificFinalOverOriginal(
+      specificQuotation?.final_price,
+      specificQuotation?.original_price,
+    );
+  const quotationSummary =
+    specificQuotationMode && specificQuotation
+      ? buildStep2SpecificQuotationSummary({
+          quotation: specificQuotation,
+          approvedBudget: step1Budget,
+          specificWorkflow,
+        })
+      : null;
+
+  const quotationDateBounds =
+    specificQuotationMode && fiscalYear > 0
+      ? resolveStep2SpecificQuotationDateBounds(fiscalYear)
+      : null;
+  const quotationDateInvalid =
+    specificQuotationMode &&
+    !!specificQuotation?.quotation_date?.trim() &&
+    fiscalYear > 0 &&
+    !isStep2SpecificQuotationDateValid(specificQuotation.quotation_date, fiscalYear);
+
   useEffect(() => {
     if (!step2GateDebug) return;
     const { autoCheckStates, ...opts } = step2GateDebug;
@@ -1465,7 +1554,7 @@ export function Step2DetailForm({
     <div className="space-y-4 max-w-2xl">
       {specificQuotationMode && (
         <p className="text-sm font-medium text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-md px-3 py-2">
-          โหมดวิธีเฉพาะเจาะจง — บันทึกใบเสนอราคา (Quotation) อย่างน้อย 3 ราย
+          วิธีเฉพาะเจาะจง — บันทึกผลการสืบราคาและเจรจาต่อรองจากผู้ประกอบการรายเดียว
         </p>
       )}
       {!specificQuotationMode && (
@@ -1641,12 +1730,12 @@ export function Step2DetailForm({
           {medianOverBudget && (
             <p className="text-sm text-destructive mt-2 font-medium">{STEP2_MEDIAN_OVER_BUDGET_MSG}</p>
           )}
-          {marketPriceDeviationHigh && (
+          {!isConstructionWorkflow && marketPriceDeviationHigh && (
             <p className="text-sm text-warning mt-2 font-medium">
               {STEP2_MEDIAN_PRICE_DEVIATION_WARNING_MSG}
             </p>
           )}
-          {marketSurveyAverage != null && medianPrice.approved_median_price != null && (
+          {!isConstructionWorkflow && marketSurveyAverage != null && medianPrice.approved_median_price != null && (
             <p className="text-xs text-muted-foreground mt-1">
               ราคาเฉลี่ยจากการสืบราคา: {formatBaht(marketSurveyAverage)} บาท
             </p>
@@ -1716,12 +1805,180 @@ export function Step2DetailForm({
       </>
       )}
 
+      {specificQuotationMode ? (
+        <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
+          <SectionTitle>บันทึกผลการสืบราคาและเจรจาต่อรอง</SectionTitle>
+          {step1Budget > 0 && (
+            <p className="text-xs text-muted-foreground">
+              วงเงินงบประมาณที่ได้รับอนุมัติ (ขั้นตอนที่ 1):{" "}
+              <span className="font-medium text-foreground">{formatBaht(step1Budget)} บาท</span>
+            </p>
+          )}
+          {specificWorkflow?.spec?.trim() && (
+            <p className="text-xs text-muted-foreground">
+              ฐานอ้างอิง Spec (ขั้นตอนที่ 1): {specificWorkflow.spec.trim()}
+            </p>
+          )}
+          <FieldRow label="ชื่อร้านค้า/ผู้เสนอราคา *">
+            <input
+              value={specificQuotation?.vendor_name ?? ""}
+              onChange={(e) => onSpecificQuotationChange?.({ vendor_name: e.target.value })}
+              placeholder="ชื่อร้านค้า/ผู้เสนอราคา"
+              disabled={readOnly}
+              className={inputCls}
+            />
+          </FieldRow>
+          <FieldRow label="เลขที่ใบเสนอราคา *">
+            <input
+              value={specificQuotation?.quotation_no ?? ""}
+              onChange={(e) => onSpecificQuotationChange?.({ quotation_no: e.target.value })}
+              placeholder="เช่น QT-2568/001"
+              disabled={readOnly}
+              className={inputCls}
+            />
+          </FieldRow>
+          <FieldRow label="วันที่ในใบเสนอราคา *">
+            <ThaiDatePicker
+              value={specificQuotation?.quotation_date ?? ""}
+              onChange={(v) => onSpecificQuotationChange?.({ quotation_date: v })}
+              disabled={readOnly}
+              minDate={quotationDateBounds?.minDate}
+              maxDate={quotationDateBounds?.maxDate}
+              className={inputCls}
+            />
+            <p className="text-xs text-muted-foreground mt-1">
+              {STEP2_SPECIFIC_QUOTATION_DATE_HINT}
+            </p>
+            {quotationDateInvalid && (
+              <p className="text-sm text-destructive font-medium mt-2">
+                {STEP2_SPECIFIC_QUOTATION_DATE_INVALID_MSG}
+              </p>
+            )}
+            {specificQuotation?.quotation_date && !quotationDateInvalid && (
+              <p className="text-xs text-muted-foreground mt-1">
+                {formatThaiDate(specificQuotation.quotation_date)}
+              </p>
+            )}
+          </FieldRow>
+          <FieldRow label="วิธีการสืบราคา *">
+            <select
+              value={specificQuotation?.quotation_source ?? ""}
+              onChange={(e) =>
+                onSpecificQuotationChange?.({
+                  quotation_source: e.target.value as Step2SpecificQuotation["quotation_source"],
+                })
+              }
+              disabled={readOnly}
+              className={inputCls}
+            >
+              <option value="">— เลือกวิธีการสืบราคา —</option>
+              {STEP2_QUOTATION_SOURCE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </FieldRow>
+          <FieldRow label="ราคาที่เสนอครั้งแรก (บาท) *">
+            <CurrencyInput
+              value={specificQuotation?.original_price ?? null}
+              onChange={(original_price) => onSpecificQuotationChange?.({ original_price })}
+              readOnly={readOnly}
+              className={inputCls}
+              showFormattedHint
+            />
+          </FieldRow>
+          <FieldRow label="ราคาที่ตกลงหลังเจรจาต่อรอง (บาท) *">
+            <CurrencyInput
+              value={specificQuotation?.final_price ?? null}
+              onChange={(final_price) => onSpecificQuotationChange?.({ final_price })}
+              readOnly={readOnly}
+              className={inputCls}
+              showFormattedHint
+            />
+            {quotationOverBudget && (
+              <p className="text-sm text-destructive font-medium mt-2">
+                {STEP2_SPECIFIC_QUOTATION_OVER_BUDGET_MSG}
+              </p>
+            )}
+            {finalOverOriginal && (
+              <p className="text-sm text-destructive font-medium mt-2">
+                {STEP2_SPECIFIC_FINAL_OVER_ORIGINAL_MSG}
+              </p>
+            )}
+            {quotationSummary?.negotiationSavings != null &&
+              quotationSummary.negotiationSavings > 0 && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  ประหยัดจากการเจรจาต่อรอง {formatBaht(quotationSummary.negotiationSavings)} บาท
+                </p>
+              )}
+            {quotationSummary?.budgetSavings != null && quotationSummary.budgetSavings >= 0 && (
+              <p className="text-xs text-muted-foreground mt-1">
+                ประหยัดงบประมาณได้ {formatBaht(quotationSummary.budgetSavings)} บาท
+              </p>
+            )}
+          </FieldRow>
+          <FieldRow label="เหตุผลที่เลือกผู้ประกอบการรายนี้ *">
+            <textarea
+              value={specificQuotation?.selection_reason ?? ""}
+              onChange={(e) =>
+                onSpecificQuotationChange?.({ selection_reason: e.target.value })
+              }
+              placeholder="เช่น มีสินค้าพร้อมส่งตรงตามความต้องการ, ราคาต่ำสุด"
+              disabled={readOnly}
+              rows={3}
+              className={`${inputCls} resize-y min-h-[4.5rem]`}
+            />
+          </FieldRow>
+          <FieldRow label="ไฟล์ PDF ใบเสนอราคา *">
+            <InlineDocUpload
+              project={docBinder.project}
+              stepNumber={docBinder.stepNumber}
+              documentType={STEP2_DOC.SPECIFIC_QUOTATION}
+              label={STEP2_SPECIFIC_QUOTATION_UPLOAD_LABEL}
+              existing={docBinder.docs}
+              onChange={docBinder.onDocsChange}
+            />
+          </FieldRow>
+        </div>
+      ) : isConstructionWorkflow ? (
+        <div className="rounded-lg border border-sky-200 bg-sky-50/80 dark:bg-sky-950/30 p-4 space-y-4">
+          <SectionTitle>สรุปราคารวมตามงบประมาณผูกพันงานก่อสร้าง</SectionTitle>
+          <p className="text-xs text-sky-800 dark:text-sky-200 leading-relaxed">
+            งานจ้างก่อสร้าง — ไม่ต้องสืบราคาท้องตลาด 3 ราย ให้บันทึกยอดรวมราคากลางสุทธิจากการถอดแบบและแนบเล่ม ปร.4/ปร.5/ปร.6 หรือ BOQ
+          </p>
+          <FieldRow label="ยอดรวมราคากลางสุทธิจากการถอดแบบ (บาท) *">
+            <CurrencyInput
+              value={medianPrice.approved_reference_price}
+              onChange={(approved_reference_price) =>
+                onMedianPriceChange({ approved_reference_price })
+              }
+              disabled={readOnly}
+              className={inputCls}
+              showFormattedHint
+            />
+            {step1Budget > 0 &&
+              medianPrice.approved_reference_price != null &&
+              medianPrice.approved_reference_price > step1Budget && (
+                <p className="text-sm text-destructive mt-2 font-medium">
+                  {STEP2_MEDIAN_OVER_BUDGET_MSG}
+                </p>
+              )}
+          </FieldRow>
+          <FieldRow label="เอกสารตารางสรุปราคารวม ปร.4, ปร.5, ปร.6 หรือเล่ม BOQ *">
+            <InlineDocUpload
+              project={docBinder.project}
+              stepNumber={docBinder.stepNumber}
+              documentType={STEP2_DOC.REFERENCE_PRICE_SUMMARY}
+              label={STEP2_REFERENCE_PRICE_UPLOAD_LABEL}
+              existing={docBinder.docs}
+              onChange={docBinder.onDocsChange}
+            />
+          </FieldRow>
+        </div>
+      ) : showMarketQuotesGroup ? (
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-3">
-        <SectionTitle>
-          {specificQuotationMode
-            ? "ใบเสนอราคา (Quotation)"
-            : "กลุ่มที่ 3: ใบเสนอราคาท้องตลาด (อย่างน้อย 3 ราย)"}
-        </SectionTitle>
+        <SectionTitle>กลุ่มที่ 3: ใบเสนอราคาท้องตลาด (อย่างน้อย 3 ราย)</SectionTitle>
         <div className="flex flex-wrap items-center gap-3">
           <Step2MarketQuotesModal
             committees={committees}
@@ -1754,6 +2011,7 @@ export function Step2DetailForm({
           กดปุ่ม &quot;จัดการราคาตลาด&quot; เพื่อกรอกข้อมูลซัพพลายเออร์และแนบไฟล์หลักฐานแยกราย
         </p>
       </div>
+      ) : null}
 
       <ResponsibleOfficerField
         stepNumber={2}
@@ -4563,6 +4821,8 @@ type Step7ContractNoticeFormProps = {
   appealDeadlineISO: string;
   notificationDeadlineISO: string;
   letterDateTooLate?: boolean;
+  egpProjectId?: string;
+  standardModelCode?: string;
   readOnly?: boolean;
   docBinder: SmartChecklistDocBinder;
   responsibleName: string;
@@ -4581,6 +4841,8 @@ export function Step7ContractNoticeForm({
   appealDeadlineISO,
   notificationDeadlineISO,
   letterDateTooLate,
+  egpProjectId = "",
+  standardModelCode = "",
   readOnly,
   docBinder,
   responsibleName,
@@ -4669,6 +4931,28 @@ export function Step7ContractNoticeForm({
             aria-readonly
           />
         </FieldRow>
+        {egpProjectId.trim() && (
+          <FieldRow label="เลขที่โครงการ e-GP / รหัสโครงการภายใน">
+            <input
+              type="text"
+              readOnly
+              value={egpProjectId.trim()}
+              className={`${inputCls} bg-muted/50 cursor-not-allowed`}
+              aria-readonly
+            />
+          </FieldRow>
+        )}
+        {standardModelCode.trim() && (
+          <FieldRow label="รหัสแบบมาตรฐาน (งานก่อสร้าง)">
+            <input
+              type="text"
+              readOnly
+              value={standardModelCode.trim()}
+              className={`${inputCls} bg-muted/50 cursor-not-allowed`}
+              aria-readonly
+            />
+          </FieldRow>
+        )}
         <FieldRow label="มูลค่าโครงการที่ชนะ (บาท)">
           <input
             type="text"
@@ -4880,6 +5164,8 @@ type Step8ContractGuaranteeFormProps = {
   step7SigningDeadlineISO: string;
   earliestSigningISO: string;
   appealDeadlineISO: string;
+  egpProjectId?: string;
+  standardModelCode?: string;
   readOnly?: boolean;
   docBinder: SmartChecklistDocBinder;
 } & ChronologicalFormProps;
@@ -4894,6 +5180,8 @@ export function Step8ContractGuaranteeForm({
   step7SigningDeadlineISO,
   earliestSigningISO,
   appealDeadlineISO,
+  egpProjectId = "",
+  standardModelCode = "",
   readOnly,
   docBinder,
   chronologicalCtx,
@@ -4968,6 +5256,28 @@ export function Step8ContractGuaranteeForm({
             aria-readonly
           />
         </FieldRow>
+        {egpProjectId.trim() && (
+          <FieldRow label="เลขที่โครงการ e-GP / รหัสโครงการภายใน">
+            <input
+              type="text"
+              readOnly
+              value={egpProjectId.trim()}
+              className={`${inputCls} bg-muted/50 cursor-not-allowed`}
+              aria-readonly
+            />
+          </FieldRow>
+        )}
+        {standardModelCode.trim() && (
+          <FieldRow label="รหัสแบบมาตรฐาน (งานก่อสร้าง)">
+            <input
+              type="text"
+              readOnly
+              value={standardModelCode.trim()}
+              className={`${inputCls} bg-muted/50 cursor-not-allowed`}
+              aria-readonly
+            />
+          </FieldRow>
+        )}
         <FieldRow label="วงเงินราคาที่ตกลงซื้อจ้าง (บาท)">
           <input
             type="text"
@@ -5151,8 +5461,12 @@ type Step9DetailFormProps = {
   docsForStep: StepDocRecord[];
   onDocsChange: () => void;
   projectName: string;
-  /** วันที่ลงนามในสัญญา (ขั้น 8) — ใช้เป็น minDate ของวันเริ่มปฏิบัติงาน */
+  /** วันที่ลงนามสัญญาจริง (ขั้นตอนที่ 8) */
   contractSignedDate?: string;
+  winningBidderName?: string;
+  contractAmount?: number | null;
+  egpProjectId?: string;
+  standardModelCode?: string;
   /** รูปแบบจัดซื้อจาก Step 1 — ใช้แสดงกล่องพิเศษเมื่อ external */
   procurementPath?: ProcurementPath | string | null;
   projectProfile: Step1ProjectProfile;
@@ -5364,49 +5678,44 @@ export function Step9ExternalContractCapturePanel({
   );
 }
 
-/** ขั้นตอนที่ 9 — บันทึกสาระสำคัญสัญญา (Smart ระยะเวลา/งวดงาน) */
+/** ขั้นตอนที่ 9 — บันทึกสาระสำคัญสัญญาใน e-GP (มาตรา 98) */
 export function Step9DetailForm({
-  manualChecklist,
-  onManualChange,
-  autoCheckStates,
   contractSchedule,
   onContractScheduleChange,
   readOnly,
-  docBinder,
   responsibleName,
   onResponsibleNameChange,
   step1ResponsibleDefault = "",
   note,
   onNoteChange,
   project,
-  docList,
   docsForStep,
   onDocsChange,
-  projectName,
   contractSignedDate = "",
-  procurementPath,
-  projectProfile,
-  onProjectProfileChange,
-  medianPrice,
-  onMedianPriceChange,
-  bidResult,
-  onBidResultChange,
-  step1Budget = 0,
+  winningBidderName = "",
+  contractAmount = null,
+  egpProjectId = "",
+  standardModelCode = "",
   chronologicalCtx,
 }: Step9DetailFormProps) {
+  console.log(
+    "🛡️ [ขั้นตอนที่ 9 DEPLOYED]: e-GP Contract Registration with Live Duration Calculator and Strict Date Validation is active.",
+  );
+
   const schedule = contractSchedule ?? { ...EMPTY_STEP9_CONTRACT_SCHEDULE };
   const signedISO = contractSignedDate?.trim() || "";
-  const workStart = schedule.work_start_date?.trim() || schedule.notice_to_proceed_date?.trim() || "";
-  const workStartInvalid =
-    !!signedISO && !!workStart && isISODateBefore(workStart, signedISO);
-  const contractEndISO = computeStep9ContractEndDateISO(
-    workStartInvalid ? "" : workStart,
-    schedule.contract_duration_days,
-  );
-  const durationDisplay =
-    schedule.contract_duration_days != null && schedule.contract_duration_days > 0
-      ? String(schedule.contract_duration_days)
-      : "";
+  const contractStart = schedule.work_start_date?.trim() || "";
+  const contractEnd = schedule.contract_end_date?.trim() || "";
+  const startInvalid = !!signedISO && !!contractStart && isISODateBefore(contractStart, signedISO);
+  const endInvalid =
+    !!contractStart && !!contractEnd && !isISODateBefore(contractStart, contractEnd);
+  const durationDays =
+    !startInvalid && !endInvalid
+      ? computeStep9ContractDurationDays(
+          startInvalid ? "" : contractStart,
+          endInvalid ? "" : contractEnd,
+        )
+      : null;
   const installmentDisplay =
     schedule.total_installment_count != null && schedule.total_installment_count > 0
       ? String(schedule.total_installment_count)
@@ -5414,112 +5723,108 @@ export function Step9DetailForm({
   const egpPublication = schedule.egp_essential_publication_date?.trim() || "";
   const egpDeadlineISO = signedISO ? computeStep9EgpDeadlineISO(signedISO) : null;
   const egpPublicationTooLate =
-    !!signedISO &&
-    !!egpPublication &&
-    isStep9EgpPublicationTooLate(egpPublication, signedISO);
+    !!signedISO && !!egpPublication && isStep9EgpPublicationTooLate(egpPublication, signedISO);
+  const egpPublicationBeforeSigned =
+    !!signedISO && !!egpPublication && isISODateBefore(egpPublication, signedISO);
   const [egpPublicationRejected, setEgpPublicationRejected] = useState(false);
 
   useEffect(() => {
     if (!signedISO || readOnly) return;
-    const current =
-      schedule.work_start_date?.trim() || schedule.notice_to_proceed_date?.trim() || "";
+    const current = schedule.work_start_date?.trim() || "";
     if (!current || !isISODateBefore(current, signedISO)) return;
     onContractScheduleChange(
       sanitizeStep9WorkStartAgainstSignedDate(schedule, signedISO),
     );
-  }, [
-    signedISO,
-    readOnly,
-    schedule.work_start_date,
-    schedule.notice_to_proceed_date,
-    onContractScheduleChange,
-    schedule,
-  ]);
+  }, [signedISO, readOnly, schedule.work_start_date, onContractScheduleChange, schedule]);
 
-  const patchWorkStart = (iso: string) => {
+  const patchContractStart = (iso: string) => {
     if (signedISO && iso && isISODateBefore(iso, signedISO)) return;
-    onContractScheduleChange(syncStep9WorkStartDate(schedule, iso));
+    const next = syncStep9WorkStartDate(schedule, iso);
+    onContractScheduleChange(syncStep9ContractDurationFromDates(next));
+  };
+
+  const patchContractEnd = (iso: string) => {
+    if (contractStart && iso && !isISODateBefore(contractStart, iso)) return;
+    const next = { ...schedule, contract_end_date: iso };
+    onContractScheduleChange(syncStep9ContractDurationFromDates(next));
   };
 
   return (
     <div className="space-y-4 max-w-2xl">
-      <GenericStepChecklistPanel
-        stepNumber={9}
-        manualChecklist={manualChecklist}
-        onManualChange={onManualChange}
-        autoCheckStates={autoCheckStates}
-        readOnly={readOnly}
-        docBinder={docBinder}
-      />
-
-      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-5">
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
         <p className="text-sm font-medium text-foreground">{STEP9_FORM_HEADER}</p>
 
-        <div className="space-y-4">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-            กลุ่มที่ 1: ข้อมูลเชื่อมโยงระบบ e-GP
+        <div className="space-y-4 rounded-md border border-border/60 bg-background/50 p-4">
+          <p className="text-sm font-medium text-foreground">
+            ข้อมูลอ้างอิงจากขั้นตอนที่ 8 (อ่านอย่างเดียว)
           </p>
-          <FieldRow
-            label="วันที่ประกาศสาระสำคัญสัญญาใน e-GP"
-            tooltipKey="step9.egp_essential_publication_date"
-          >
-            <div className="space-y-1">
-              <ChronologicalDatePicker
-                stepNumber={9}
-                chronologicalCtx={chronologicalCtx}
-                additionalMinDates={[signedISO]}
-                value={egpPublication}
-                onChange={(v) => {
-                  if (
-                    signedISO &&
-                    v &&
-                    isStep9EgpPublicationTooLate(v, signedISO)
-                  ) {
-                    setEgpPublicationRejected(true);
-                    if (egpDeadlineISO) {
-                      toast.error(getStep9EgpPublicationTooLateMsg(egpDeadlineISO));
-                    }
-                    return;
-                  }
-                  setEgpPublicationRejected(false);
-                  onContractScheduleChange({ egp_essential_publication_date: v });
-                }}
-                maxDate={egpDeadlineISO || undefined}
-                disabled={readOnly || !signedISO}
-                onInvalidDate={() => {
-                  setEgpPublicationRejected(true);
-                  if (egpDeadlineISO) {
-                    toast.error(getStep9EgpPublicationTooLateMsg(egpDeadlineISO));
-                  }
-                }}
-                showChronologicalHint={false}
-              />
-              {!signedISO && (
-                <p className="text-xs text-destructive">
-                  กรุณาบันทึกวันที่ลงนามในสัญญาในขั้นตอนที่ 8 ก่อน
-                </p>
-              )}
-              {signedISO && egpDeadlineISO && (
-                <p className="text-xs text-muted-foreground">
-                  เลือกได้ตั้งแต่ {formatThaiDateSlash(signedISO)} ถึง{" "}
-                  {formatThaiDateSlash(egpDeadlineISO)} ({STEP9_EGP_DEADLINE_CALENDAR_DAYS}{" "}
-                  วันปฏิทินนับจากวันลงนาม)
-                </p>
-              )}
-              {egpPublication && !egpPublicationTooLate && !egpPublicationRejected && (
-                <p className="text-xs text-muted-foreground">
-                  📅 {formatThaiDate(egpPublication)}
-                </p>
-              )}
-              {(egpPublicationTooLate || egpPublicationRejected) && egpDeadlineISO && (
-                <p className="text-xs text-destructive font-medium">
-                  {getStep9EgpPublicationTooLateMsg(egpDeadlineISO)}
-                </p>
-              )}
-            </div>
+          <FieldRow label="ชื่อผู้เสนอราคาที่ชนะการเสนอราคา">
+            <input
+              type="text"
+              readOnly
+              disabled
+              value={winningBidderName?.trim() || "— ยังไม่พบข้อมูลจากขั้นตอนที่ 8 —"}
+              className={`${inputCls} bg-muted/50 cursor-not-allowed`}
+              aria-readonly
+            />
           </FieldRow>
+          {egpProjectId.trim() && (
+            <FieldRow label="เลขที่โครงการ e-GP / รหัสโครงการภายใน">
+              <input
+                type="text"
+                readOnly
+                disabled
+                value={egpProjectId.trim()}
+                className={`${inputCls} bg-muted/50 cursor-not-allowed`}
+                aria-readonly
+              />
+            </FieldRow>
+          )}
+          {standardModelCode.trim() && (
+            <FieldRow label="รหัสแบบมาตรฐาน (งานก่อสร้าง)">
+              <input
+                type="text"
+                readOnly
+                disabled
+                value={standardModelCode.trim()}
+                className={`${inputCls} bg-muted/50 cursor-not-allowed`}
+                aria-readonly
+              />
+            </FieldRow>
+          )}
+          <FieldRow label="วงเงินราคาที่ตกลงซื้อจ้างจริง">
+            <input
+              type="text"
+              readOnly
+              disabled
+              value={
+                contractAmount != null && contractAmount > 0
+                  ? `${formatCurrencyDisplay(contractAmount)} บาท`
+                  : "— ยังไม่พบข้อมูลจากขั้นตอนที่ 8 —"
+              }
+              className={`${inputCls} bg-muted/50 cursor-not-allowed tabular-nums`}
+              aria-readonly
+            />
+          </FieldRow>
+          <FieldRow label="วันที่ลงนามสัญญาจริง">
+            <input
+              type="text"
+              readOnly
+              disabled
+              value={
+                signedISO
+                  ? formatThaiDateSlash(signedISO)
+                  : "— บันทึกวันที่ลงนามในขั้นตอนที่ 8 ก่อน —"
+              }
+              className={`${inputCls} bg-muted/50 cursor-not-allowed`}
+              aria-readonly
+            />
+          </FieldRow>
+        </div>
+
+        <div className="space-y-4">
           <FieldRow
-            label="เลขคุมสัญญาจากระบบ e-GP"
+            label="เลขที่สัญญาจากระบบ e-GP *"
             tooltipKey="step9.egp_contract_control_no"
           >
             <input
@@ -5533,34 +5838,148 @@ export function Step9DetailForm({
               placeholder="เช่น C6805001234"
             />
           </FieldRow>
-        </div>
 
-        <div className="space-y-4 pt-1 border-t border-border/60">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-            กลุ่มที่ 2: ข้อมูลระยะเวลาและงวดงาน
-          </p>
           <FieldRow
-            label="ระยะเวลาทำงานตามสัญญา (วัน)"
-            tooltipKey="step9.contract_duration_days"
+            label="วันที่ประกาศเผยแพร่สาระสำคัญในระบบ e-GP *"
+            tooltipKey="step9.egp_essential_publication_date"
           >
+            <div className="space-y-1">
+              <ChronologicalDatePicker
+                stepNumber={9}
+                chronologicalCtx={chronologicalCtx}
+                additionalMinDates={[signedISO]}
+                value={egpPublication}
+                onChange={(v) => {
+                  if (signedISO && v && isISODateBefore(v, signedISO)) {
+                    setEgpPublicationRejected(true);
+                    toast.error(
+                      `วันที่ประกาศสาระสำคัญต้องไม่ก่อนวันลงนามสัญญา — เลือกได้ตั้งแต่ ${formatThaiDateSlash(signedISO)} เป็นต้นไป`,
+                    );
+                    return;
+                  }
+                  setEgpPublicationRejected(false);
+                  onContractScheduleChange({ egp_essential_publication_date: v });
+                }}
+                disabled={readOnly || !signedISO}
+                onInvalidDate={() => {
+                  setEgpPublicationRejected(true);
+                  toast.error(
+                    signedISO
+                      ? `วันที่ประกาศสาระสำคัญต้องไม่ก่อนวันลงนามสัญญา — เลือกได้ตั้งแต่ ${formatThaiDateSlash(signedISO)} เป็นต้นไป`
+                      : "กรุณาบันทึกวันที่ลงนามสัญญาในขั้นตอนที่ 8 ก่อน",
+                  );
+                }}
+                showChronologicalHint={false}
+              />
+              {!signedISO && (
+                <p className="text-xs text-destructive">
+                  กรุณาบันทึกวันที่ลงนามสัญญาในขั้นตอนที่ 8 ก่อน
+                </p>
+              )}
+              {signedISO && egpDeadlineISO && (
+                <p className="text-xs text-muted-foreground">
+                  เลือกได้ตั้งแต่ {formatThaiDateSlash(signedISO)} เป็นต้นไป — เดดไลน์มาตรา 98:{" "}
+                  {formatThaiDateSlash(egpDeadlineISO)} ({STEP9_ARTICLE_98_DEADLINE_CALENDAR_DAYS}{" "}
+                  วันปฏิทิน)
+                </p>
+              )}
+              {egpPublication && !egpPublicationBeforeSigned && !egpPublicationRejected && (
+                <p className="text-xs text-muted-foreground">
+                  📅 {formatThaiDate(egpPublication)}
+                </p>
+              )}
+              {(egpPublicationTooLate || egpPublicationRejected) && egpDeadlineISO && (
+                <p className="text-xs text-destructive font-medium">
+                  {getStep9EgpPublicationTooLateMsg(egpDeadlineISO)}
+                </p>
+              )}
+              {egpPublicationBeforeSigned && (
+                <p className="text-xs text-destructive font-medium">
+                  วันที่ประกาศสาระสำคัญต้องไม่ก่อนวันลงนามสัญญา
+                </p>
+              )}
+            </div>
+          </FieldRow>
+
+          <FieldRow label="วันเริ่มต้นสัญญา *">
+            <div className="space-y-1">
+              <ChronologicalDatePicker
+                stepNumber={9}
+                chronologicalCtx={chronologicalCtx}
+                additionalMinDates={[signedISO]}
+                value={startInvalid ? "" : contractStart}
+                onChange={patchContractStart}
+                disabled={readOnly || !signedISO}
+                onInvalidDate={() =>
+                  toast.error(
+                    signedISO
+                      ? `วันเริ่มต้นสัญญาต้องไม่ก่อนวันลงนามสัญญา — เลือกได้ตั้งแต่ ${formatThaiDateSlash(signedISO)} เป็นต้นไป`
+                      : "กรุณาบันทึกวันที่ลงนามสัญญาในขั้นตอนที่ 8 ก่อน",
+                  )
+                }
+                showChronologicalHint={false}
+              />
+              {!signedISO && (
+                <p className="text-xs text-destructive">
+                  กรุณาบันทึกวันที่ลงนามสัญญาในขั้นตอนที่ 8 ก่อน
+                </p>
+              )}
+              {signedISO && (
+                <p className="text-xs text-muted-foreground">
+                  เลือกได้ตั้งแต่ {formatThaiDateSlash(signedISO)} (วันลงนามสัญญา) เป็นต้นไป
+                </p>
+              )}
+              {contractStart && !startInvalid && (
+                <p className="text-xs text-muted-foreground">📅 {formatThaiDate(contractStart)}</p>
+              )}
+            </div>
+          </FieldRow>
+
+          <FieldRow label="วันสิ้นสุดสัญญา *">
+            <div className="space-y-1">
+              <ChronologicalDatePicker
+                stepNumber={9}
+                chronologicalCtx={chronologicalCtx}
+                additionalMinDates={contractStart ? [contractStart] : []}
+                value={endInvalid ? "" : contractEnd}
+                onChange={patchContractEnd}
+                disabled={readOnly || !contractStart}
+                onInvalidDate={() =>
+                  toast.error("วันสิ้นสุดสัญญาต้องอยู่หลังวันเริ่มต้นสัญญา")
+                }
+                showChronologicalHint={false}
+              />
+              {!contractStart && (
+                <p className="text-xs text-muted-foreground">ระบุวันเริ่มต้นสัญญาก่อน</p>
+              )}
+              {contractEnd && !endInvalid && (
+                <p className="text-xs text-muted-foreground">📅 {formatThaiDate(contractEnd)}</p>
+              )}
+              {endInvalid && contractEnd && (
+                <p className="text-xs text-destructive font-medium">
+                  วันสิ้นสุดสัญญาต้องอยู่หลังวันเริ่มต้นสัญญา
+                </p>
+              )}
+            </div>
+          </FieldRow>
+
+          <FieldRow label="ระยะเวลาดำเนินการทั้งหมด (วัน)">
             <input
-              type="number"
-              min={1}
-              step={1}
-              value={durationDisplay}
-              onChange={(e) => {
-                const raw = e.target.value.replace(/[^\d]/g, "");
-                onContractScheduleChange({
-                  contract_duration_days: raw ? Number(raw) : null,
-                });
-              }}
-              disabled={readOnly}
-              className={inputCls}
-              placeholder="เช่น 120"
+              type="text"
+              readOnly
+              aria-readonly
+              value={
+                durationDays != null && durationDays > 0
+                  ? `${durationDays} วัน`
+                  : "— ระบุวันเริ่มต้นและวันสิ้นสุดสัญญาก่อน —"
+              }
+              className={`${inputCls} bg-muted/50 cursor-not-allowed text-foreground`}
+              tabIndex={-1}
             />
           </FieldRow>
+
           <FieldRow
-            label="จำนวนงวดงานทั้งหมด"
+            label="จำนวนงวดงานทั้งหมด *"
             tooltipKey="step9.total_installment_count"
           >
             <input
@@ -5579,123 +5998,37 @@ export function Step9DetailForm({
               placeholder="เช่น 3, 5, 10"
             />
           </FieldRow>
-          <FieldRow label="วันที่เริ่มปฏิบัติงานหน้างาน">
-            <div className="space-y-1">
-              <ChronologicalDatePicker
-                stepNumber={9}
-                chronologicalCtx={chronologicalCtx}
-                additionalMinDates={[signedISO]}
-                value={workStartInvalid ? "" : workStart}
-                onChange={patchWorkStart}
-                disabled={readOnly || !signedISO}
-                onInvalidDate={() =>
-                  toast.error(
-                    signedISO
-                      ? `ห้ามเริ่มปฏิบัติงานก่อนวันลงนามสัญญา — เลือกได้ตั้งแต่ ${formatThaiDateSlash(signedISO)} เป็นต้นไป`
-                      : "กรุณาบันทึกวันที่ลงนามในสัญญา (ขั้นตอนที่ 8) ก่อน",
-                  )
-                }
-                showChronologicalHint={false}
-              />
-              {!signedISO && (
-                <p className="text-xs text-destructive">
-                  กรุณาบันทึกวันที่ลงนามในสัญญาในขั้นตอนที่ 8 ก่อนระบุวันเริ่มปฏิบัติงาน
-                </p>
-              )}
-              {signedISO && (
-                <p className="text-xs text-muted-foreground">
-                  เลือกได้ตั้งแต่ {formatThaiDateSlash(signedISO)} (วันที่ลงนามในสัญญา) เป็นต้นไป
-                </p>
-              )}
-              {workStart && !workStartInvalid && (
-                <p className="text-xs text-muted-foreground">📅 {formatThaiDate(workStart)}</p>
-              )}
-            </div>
-          </FieldRow>
-          <FieldRow label="แผนปฏิบัติการก่อสร้าง (Gantt)">
-            <div className="space-y-1">
-              <InlineDocUpload
-                project={project}
-                stepNumber={9}
-                documentType={STEP9_DOC.GANTT_CHART}
-                label="📎 แนบแผน Gantt (.pdf/.xls/.xlsx)"
-                existing={docsForStep}
-                onChange={onDocsChange}
-                filePolicyId="bg06"
-              />
-              <p className="text-xs text-muted-foreground">
-                บันทึก Gantt แล้วระบบจะติ๊ก Checklist ข้อที่ 2 อัตโนมัติ
-              </p>
-            </div>
-          </FieldRow>
-          <FieldRow label="วันครบกำหนดสิ้นสุดสัญญา (กำหนดเสร็จ)">
-            <div className="space-y-1">
-              <input
-                type="text"
-                readOnly
-                aria-readonly
-                value={
-                  contractEndISO ? formatThaiDateSlash(contractEndISO) : "— กรอกระยะเวลาและวันเริ่มงานก่อน —"
-                }
-                className={`${inputCls} bg-muted/50 cursor-not-allowed text-foreground`}
-                tabIndex={-1}
-              />
-              {contractEndISO && (
-                <>
-                  <p className="text-xs text-muted-foreground">
-                    {formatThaiDate(contractEndISO)} — คำนวณอัตโนมัติ (วันปฏิทิน)
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    สูตร: วันเริ่มปฏิบัติงาน + {schedule.contract_duration_days ?? "—"} วัน
-                    (นับรวมวันหยุดราชการ)
-                  </p>
-                </>
-              )}
-            </div>
-          </FieldRow>
         </div>
 
         <div className="space-y-4 pt-1 border-t border-border/60">
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-            กลุ่มที่ 3: การสั่งเริ่มงานหน้างาน
+            เอกสารแนบหลักฐาน
           </p>
-          <FieldRow
-            label="เลขที่หนังสือแจ้งให้เริ่มปฏิบัติงาน"
-            tooltipKey="step9.notice_to_proceed_letter_no"
-          >
-            <input
-              type="text"
-              value={schedule.notice_to_proceed_letter_no ?? ""}
-              onChange={(e) =>
-                onContractScheduleChange({ notice_to_proceed_letter_no: e.target.value })
-              }
-              disabled={readOnly}
-              className={inputCls}
-              placeholder="เช่น ที่ กษ ๐๖๐๒ / ๔๕๖"
+          <FieldRow label="ประกาศสาระสำคัญของสัญญา (แบบ หส.1) (PDF) *">
+            <InlineDocUpload
+              project={project}
+              stepNumber={9}
+              documentType={STEP9_DOC.HS1_ESSENTIAL_CONTRACT}
+              label="📎 แนบไฟล์ หส.1 (.pdf)"
+              existing={docsForStep}
+              onChange={onDocsChange}
+              filePolicyId="pdf_only"
             />
           </FieldRow>
-          <FieldRow label="วันที่เริ่มปฏิบัติงานตามหนังสือแจ้ง">
-            <div className="space-y-1">
-              <input
-                type="text"
-                readOnly
-                aria-readonly
-                value={
-                  workStartInvalid || !workStart
-                    ? "— ระบุวันเริ่มปฏิบัติงานหน้างาน (กลุ่มที่ 2) ก่อน —"
-                    : formatThaiDateSlash(workStart)
-                }
-                className={`${inputCls} bg-muted/50 cursor-not-allowed text-foreground`}
-                tabIndex={-1}
-              />
-              <p className="text-xs text-muted-foreground">
-                Sync อัตโนมัติจากวันที่เริ่มปฏิบัติงานหน้างาน (กลุ่มที่ 2) — แก้ไขได้ที่ช่องนั้นเท่านั้น
-              </p>
-              {workStart && !workStartInvalid && (
-                <p className="text-xs text-muted-foreground">📅 {formatThaiDate(workStart)}</p>
-              )}
-            </div>
+          <FieldRow label="ภาพถ่ายหน้าจอสถานะการบันทึกสัญญาใน e-GP (PDF/Image)">
+            <InlineDocUpload
+              project={project}
+              stepNumber={9}
+              documentType={STEP9_DOC.EGP_CONTRACT_STATUS_SCREENSHOT}
+              label="📎 แนบภาพหน้าจอ e-GP (ไม่บังคับ)"
+              existing={docsForStep}
+              onChange={onDocsChange}
+              filePolicyId="egp_screenshot"
+            />
           </FieldRow>
+        </div>
+
+        <div className="space-y-4 pt-1 border-t border-border/60">
           <ResponsibleOfficerField
             stepNumber={9}
             value={responsibleName}

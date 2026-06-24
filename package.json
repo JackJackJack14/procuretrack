@@ -11,7 +11,10 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "db:verify-executive-report": "node scripts/verify-executive-report-columns.mjs",
-    "db:apply-executive-report": "node scripts/apply-executive-report-columns.mjs"
+    "db:apply-executive-report": "node scripts/apply-executive-report-columns.mjs",
+    "db:verify-egp-columns": "node scripts/verify-egp-project-id-columns.mjs",
+    "db:apply-egp-columns": "node scripts/apply-egp-project-id-columns.mjs",
+    "db:apply-step-checklist-columns": "node scripts/apply-procurement-step-checklist-columns.mjs"
   },
   "dependencies": {
     "@cloudflare/vite-plugin": "^1.25.5",

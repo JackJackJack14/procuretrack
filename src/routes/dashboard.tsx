@@ -2,7 +2,12 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Plus, FolderKanban, Banknote, Activity, AlertTriangle, AlertCircle, Clock, Info, CheckCircle2, LayoutDashboard } from "lucide-react";
-import { milestoneProgressPercent } from "@/lib/egp-milestones";
+import {
+  backendStepToUiStep,
+  getWorkflowDisplayStepCount,
+  workflowProgressPercent,
+} from "@/lib/dynamic-stepper";
+import { resolveWorkflowProcurementMethod } from "@/lib/project-workflow-core";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts";
@@ -27,6 +32,7 @@ type Project = {
   fiscal_year: number;
   created_at: string;
   appeal_status?: string | null;
+  method: string;
 };
 
 function DashboardPage() {
@@ -39,7 +45,7 @@ function DashboardPage() {
     queryKey: ["projects"],
     queryFn: async () => {
       const result = await fetchOrganizationProjects<Project>(
-        "id, name, budget, status, current_step, fiscal_year, created_at, appeal_status",
+        "id, name, budget, status, current_step, fiscal_year, created_at, appeal_status, method",
       );
       if (result.errorCode === "NOT_AUTH") {
         navigate({ to: "/login" });
@@ -158,7 +164,10 @@ function DashboardPage() {
             ) : (
               <ul className="divide-y">
                 {activeProjects.map((p) => {
-                  const pct = milestoneProgressPercent(p.current_step);
+                  const method = resolveWorkflowProcurementMethod({ projectMethod: p.method });
+                  const displayStep = backendStepToUiStep(p.current_step, method);
+                  const displayTotal = getWorkflowDisplayStepCount(method);
+                  const pct = workflowProgressPercent(p.current_step, method);
                   return (
                     <li key={p.id} className="py-3">
                       <Link to="/projects/$projectId" params={{ projectId: p.id }} className="block hover:bg-accent/40 -mx-2 px-2 py-1 rounded-md">
@@ -166,7 +175,7 @@ function DashboardPage() {
                           <p className="text-sm font-medium truncate flex-1">{p.name}</p>
                           <div className="flex items-center gap-1.5 shrink-0">
                             <AppealStatusBadge appealStatus={p.appeal_status} currentStep={p.current_step} />
-                            <span className="text-xs text-muted-foreground">ขั้นตอน {p.current_step}/10</span>
+                            <span className="text-xs text-muted-foreground">ขั้นตอน {displayStep}/{displayTotal}</span>
                           </div>
                         </div>
                         <div className="flex items-center gap-3">

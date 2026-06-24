@@ -1,6 +1,9 @@
 import { STEP2_DOC } from "@/lib/step-doc-types";
 import { hasStep1PlanPublicationDoc } from "@/lib/checklist-inline-evidence";
-import { isSpecificMethodShortWorkflow } from "@/lib/dynamic-stepper";
+import {
+  isSpecificMethodShortWorkflow,
+  SPECIFIC_METHOD_STEP_MAP,
+} from "@/lib/dynamic-stepper";
 
 /** คำแนะนำขั้นตอนที่ 1 — วิธีเฉพาะเจาะจง (< 500,000 บาท) */
 export const STEP1_SPECIFIC_GUIDELINE_ACTION =
@@ -16,14 +19,13 @@ export const STEP1_SPECIFIC_GUIDELINE_WARNING =
 export const STEP1_SPECIFIC_STEP_HEADER_HINT =
   "⏱️ ระยะเวลา: ดำเนินการได้ทันที (Day 0) ได้รับยกเว้นไม่ต้องจัดทำแผนจัดซื้อจัดจ้างประจำปี\n⚠️ ข้อควรระวัง: ห้ามแบ่งซื้อแบ่งจ้างเพื่อหลบเลี่ยงระเบียบวงเงิน และตรวจสอบฐานราคากลางตาม ม.4 ให้ถูกต้อง";
 
-/** จุดวิกฤตไทม์ไลน์ — วิธีเฉพาะเจาะจง (5 ขั้นตอน) */
-export const SPECIFIC_METHOD_TIMELINE_MILESTONES = [
-  { uiStep: 1, backendStep: 1, label: "รายงานขอซื้อขอจ้าง & แต่งตั้งผู้ตรวจรับ" },
-  { uiStep: 2, backendStep: 2, label: "เจรจาตกลงราคา & บันทึกใบเสนอราคา" },
-  { uiStep: 3, backendStep: 4, label: "รายงานผลการพิจารณาอนุมัติสั่งซื้อสั่งจ้าง (ข้อ 25)" },
-  { uiStep: 4, backendStep: 5, label: "ประกาศผู้ชนะ & ออกใบสั่งซื้อ/สั่งจ้าง (PO)" },
-  { uiStep: 5, backendStep: 10, label: "บริหารสัญญาและการตรวจรับพัสดุ" },
-] as const;
+
+/** จุดวิกฤตไทม์ไลน์ — วิธีเฉพาะเจาะจง (5 ขั้นตอน) — สอดคล้อง SPECIFIC_METHOD_STEP_MAP */
+export const SPECIFIC_METHOD_TIMELINE_MILESTONES = SPECIFIC_METHOD_STEP_MAP.map((s) => ({
+  uiStep: s.ui,
+  backendStep: s.backend,
+  label: s.title,
+}));
 
 /** เอกสารแนบขั้นตอนที่ 1 — วิธีเฉพาะเจาะจง */
 export const STEP1_SPECIFIC_DOC = {

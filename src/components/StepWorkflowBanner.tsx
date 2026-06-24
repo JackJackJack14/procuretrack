@@ -6,6 +6,9 @@ type Props = {
   stepNumber: number;
   currentWorkflowStep: number;
   onUnlockEdit: () => void;
+  /** ห้ามปลดล็อกแก้ไขย้อนหลัง — ใช้กับขั้นตอนที่ 1 เมื่อต้องถอยกลับก่อนแก้ไขสาระสำคัญ */
+  disableUnlockEdit?: boolean;
+  unlockBlockedHint?: string;
 };
 
 export function StepWorkflowBanner({
@@ -13,6 +16,8 @@ export function StepWorkflowBanner({
   stepNumber,
   currentWorkflowStep,
   onUnlockEdit,
+  disableUnlockEdit = false,
+  unlockBlockedHint,
 }: Props) {
   if (mode === "current") return null;
 
@@ -29,11 +34,18 @@ export function StepWorkflowBanner({
               โหมดดูอย่างเดียว — ขั้นตอนที่ {stepNumber}
             </p>
             <p className="text-xs mt-0.5">
-              ขั้นตอนปัจจุบันของโครงการคือขั้นที่ {currentWorkflowStep}{" "}
-              หากต้องการแก้ไขข้อมูลเก่า กดปุ่มด้านขวาแล้วบันทึกใหม่เพื่ออัปเดต Data Flow
+              {disableUnlockEdit && unlockBlockedHint
+                ? unlockBlockedHint
+                : (
+                  <>
+                    ขั้นตอนปัจจุบันของโครงการคือขั้นที่ {currentWorkflowStep}{" "}
+                    หากต้องการแก้ไขข้อมูลเก่า กดปุ่มด้านขวาแล้วบันทึกใหม่เพื่ออัปเดต Data Flow
+                  </>
+                )}
             </p>
           </div>
         </div>
+        {!disableUnlockEdit && (
         <button
           type="button"
           onClick={onUnlockEdit}
@@ -41,6 +53,7 @@ export function StepWorkflowBanner({
         >
           <Pencil className="h-3.5 w-3.5" /> แก้ไขข้อมูลในขั้นตอนนี้
         </button>
+        )}
       </div>
     );
   }

@@ -30,6 +30,7 @@ import {
   saveConstructionInstallmentFeed,
   type ConstructionInstallmentFeed,
 } from "@/lib/construction-tracking";
+import { resolveEgpProjectId } from "@/lib/project-refs";
 
 export const Route = createFileRoute("/projects_/$projectId_/construction")({
   head: () => ({ meta: [{ title: `${CONSTRUCTION_TRACKING_MENU_LABEL} — ProcureTrack` }] }),
@@ -41,6 +42,7 @@ type Project = {
   organization_id: string;
   name: string;
   project_code: string;
+  egp_project_id?: string | null;
   budget: number;
   current_step: number;
   activity_type?: string | null;
@@ -238,7 +240,7 @@ function ConstructionPage() {
               <HardHat className="h-5 w-5 text-primary" />
               {project.name}
             </h1>
-            <p className="text-sm text-muted-foreground">{project.project_code} · ฿ {formatBaht(project.budget)}</p>
+            <p className="text-sm text-muted-foreground">{resolveEgpProjectId(project)} · ฿ {formatBaht(project.budget)}</p>
           </div>
         </div>
 
