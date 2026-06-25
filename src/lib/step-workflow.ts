@@ -114,6 +114,11 @@ export function canSaveHistoricalEdit(mode: StepWorkflowMode): boolean {
   return mode === "historical_edit";
 }
 
+/** กำลังดูขั้นตอนที่ผ่านมาแล้ว (โหมดย้อนหลัง) */
+export function isHistoricalWorkflowMode(mode: StepWorkflowMode): boolean {
+  return mode === "historical_readonly" || mode === "historical_edit";
+}
+
 /** ปุ่มย้อนกลับ (Hard Rollback) — เฉพาะขั้นตอนปัจจุบันที่กำลังทำ (ไม่ใช่โหมดดูย้อนหลัง) */
 export function canRollbackWorkflowStep(
   viewedStep: number,

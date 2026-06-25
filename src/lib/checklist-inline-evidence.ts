@@ -3,6 +3,7 @@
  * ตรวจข้อไหน แนบหลักฐานข้อนั้นในแถวเดียวกัน (Upload-Driven Reactive Check)
  */
 import type { DocFilePolicyId } from "@/lib/doc-file-types";
+import { isEgpConstructionProjectType } from "@/lib/egp-project-type";
 import {
   STEP2_DOC,
   STEP3_DOC,
@@ -76,21 +77,14 @@ const STEP2_INLINE: ChecklistInlineEvidence[] = [
   {
     checklistKey: "bg06_table_verified",
     documentType: STEP2_DOC.MEDIAN_PRICE_BG06,
-    uploadLabel: "แนบตารางราคากลาง บก.06",
+    uploadLabel: "แนบตารางแสดงวงเงินราคากลาง (บก.06/บก.01)",
     filePolicyId: "bg06",
     uploadDriven: true,
+    legacyDocumentTypes: [STEP2_DOC.MEDIAN_PRICE_BG01],
   },
 ];
 
 const STEP3_INLINE: ChecklistInlineEvidence[] = [
-  {
-    checklistKey: "hearing_files_prepared",
-    documentType: STEP3_DOC.MEDIAN_BG06,
-    uploadLabel: "ตารางราคากลาง บก.06",
-    filePolicyId: "bg06",
-    uploadDriven: true,
-    legacyDocumentTypes: [STEP2_DOC.MEDIAN_PRICE_BG06],
-  },
   {
     checklistKey: "egp_published_for_comment",
     documentType: STEP3_DOC.EGP_SCREENSHOT,
@@ -100,19 +94,57 @@ const STEP3_INLINE: ChecklistInlineEvidence[] = [
   },
 ];
 
-/** ขั้นตอนที่ 4 — แม่แบบมาตรฐานกลาง */
+/** ขั้นตอนที่ 4 — ก่อนเปิดซองเท่านั้น */
 const STEP4_INLINE: ChecklistInlineEvidence[] = [
   {
-    checklistKey: "egp_summary_downloaded",
+    checklistKey: "procurement_report_uploaded",
+    documentType: STEP4_DOC.SIGNED_PROCUREMENT_REQUEST,
+    uploadLabel: "แนบรายงานขอซื้อขอจ้างที่ลงนามแล้ว (PDF)",
+    filePolicyId: "pdf_only",
+    uploadDriven: true,
+  },
+  {
+    checklistKey: "committee_order_uploaded",
+    documentType: STEP2_DOC.EVALUATION_INSPECTION_ORDER,
+    uploadLabel: "แนบคำสั่งแต่งตั้งคณะกรรมการ (PDF)",
+    filePolicyId: "pdf_only",
+    uploadDriven: true,
+  },
+  {
+    checklistKey: "supervisor_order_uploaded",
+    documentType: STEP2_DOC.SITE_SUPERVISOR_ORDER,
+    uploadLabel: "แนบคำสั่งแต่งตั้งผู้ควบคุมงาน (PDF)",
+    filePolicyId: "pdf_only",
+    uploadDriven: true,
+  },
+];
+
+const STEP5_INLINE: ChecklistInlineEvidence[] = [
+  {
+    checklistKey: "price_comparison_uploaded",
+    documentType: STEP4_DOC.PRICE_COMPARISON_TABLE,
+    uploadLabel: "แนบตารางเปรียบเทียบราคา (PDF)",
+    filePolicyId: "pdf_only",
+    uploadDriven: true,
+  },
+  {
+    checklistKey: "evaluation_report_uploaded",
+    documentType: STEP4_DOC.COMMITTEE_EVALUATION_REPORT,
+    uploadLabel: "แนบรายงานผลการพิจารณา (PDF)",
+    filePolicyId: "pdf_only",
+    uploadDriven: true,
+  },
+  {
+    checklistKey: "egp_bid_summary_uploaded",
     documentType: STEP4_DOC.EGP_BID_SUMMARY,
-    uploadLabel: "แนบรายงานสรุปผล e-GP (PDF)",
+    uploadLabel: "แนบตารางสรุปผล e-GP (PDF)",
     filePolicyId: "pdf_only",
     uploadDriven: true,
   },
   {
     checklistKey: "blacklist_checked",
     documentType: STEP4_DOC.BLACKLIST_EVIDENCE,
-    uploadLabel: "แนบหลักฐานตรวจ Blacklist (แคปหน้าจอได้)",
+    uploadLabel: "แนบหลักฐานตรวจ Blacklist",
     filePolicyId: "screenshot_evidence",
     uploadDriven: true,
   },
@@ -123,16 +155,6 @@ const STEP4_INLINE: ChecklistInlineEvidence[] = [
     filePolicyId: "screenshot_evidence",
     uploadDriven: true,
   },
-  {
-    checklistKey: "technical_price_reviewed",
-    documentType: STEP4_DOC.COMMITTEE_EVALUATION_REPORT,
-    uploadLabel: "แนบรายงานผลคณะกรรมการ (PDF)",
-    filePolicyId: "pdf_only",
-    uploadDriven: true,
-  },
-];
-
-const STEP5_INLINE: ChecklistInlineEvidence[] = [
   {
     checklistKey: "egp_winner_announced",
     documentType: STEP5_DOC.EGP_WINNER_ANNOUNCEMENT,
@@ -226,15 +248,31 @@ const BY_STEP: Record<number, ChecklistInlineEvidence[]> = {
   10: STEP10_INLINE,
 };
 
-export function getInlineEvidenceForStep(stepNumber: number): ChecklistInlineEvidence[] {
-  return BY_STEP[stepNumber] ?? [];
+export function getInlineEvidenceForStep(
+  stepNumber: number,
+  projectType?: string | null,
+): ChecklistInlineEvidence[] {
+  const base = BY_STEP[stepNumber] ?? [];
+  if (stepNumber !== 2 || !isEgpConstructionProjectType(projectType)) {
+    return base;
+  }
+  return base.map((entry) => {
+    if (entry.checklistKey !== "bg06_table_verified") return entry;
+    return {
+      ...entry,
+      documentType: STEP2_DOC.MEDIAN_PRICE_BG01,
+      uploadLabel: "แนบตารางแสดงวงเงินราคากลางงานก่อสร้าง (แบบ บก.01)",
+      legacyDocumentTypes: [STEP2_DOC.MEDIAN_PRICE_BG06],
+    };
+  });
 }
 
 export function getInlineEvidenceByKey(
   stepNumber: number,
+  projectType?: string | null,
 ): Map<string, ChecklistInlineEvidence> {
   return new Map(
-    getInlineEvidenceForStep(stepNumber).map((e) => [e.checklistKey, e]),
+    getInlineEvidenceForStep(stepNumber, projectType).map((e) => [e.checklistKey, e]),
   );
 }
 

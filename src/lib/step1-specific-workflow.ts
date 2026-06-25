@@ -294,13 +294,13 @@ export type PrunedTimelineMilestone = {
   uiStep: number;
   backendStep: number;
   label: string;
-  date?: string;
+  date?: Date | null;
   estimated?: boolean;
 };
 
 /** ยุบไทม์ไลน์ 10 ขั้น → 5 จุดวิกฤต สำหรับวิธีเฉพาะเจาะจง */
 export function pruneTimelineForSpecificMethod(
-  allItems: Array<{ stepNumber: number; date?: string; estimated?: boolean }>,
+  allItems: Array<{ stepNumber: number; date?: Date | null; estimated?: boolean }>,
 ): PrunedTimelineMilestone[] {
   return SPECIFIC_METHOD_TIMELINE_MILESTONES.map((m) => {
     const base = allItems.find((it) => it.stepNumber === m.backendStep);

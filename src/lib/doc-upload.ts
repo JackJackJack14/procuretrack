@@ -78,21 +78,22 @@ export async function uploadStepDocument(
 export async function deleteStepDocument(
   project: ProjectDocRef,
   doc: StepDocRecord,
+  opts?: { silent?: boolean },
 ): Promise<boolean> {
   const { error: storageErr } = await supabase.storage
     .from("procurement-docs")
     .remove([doc.storage_path]);
   if (storageErr) {
-    toast.error(`ลบไฟล์ไม่สำเร็จ: ${storageErr.message}`);
+    if (!opts?.silent) toast.error(`ลบไฟล์ไม่สำเร็จ: ${storageErr.message}`);
     return false;
   }
   const { error: dbErr } = await supabase.from("documents").delete().eq("id", doc.id);
   if (dbErr) {
-    toast.error(`ลบข้อมูลเอกสารไม่สำเร็จ: ${dbErr.message}`);
+    if (!opts?.silent) toast.error(`ลบข้อมูลเอกสารไม่สำเร็จ: ${dbErr.message}`);
     return false;
   }
   await decrementStorageUsage(project.organization_id, Number(doc.file_size ?? 0));
-  toast.success("ลบไฟล์เรียบร้อยแล้ว");
+  if (!opts?.silent) toast.success("ลบไฟล์เรียบร้อยแล้ว");
   return true;
 }
 

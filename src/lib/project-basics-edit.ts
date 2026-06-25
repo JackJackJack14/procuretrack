@@ -10,6 +10,7 @@ import {
   getStepRollbackProcurementStepWipe,
   getStepRollbackProjectWipe,
   updateProcurementStepWithSchemaFallback,
+  updateProjectWithSchemaFallback,
 } from "@/lib/step-rollback";
 import { STEP2_COMMITTEE_DB_TYPES } from "@/lib/step-form";
 import { decrementStorageUsage } from "@/lib/storage";
@@ -282,15 +283,16 @@ export async function rollbackProjectToBasicsEdit(params: {
     if (reopenResult.error) return { error: reopenResult.error };
   }
 
-  const { error: projectErr } = await params.supabase
-    .from("projects")
-    .update({
+  const projectUpdateResult = await updateProjectWithSchemaFallback(
+    params.supabase,
+    params.projectId,
+    {
       current_step: 1,
       status: "active",
       ...projectFieldWipe,
-    })
-    .eq("id", params.projectId);
-  if (projectErr) return { error: projectErr.message };
+    },
+  );
+  if (projectUpdateResult.error) return { error: projectUpdateResult.error };
 
   await logProjectWorkflowAudit(params.supabase, {
     projectId: params.projectId,

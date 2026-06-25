@@ -1,7 +1,27 @@
+import {
+  formatBudgetBahtShort,
+  getStep3HearingTier,
+  type Step3HearingTier,
+} from "@/lib/step3-hearing";
+
 /** เนื้อหา Guideline Box — ขั้นตอนที่ 3 จัดทำร่างประกาศและรับฟังความคิดเห็น (อินโฟกราฟิก 3 การ์ด) */
 
+/** @deprecated ใช้ getStep3GuidelineAction(budget) แทน */
 export const STEP3_GUIDELINE_ACTION =
-  "จัดทำร่างประกาศและรับฟังความคิดเห็น โครงการวงเงินงบประมาณ 20,000,000 บาท (เกิน 10 ล้านบาท ระเบียบพัสดุฯ บังคับต้องเผยแพร่เพื่อรับฟังความคิดเห็นไม่น้อยกว่า 3 วันทำการ) พร้อมบังคับดำเนินการจัดฟังคำวิจารณ์ — ต้องกรอกข้อมูลและแนบหลักฐานครบก่อนปิดขั้นตอน";
+  "จัดทำร่างประกาศและรับฟังความคิดเห็น — ดูงบประมาณโครงการจากขั้นตอนที่ 1";
+
+/** ข้อความหลักในกล่อง 📘 คุณต้องทำในขั้นตอนนี้ — อิงงบประมาณจริงจากขั้นตอนที่ 1 */
+export function getStep3GuidelineAction(budget: number): string {
+  const formatted = formatBudgetBahtShort(budget);
+  const tier = getStep3HearingTier(budget);
+  if (tier === "mandatory") {
+    return `จัดทำร่างประกาศและรับฟังความคิดเห็น โครงการวงเงินงบประมาณ ${formatted} บาท — ระเบียบพัสดุฯ บังคับเผยแพร่รับฟังความคิดเห็นไม่น้อยกว่า 3 วันทำการ พร้อมดำเนินการจัดฟังคำวิจารณ์ให้ครบก่อนปิดขั้นตอน`;
+  }
+  if (tier === "discretionary") {
+    return `จัดทำร่างประกาศและเอกสารประกวดราคา โครงการวงเงินงบประมาณ ${formatted} บาท — การจัดรับฟังความคิดเห็นอยู่ในดุลยพินิจของหัวหน้าหน่วยงาน`;
+  }
+  return `จัดทำรายงานขอซื้อขอจ้าง โครงการวงเงินงบประมาณ ${formatted} บาท — วงเงินไม่เกิน 5 ล้านบาท ได้รับยกเว้นไม่ต้องเผยแพร่รับฟังความคิดเห็น`;
+}
 
 /** รายการ bullet ด้านบนเส้นไทม์ไลน์ (การ์ดที่ 2) */
 export const STEP3_GUIDELINE_RECORDING_BULLET_ITEMS = [
@@ -11,6 +31,26 @@ export const STEP3_GUIDELINE_RECORDING_BULLET_ITEMS = [
 /** หัวข้อเกณฑ์ระยะเวลาเผยแพร่ — แสดงเหนือ Visual Timeline Track */
 export const STEP3_GUIDELINE_PUBLICATION_CRITERIA_HEADING =
   "• เกณฑ์ระยะเวลาเผยแพร่: ต้องเผยแพร่ไม่น้อยกว่า 3 วันทำการ";
+
+/** หัวข้อเกณฑ์ตามวงเงิน — แสดงเหนือ Visual Timeline Track */
+export function getStep3GuidelinePublicationCriteriaHeading(budget: number): string {
+  const tier = getStep3HearingTier(budget);
+  if (tier === "mandatory") {
+    return "• เกณฑ์ระยะเวลาเผยแพร่: บังคับเผยแพร่รับฟังความคิดเห็นไม่น้อยกว่า 3 วันทำการ";
+  }
+  if (tier === "discretionary") {
+    return "• เกณฑ์การจัดรับฟังความคิดเห็น: อยู่ในดุลยพินิจของหัวหน้าหน่วยงาน (หากจัดฟัง ต้องเผยแพร่ไม่น้อยกว่า 3 วันทำการ)";
+  }
+  return "• วงเงินไม่เกิน 5 ล้านบาท: ได้รับยกเว้นไม่ต้องจัดรับฟังความคิดเห็น";
+}
+
+/** แสดง Timeline Track ในไกด์ไลน์เมื่อบังคับฟัง หรือเลือกดำเนินการฟังแล้ว */
+export function shouldShowStep3GuidelineTimeline(
+  tier: Step3HearingTier,
+  hearingProceed: boolean,
+): boolean {
+  return tier === "mandatory" || (tier === "discretionary" && hearingProceed);
+}
 
 export const STEP3_TIMELINE_NODE1_TITLE = "วันที่กดเผยแพร่ประกาศ (Day 0)";
 export const STEP3_TIMELINE_NODE1_NOTE =

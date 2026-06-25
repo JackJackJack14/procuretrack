@@ -12,9 +12,11 @@ import {
 
 import {
 
-  STEP3_GUIDELINE_ACTION,
+  getStep3GuidelineAction,
 
-  STEP3_GUIDELINE_PUBLICATION_CRITERIA_HEADING,
+  getStep3GuidelinePublicationCriteriaHeading,
+
+  shouldShowStep3GuidelineTimeline,
 
   STEP3_GUIDELINE_RECORDING_BULLET_ITEMS,
 
@@ -76,6 +78,8 @@ type Step3TimelineTrackProps = {
 
   minPublicationEndISO: string;
 
+  publicationCriteriaHeading: string;
+
 };
 
 
@@ -85,6 +89,8 @@ function Step3TimelineTrack({
   publicationStartISO,
 
   minPublicationEndISO,
+
+  publicationCriteriaHeading,
 
 }: Step3TimelineTrackProps) {
 
@@ -98,7 +104,7 @@ function Step3TimelineTrack({
 
       <p className="text-sm text-slate-700 leading-relaxed mb-4">
 
-        {STEP3_GUIDELINE_PUBLICATION_CRITERIA_HEADING}
+        {publicationCriteriaHeading}
 
       </p>
 
@@ -306,7 +312,11 @@ export function Step3GuidelineBox({
 
   const alert = getStep3TierAlert(tier);
 
-  const showDetailedGuide = tier === "mandatory" || (tier === "discretionary" && hearingProceed);
+  const showDetailedGuide = shouldShowStep3GuidelineTimeline(tier, hearingProceed);
+
+  const guidelineAction = getStep3GuidelineAction(budget);
+
+  const publicationCriteriaHeading = getStep3GuidelinePublicationCriteriaHeading(budget);
 
   const publicationStartISO = publicationStartDate?.trim() ?? "";
 
@@ -370,7 +380,7 @@ export function Step3GuidelineBox({
 
 
 
-      {tier === "discretionary" && !hearingProceed && !readOnly && (
+      {tier === "discretionary" && !readOnly && (
 
         <div className="flex flex-wrap gap-2">
 
@@ -390,19 +400,23 @@ export function Step3GuidelineBox({
 
           </button>
 
-          <button
+          {!hearingProceed && (
 
-            type="button"
+            <button
 
-            onClick={onProceedHearing}
+              type="button"
 
-            className="h-9 px-3 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90"
+              onClick={onProceedHearing}
 
-          >
+              className="h-9 px-3 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90"
 
-            ดำเนินการจัดฟังคำวิจารณ์ร่างประกาศ
+            >
 
-          </button>
+              ดำเนินการจัดฟังคำวิจารณ์ร่างประกาศ
+
+            </button>
+
+          )}
 
         </div>
 
@@ -440,7 +454,7 @@ export function Step3GuidelineBox({
 
             <h3 className="font-semibold text-slate-900 text-sm">📘 คุณต้องทำในขั้นตอนนี้</h3>
 
-            <p className="mt-3 text-sm text-slate-700 leading-relaxed">{STEP3_GUIDELINE_ACTION}</p>
+            <p className="mt-3 text-sm text-slate-700 leading-relaxed">{guidelineAction}</p>
 
           </section>
 
@@ -465,6 +479,8 @@ export function Step3GuidelineBox({
               publicationStartISO={publicationStartISO}
 
               minPublicationEndISO={minPublicationEndISO}
+
+              publicationCriteriaHeading={publicationCriteriaHeading}
 
             />
 

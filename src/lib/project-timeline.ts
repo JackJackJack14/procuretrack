@@ -1,5 +1,5 @@
 /**
- * ไทม์ไลน์โครงการ — วันที่จากฐานข้อมูล/ฟอร์มเท่านั้น (ไม่ cascade mock)
+ * ไทม์ไลน์โครงการ — วันที่จริงจากฐานข้อมูล + ประมาณการล่วงหน้า (Global Auto-Estimation)
  */
 import {
   resolveCommitteeReviewWorkdays,
@@ -12,6 +12,7 @@ import {
   type Step3TimelineLiveAnnouncement,
   type TimelineNotesContext,
 } from "@/lib/step-milestone-dates";
+import { applyGlobalTimelineAutoEstimation } from "@/lib/timeline-auto-estimation";
 import {
   PROJECT_TIMELINE_ESTIMATE_STEP3_WORKDAYS,
   PROJECT_TIMELINE_ESTIMATE_STEP4_DEFAULT_BID_WORKDAYS,
@@ -208,8 +209,9 @@ function buildProjectTimelineItemsFromInput(
   const { project, steps, step3Note, step3LiveAnnouncement, timelineNotes } = input;
   const currentStep = project.current_step;
   const stepByNum = new Map(steps.map((s) => [s.step_number, s]));
+  const method = project.method;
 
-  return steps.map((s) => {
+  const baseItems = steps.map((s) => {
     const stepNum = s.step_number;
     const isDone = !!s.completed_at;
     const isCurrent = stepNum === currentStep && !isDone;
@@ -229,12 +231,13 @@ function buildProjectTimelineItemsFromInput(
     return {
       stepNumber: stepNum,
       date,
-      /** derived = คำนวณจาก workdays.ts (ขั้นตอนที่ 6–7) — ไม่ใช่ cascade mock */
       estimated: resolution.derived && !!date,
       isDone,
       isCurrent,
     };
   });
+
+  return applyGlobalTimelineAutoEstimation(baseItems, method, steps);
 }
 
 export function buildProjectTimelineItems(

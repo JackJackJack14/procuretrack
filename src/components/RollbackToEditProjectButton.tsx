@@ -17,16 +17,16 @@ type RollbackToEditProjectButtonProps = {
   onConfirm: () => void | Promise<void>;
   loading?: boolean;
   size?: "sm" | "default";
-  variant?: "outline" | "secondary";
+  variant?: "outline" | "secondary" | "destructive";
   className?: string;
 };
 
-/** ปุ่มถอยกลับเพื่อแก้ไขข้อมูลสาระสำคัญ — แสดงทุกขั้นตอนที่ > 1 */
+/** ปุ่มถอยกลับและรีเซ็ต Workflow — ใช้เมื่อต้องแก้งบประมาณ/วิธีจัดซื้อ (ล้างขั้นถัดไป) */
 export function RollbackToEditProjectButton({
   onConfirm,
   loading = false,
   size = "sm",
-  variant = "outline",
+  variant = "destructive",
   className,
 }: RollbackToEditProjectButtonProps) {
   return (
@@ -38,19 +38,19 @@ export function RollbackToEditProjectButton({
           size={size}
           disabled={loading}
           className={className}
-          title="ถอยกลับไปขั้นตอนที่ 1 เพื่อแก้ไขงบประมาณและวิธีจัดซื้อ"
+          title="ถอยกลับไปขั้นตอนที่ 1 และล้างข้อมูลขั้นตอนถัดไปทั้งหมด"
         >
           {loading ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
           ) : (
             <Undo2 className="h-3.5 w-3.5" />
           )}
-          ถอยกลับเพื่อแก้ไขโครงการ
+          ถอยกลับและเริ่มทำใหม่ (Reset Workflow)
         </Button>
       </AlertDialogTrigger>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>ยืนยันการถอยกลับเพื่อแก้ไขโครงการ</AlertDialogTitle>
+          <AlertDialogTitle>ยืนยันการถอยกลับและเริ่มทำใหม่</AlertDialogTitle>
           <AlertDialogDescription className="whitespace-pre-line">
             {ROLLBACK_TO_EDIT_PROJECT_CONFIRM_MSG}
           </AlertDialogDescription>
@@ -58,12 +58,13 @@ export function RollbackToEditProjectButton({
         <AlertDialogFooter>
           <AlertDialogCancel>ยกเลิก</AlertDialogCancel>
           <AlertDialogAction
+            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             onClick={(e) => {
               e.preventDefault();
               void onConfirm();
             }}
           >
-            ยืนยันถอยกลับ
+            ยืนยัน Reset Workflow
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

@@ -41,6 +41,30 @@ function isColumnMissingError(errorMessage: string, column: string): boolean {
   );
 }
 
+/** ดึงชื่อคอลัมน์ที่ไม่มีจากข้อความ error ของ PostgREST */
+export function extractMissingColumnFromSchemaError(
+  errorMessage: string,
+): string | null {
+  const quoted = errorMessage.match(/Could not find the '([^']+)' column/i);
+  if (quoted?.[1]) return quoted[1];
+  const pgQuoted = errorMessage.match(/column "([^"]+)" of relation/i);
+  if (pgQuoted?.[1]) return pgQuoted[1];
+  return null;
+}
+
+/** ตัดคอลัมน์ใดๆ ที่ error บอกว่าไม่มีออกจาก payload */
+export function stripMissingColumnFromPayload(
+  errorMessage: string,
+  payload: Record<string, unknown>,
+): boolean {
+  const missing = extractMissingColumnFromSchemaError(errorMessage);
+  if (missing && missing in payload) {
+    delete payload[missing];
+    return true;
+  }
+  return false;
+}
+
 async function probeProcurementStepColumn(
   supabase: SupabaseClient,
   column: string,
@@ -230,7 +254,9 @@ export async function updateProcurementStepWithSchemaFallback(
     if (!error) return {};
 
     if (!stripMissingProcurementStepColumns(error.message, working)) {
-      return { error: error.message };
+      if (!stripMissingColumnFromPayload(error.message, working)) {
+        return { error: error.message };
+      }
     }
 
     for (const column of OPTIONAL_PROCUREMENT_STEP_COLUMNS) {
@@ -241,4 +267,31 @@ export async function updateProcurementStepWithSchemaFallback(
   }
 
   return { error: "อัปเดตขั้นตอนไม่สำเร็จ — schema ไม่ตรงกับระบบ" };
+}
+
+/**
+ * อัปเดต projects — ตัดคอลัมน์ที่ DB ยังไม่มีออกทีละตัวจนสำเร็จ
+ * (rollback รวม wipe หลายขั้น → อาจมีคอลัมน์ที่ migration ยังไม่รัน)
+ */
+export async function updateProjectWithSchemaFallback(
+  supabase: SupabaseClient,
+  projectId: string,
+  payload: Record<string, unknown>,
+): Promise<{ error?: string }> {
+  const working = { ...payload };
+
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const { error } = await supabase
+      .from("projects")
+      .update(working)
+      .eq("id", projectId);
+
+    if (!error) return {};
+
+    if (!stripMissingColumnFromPayload(error.message, working)) {
+      return { error: error.message };
+    }
+  }
+
+  return { error: "อัปเดตโครงการไม่สำเร็จ — schema ไม่ตรงกับระบบ" };
 }

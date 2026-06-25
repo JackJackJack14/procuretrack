@@ -33,6 +33,7 @@ type Props = {
   onManualChange: (key: string, checked: boolean) => void;
   readOnly?: boolean;
   docBinder?: SmartChecklistDocBinder;
+  projectType?: string | null;
 };
 
 export function SmartChecklist({
@@ -44,8 +45,9 @@ export function SmartChecklist({
   onManualChange,
   readOnly = false,
   docBinder,
+  projectType,
 }: Props) {
-  const evidenceByKey = getInlineEvidenceByKey(stepNumber);
+  const evidenceByKey = getInlineEvidenceByKey(stepNumber, projectType);
   const stepDocs = docBinder?.docs ?? [];
   const mergedDocs = docBinder
     ? mergeDocsForChecklistDisplay(stepDocs, docBinder.inheritedDocs)
@@ -56,6 +58,8 @@ export function SmartChecklist({
     manualChecklist,
     autoStates,
     docBinder ? mergedDocs : undefined,
+    undefined,
+    projectType,
   );
 
   const { done, total, allDone } = countSmartChecklistProgressFromItems(items, effective);
@@ -237,19 +241,9 @@ function ChecklistGroup({
                       filePolicyId="tor_spec"
                       readOnly={readOnly}
                     />
-                    <InlineDocUpload
-                      project={docBinder.project}
-                      stepNumber={docBinder.stepNumber}
-                      documentType={STEP3_DOC.MEDIAN_BG06}
-                      label="ตารางราคากลาง บก.06"
-                      existing={docBinder.docs}
-                      onChange={docBinder.onDocsChange}
-                      compact
-                      filePolicyId="bg06"
-                      inheritedDocs={inheritedDocs}
-                      alternateDocumentTypes={[STEP2_DOC.MEDIAN_PRICE_BG06]}
-                      readOnly={readOnly}
-                    />
+                    <p className="text-xs text-muted-foreground px-1">
+                      ตารางราคากลาง — อ้างอิงจากขั้นตอนที่ 2
+                    </p>
                   </div>
                 )}
 

@@ -34,6 +34,7 @@ import {
 import type { Step10InspectionRow } from "@/lib/step-form";
 import {
   getChecklistEvidenceIssues,
+  isStep2RequiredDocSatisfied,
   type EvidenceValidationContext,
 } from "@/lib/form-audit-trail";
 import { hasStep1PlanPublicationDoc } from "@/lib/checklist-inline-evidence";
@@ -86,11 +87,9 @@ const STEP_CHECKLIST_MODES: Record<number, Record<string, ChecklistMode>> = {
     comment_channel_prepared: "auto",
   },
   4: {
-    egp_summary_downloaded: "auto",
-    blacklist_checked: "auto",
-    conflict_of_interest_checked: "auto",
-    technical_price_reviewed: "auto",
-    evaluation_report_submitted: "auto",
+    procurement_report_uploaded: "auto",
+    committee_order_uploaded: "auto",
+    supervisor_order_uploaded: "auto",
   },
   6: {
     appeal_status_recorded: "auto",
@@ -101,6 +100,31 @@ const STEP_CHECKLIST_MODES: Record<number, Record<string, ChecklistMode>> = {
 };
 
 export const STEP5_CHECKLIST_ITEMS: SmartChecklistItem[] = [
+  {
+    key: "price_comparison_uploaded",
+    label: "แนบตารางเปรียบเทียบราคาฉบับสมบูรณ์",
+    mode: "auto",
+  },
+  {
+    key: "evaluation_report_uploaded",
+    label: "แนบรายงานผลการพิจารณาของคณะกรรมการ",
+    mode: "auto",
+  },
+  {
+    key: "egp_bid_summary_uploaded",
+    label: "แนบตารางสรุปผลการเสนอราคาจาก e-GP",
+    mode: "auto",
+  },
+  {
+    key: "blacklist_checked",
+    label: "ตรวจสอบผู้ทิ้งงาน (Blacklist) ใน e-GP",
+    mode: "manual",
+  },
+  {
+    key: "conflict_of_interest_checked",
+    label: "ตรวจสอบผลประโยชน์ร่วมกันของผู้ยื่นซอง",
+    mode: "manual",
+  },
   {
     key: "winner_announcement_recorded",
     label: "บันทึกข้อมูลเลขที่และวันที่ประกาศผู้ชนะ",
@@ -285,7 +309,10 @@ function withModes<K extends string>(
   }));
 }
 
-export function getSmartChecklistItems(stepNumber: number): SmartChecklistItem[] {
+export function getSmartChecklistItems(
+  stepNumber: number,
+  opts?: { isConstructionProject?: boolean },
+): SmartChecklistItem[] {
   switch (stepNumber) {
     case 1:
       return withModes(1, STEP1_CHECKLIST_ITEMS);
@@ -308,7 +335,10 @@ export function getSmartChecklistItems(stepNumber: number): SmartChecklistItem[]
           return item;
         });
     case 4:
-      return withModes(4, STEP4_CHECKLIST_ITEMS);
+      return withModes(4, STEP4_CHECKLIST_ITEMS).filter(
+        (item) =>
+          item.key !== "supervisor_order_uploaded" || !!opts?.isConstructionProject,
+      );
     case 5:
       return STEP5_CHECKLIST_ITEMS;
     case 6:
@@ -360,11 +390,14 @@ export type SmartChecklistAutoContext = {
   committees?: Step2CommitteesState;
   committeeOrder?: Step2CommitteeOrder;
   medianPrice?: Step2MedianPrice;
+  isConstructionProject?: boolean;
   announcement?: Step3Announcement;
   bidResult?: Step4BidResult;
   approvedMedianPrice?: number | null;
   medianPriceApprovalDate?: string | null;
   hasAppointmentOrderDoc?: boolean;
+  hasMedianPriceTableDoc?: boolean;
+  /** @deprecated ใช้ hasMedianPriceTableDoc */
   hasBg06Doc?: boolean;
   hasIntegrityLetterDoc?: boolean;
   hasMemoDoc?: boolean;
@@ -373,6 +406,10 @@ export type SmartChecklistAutoContext = {
   hasEgpAnnouncementDoc?: boolean;
   hasEgpScreenshotDoc?: boolean;
   hasEgpBidSummaryDoc?: boolean;
+  hasPriceComparisonDoc?: boolean;
+  hasSignedProcurementRequestDoc?: boolean;
+  hasCommitteeOrderDoc?: boolean;
+  hasSupervisorOrderDoc?: boolean;
   hasBlacklistEvidenceDoc?: boolean;
   hasConflictEvidenceDoc?: boolean;
   hasCommitteeEvaluationDoc?: boolean;
@@ -448,11 +485,15 @@ export function computeAutoChecklistState(ctx: SmartChecklistAutoContext): Recor
       !!order?.appointment_order_date?.trim() &&
       !!ctx.hasAppointmentOrderDoc;
     auto.integrity_letter_signed = !!ctx.hasIntegrityLetterDoc;
-    const price = median?.approved_median_price;
+    const medianTableDoc =
+      ctx.hasMedianPriceTableDoc ?? ctx.hasBg06Doc;
+    const price = ctx.isConstructionProject
+      ? ctx.medianPrice?.approved_reference_price
+      : ctx.medianPrice?.approved_median_price;
     auto.median_price_calculated_signed =
       price != null && Number.isFinite(price) && price > 0;
     auto.median_price_director_approved = !!median?.median_approval_letter_no?.trim();
-    auto.bg06_table_verified = !!ctx.hasBg06Doc;
+    auto.bg06_table_verified = !!medianTableDoc;
     return auto;
   }
 
@@ -463,8 +504,10 @@ export function computeAutoChecklistState(ctx: SmartChecklistAutoContext): Recor
       ctx.approvedMedianPrice > 0;
     auto.median_price_step2_verified =
       median && !!ctx.medianPriceApprovalDate?.trim();
+    const medianTableDoc =
+      ctx.hasMedianPriceTableDoc ?? ctx.hasBg06Doc;
     auto.hearing_files_prepared =
-      !!ctx.hasDraftTorDoc && !!ctx.hasDraftAnnouncementDoc && !!ctx.hasBg06Doc;
+      !!ctx.hasDraftTorDoc && !!ctx.hasDraftAnnouncementDoc && !!medianTableDoc;
     const ann = ctx.announcement;
     auto.egp_published_for_comment =
       !!(ann?.egp_project_code?.trim() || ann?.egp_announcement_no?.trim()) &&
@@ -475,33 +518,28 @@ export function computeAutoChecklistState(ctx: SmartChecklistAutoContext): Recor
   }
 
   if (stepNumber === 4) {
-    const bid = ctx.bidResult;
-    const hasCommittee =
-      !!ctx.hasCommitteeEvaluationDoc || !!ctx.hasEvaluationReportDoc;
-    const winningAmount =
-      bid?.winning_bid_amount != null &&
-      Number.isFinite(bid.winning_bid_amount) &&
-      bid.winning_bid_amount > 0;
-    auto.egp_summary_downloaded = !!ctx.hasEgpBidSummaryDoc;
-    auto.blacklist_checked = !!ctx.hasBlacklistEvidenceDoc;
-    auto.conflict_of_interest_checked =
-      !!ctx.hasConflictEvidenceDoc && !!bid?.winning_bidder_name?.trim();
-    auto.technical_price_reviewed = hasCommittee && winningAmount;
-    auto.evaluation_report_submitted =
-      hasCommittee &&
-      !!bid?.evaluation_report_letter_no?.trim() &&
-      !!bid?.evaluation_report_approval_date?.trim();
+    auto.procurement_report_uploaded = !!ctx.hasSignedProcurementRequestDoc;
+    auto.committee_order_uploaded = !!ctx.hasCommitteeOrderDoc;
+    auto.supervisor_order_uploaded =
+      !ctx.isConstructionProject || !!ctx.hasSupervisorOrderDoc;
     return auto;
   }
 
   if (stepNumber === 5) {
+    const bid = ctx.bidResult;
+    const hasCommitteeReport =
+      !!ctx.hasCommitteeEvaluationDoc || !!ctx.hasEvaluationReportDoc;
+    auto.price_comparison_uploaded = !!ctx.hasPriceComparisonDoc;
+    auto.evaluation_report_uploaded = hasCommitteeReport;
+    auto.egp_bid_summary_uploaded = !!ctx.hasEgpBidSummaryDoc;
+    auto.blacklist_checked = !!ctx.hasBlacklistEvidenceDoc;
+    auto.conflict_of_interest_checked =
+      !!ctx.hasConflictEvidenceDoc && !!bid?.winning_bidder_name?.trim();
     const ann = ctx.step5Announcement;
     const annDate = ann?.winner_announcement_date?.trim() ?? "";
     const evalApproval = ctx.evaluationApprovalDate?.trim() ?? "";
     const dateNotBeforeEvaluation =
-      !annDate ||
-      !evalApproval ||
-      annDate >= evalApproval;
+      !annDate || !evalApproval || annDate >= evalApproval;
     auto.winner_announcement_recorded =
       !!ann?.winner_announcement_no?.trim() &&
       !!annDate &&
@@ -595,11 +633,12 @@ export function buildEffectiveChecklist(
   autoStates: Record<string, boolean> | null | undefined,
   docs?: StepDocRef[],
   itemsOverride?: SmartChecklistItem[],
+  projectType?: string | null,
 ): Record<string, boolean> {
   const manual = manualChecklist ?? {};
   const auto = autoStates ?? {};
   const items = itemsOverride ?? getSmartChecklistItems(stepNumber);
-  const evidenceByKey = docs ? getInlineEvidenceByKey(stepNumber) : null;
+  const evidenceByKey = docs ? getInlineEvidenceByKey(stepNumber, projectType) : null;
   const effective: Record<string, boolean> = {};
   items.forEach((item) => {
     const evidence = evidenceByKey?.get(item.key);
@@ -636,6 +675,7 @@ export function computeReactiveChecklistEffective(
   manualChecklist: Record<string, boolean> | null | undefined,
   autoStates: Record<string, boolean> | null | undefined,
   docs: StepDocRef[],
+  projectType?: string | null,
 ): { effective: Record<string, boolean>; done: number; total: number; allDone: boolean } {
   const effective = buildEffectiveChecklist(
     stepNumber,
@@ -643,6 +683,7 @@ export function computeReactiveChecklistEffective(
     autoStates,
     docs,
     items,
+    projectType,
   );
   return { effective, ...countSmartChecklistProgressFromItems(items, effective) };
 }
@@ -682,6 +723,7 @@ export function getGenericStepComplianceIssues(
     responsibleName: string;
     requiredDocs?: DocItem[];
     uploadedDocTypes?: string[];
+    projectType?: string | null;
   },
 ): GenericStepComplianceIssue[] {
   const requiredDocs = opts.requiredDocs ?? [];
@@ -692,6 +734,8 @@ export function getGenericStepComplianceIssues(
     manualChecklist,
     autoStates,
     stepDocs,
+    undefined,
+    opts.projectType,
   );
   const issues: GenericStepComplianceIssue[] = [];
   const items = getSmartChecklistItems(stepNumber);
@@ -714,7 +758,17 @@ export function getGenericStepComplianceIssues(
   }
 
   const missingDocs = requiredDocs
-    .filter((d) => d.required && !uploadedDocTypes.includes(d.name))
+    .filter((d) => {
+      if (!d.required) return false;
+      if (stepNumber === 2) {
+        return !isStep2RequiredDocSatisfied(
+          d.name,
+          uploadedDocTypes,
+          opts.projectType,
+        );
+      }
+      return !uploadedDocTypes.includes(d.name);
+    })
     .map((d) => d.name);
   if (missingDocs.length > 0) {
     issues.push({

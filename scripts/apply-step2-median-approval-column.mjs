@@ -1,5 +1,5 @@
 /**
- * รัน migration median_approval_letter_no + คอลัมน์ขั้น 2 ที่เกี่ยวข้องบน Supabase Cloud
+ * รัน migration คอลัมน์ขั้นตอนที่ 2 บน Supabase Cloud (รวมงานก่อสร้าง)
  * ใช้: SUPABASE_DB_PASSWORD=your-db-password node scripts/apply-step2-median-approval-column.mjs
  * หรือ: node scripts/apply-step2-median-approval-column.mjs your-db-password
  */
@@ -57,7 +57,9 @@ alter table public.projects
   add column if not exists committee_appointment_order_date date null,
   add column if not exists approved_median_price numeric null,
   add column if not exists median_price_approval_date date null,
-  add column if not exists median_approval_letter_no text null;
+  add column if not exists median_approval_letter_no text null,
+  add column if not exists approved_reference_price numeric null,
+  add column if not exists reference_price_document_url text null;
 
 alter table public.projects drop constraint if exists projects_committee_appointment_mode_check;
 alter table public.projects add constraint projects_committee_appointment_mode_check
@@ -65,6 +67,12 @@ alter table public.projects add constraint projects_committee_appointment_mode_c
 
 comment on column public.projects.median_approval_letter_no is
   'เลขที่หนังสืออนุมัติราคากลางจากขั้นตอนที่ 2 — ส่งต่อให้ขั้นตอนที่ 3';
+
+comment on column public.projects.approved_reference_price is
+  'ยอดรวมราคากลางสุทธิจากการถอดแบบ (งานจ้างก่อสร้าง ขั้นตอนที่ 2)';
+
+comment on column public.projects.reference_price_document_url is
+  'ที่เก็บไฟล์ตารางสรุปราคารวม ปร.4/ปร.5/ปร.6 หรือเล่ม BOQ';
 
 notify pgrst, 'reload schema';
 `;
@@ -87,7 +95,9 @@ for (const connectionString of connectionCandidates) {
            'committee_appointment_mode',
            'median_approval_letter_no',
            'approved_median_price',
-           'median_price_approval_date'
+           'median_price_approval_date',
+           'approved_reference_price',
+           'reference_price_document_url'
          )
        order by column_name`,
     );

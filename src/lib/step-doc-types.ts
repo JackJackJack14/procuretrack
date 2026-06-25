@@ -1,7 +1,10 @@
+import { isEgpConstructionProjectType } from "@/lib/egp-project-type";
+
 /** ประเภทเอกสารขั้นตอนที่ 2 — ผูกกับฟิลด์ฟอร์ม */
 export const STEP2_DOC = {
   APPOINTMENT_ORDER: "คำสั่งแต่งตั้งคณะกรรมการจัดทำ TOR และราคากลาง",
   BOQ: "แบบรูปรายการงานก่อสร้าง (BOQ)",
+  MEDIAN_PRICE_BG01: "แบบรายงานผลการกำหนดราคากลางงานก่อสร้าง (บก.01)",
   MEDIAN_PRICE_BG06: "แบบรายงานผลการกำหนดราคากลาง (บก.06)",
   INTEGRITY_LETTER: "หนังสือแสดงความบริสุทธิ์ใจของกรรมการ",
   EVALUATION_INSPECTION_ORDER: "คำสั่งแต่งตั้งคณะกรรมการพิจารณาผลและตรวจรับ",
@@ -15,7 +18,7 @@ export const STEP2_DOC = {
 } as const;
 
 export const STEP2_APPOINTMENT_ORDER_UPLOAD_LABEL =
-  "📎 แนบไฟล์เอกสารคำสั่งแต่งตั้ง (PDF)";
+  "📎 เอกสารคำสั่งแต่งตั้งคณะกรรมการ (PDF)";
 
 export const STEP2_BOQ_UPLOAD_LABEL =
   "📎 แนบไฟล์แบบรูปรายการงานก่อสร้าง (BOQ) (PDF)";
@@ -35,8 +38,49 @@ export const STEP2_SITE_SUPERVISOR_ORDER_UPLOAD_LABEL =
 export const STEP2_MARKET_QUOTES_UPLOAD_LABEL =
   "📎 แนบไฟล์ใบเสนอราคาท้องตลาดอย่างน้อย 3 ราย (PDF/ZIP)";
 
+export const STEP2_REFERENCE_PRICE_FIELD_LABEL =
+  "ตารางสรุปราคารวมและถอดแบบราคากลาง (ปร.4, ปร.5, ปร.6 / BOQ)";
+
 export const STEP2_REFERENCE_PRICE_UPLOAD_LABEL =
-  "📎 อัปโหลดเอกสารตารางสรุปราคารวม ปร.4, ปร.5, ปร.6 หรือเล่ม BOQ (PDF)";
+  `📎 ${STEP2_REFERENCE_PRICE_FIELD_LABEL} (PDF)`;
+
+/** ป้ายช่องอัปโหลดตารางราคากลาง — แปรผันตามประเภทงาน (ป.ป.ช.) */
+export function resolveStep2MedianPriceTableDocType(
+  projectType: string | null | undefined,
+): string {
+  return isEgpConstructionProjectType(projectType)
+    ? STEP2_DOC.MEDIAN_PRICE_BG01
+    : STEP2_DOC.MEDIAN_PRICE_BG06;
+}
+
+export function resolveStep2MedianPriceTableFieldLabel(
+  projectType: string | null | undefined,
+): string {
+  return isEgpConstructionProjectType(projectType)
+    ? "ตารางแสดงวงเงินราคากลางงานก่อสร้าง (แบบ บก.01)"
+    : "ตารางแสดงวงเงินราคากลาง (แบบ บก.06)";
+}
+
+export function resolveStep2MedianPriceTableUploadLabel(
+  projectType: string | null | undefined,
+): string {
+  return `📎 แนบไฟล์${resolveStep2MedianPriceTableFieldLabel(projectType)} (PDF)`;
+}
+
+/** ตรวจว่ามีไฟล์ตารางราคากลางตามประเภทงาน — รองรับไฟล์เก่า (บก.06 บนงานก่อสร้าง) */
+export function hasStep2MedianPriceTableDoc(
+  stepDocs?: Array<{ document_type: string }>,
+  projectType?: string | null,
+): boolean {
+  const primary = resolveStep2MedianPriceTableDocType(projectType);
+  if (stepDocs?.some((d) => d.document_type === primary)) return true;
+  if (isEgpConstructionProjectType(projectType)) {
+    return (
+      stepDocs?.some((d) => d.document_type === STEP2_DOC.MEDIAN_PRICE_BG06) ?? false
+    );
+  }
+  return false;
+}
 
 export function hasStep2ReferencePriceDoc(
   stepDocs?: Array<{ document_type: string }>,
@@ -134,7 +178,22 @@ export const STEP3_MEDIAN_BG06_UPLOAD_LABEL =
   "📎 แนบไฟล์ตารางราคากลาง (บก.06) (PDF) — หากอัปโหลดในขั้นตอนที่ 2 แล้วไม่ต้องซ้ำ";
 
 export const STEP3_MEMO_APPROVAL_UPLOAD_LABEL =
-  "📎 บันทึกข้อความขอความเห็นชอบร่าง TOR (PDF)";
+  "📎 บันทึกข้อความขอความเห็นชอบร่าง TOR และร่างประกาศ (PDF)";
+
+/** ป้ายช่องเลขที่บันทึกข้อความ — กลุ่มขอเห็นชอบร่าง TOR */
+export const STEP3_TOR_APPROVAL_MEMO_FIELD_LABEL =
+  'เลขที่บันทึกข้อความ "ขอเห็นชอบร่าง TOR และร่างประกาศ"';
+
+/** ป้ายช่องเลขที่บันทึกข้อความ — กลุ่มรายงานขอซื้อขอจ้าง */
+export const STEP3_PROCUREMENT_REQUEST_MEMO_FIELD_LABEL =
+  'เลขที่บันทึกข้อความ "รายงานขอซื้อขอจ้าง"';
+
+/** ข้อความอ้างอิงตารางราคากลางจากขั้นตอนที่ 2 */
+export const STEP3_STEP2_REFERENCE_PRICE_READY_MSG =
+  "อ้างอิงไฟล์ตารางราคากลางจากขั้นตอนที่ 2 เรียบร้อยแล้ว";
+
+export const STEP3_STEP2_REFERENCE_PRICE_MISSING_MSG =
+  "ยังไม่พบไฟล์ตารางราคากลางในขั้นตอนที่ 2 — กรุณาอัปโหลดในขั้นตอนที่ 2 ก่อน";
 
 export const STEP3_EGP_SCREENSHOT_UPLOAD_LABEL =
   "📎 แนบภาพหน้าจอระบบ e-GP ที่แสดงการเผยแพร่ประกาศ (PNG/JPG/PDF)";
@@ -142,6 +201,18 @@ export const STEP3_EGP_SCREENSHOT_UPLOAD_LABEL =
 /** ป้ายปุ่มอัปโหลดรายงานผลรับฟังความคิดเห็น (แสดงบนฟอร์ม) */
 export const STEP3_FEEDBACK_UPLOAD_LABEL =
   "📎 แนบบันทึกรายงานผลการรับฟังความคิดเห็น / หน้าจอสรุปผลจาก e-GP (PDF)";
+
+/** ตรวจตารางราคากลางจากขั้นตอนที่ 2 หรือ 3 (สำหรับ Smart Checklist ขั้นตอนที่ 3) */
+export function hasStep2OrStep3MedianPriceTableDoc(
+  docs: Array<{ step_number?: number | null; document_type: string }>,
+  projectType?: string | null,
+): boolean {
+  const step2Docs = docs.filter((d) => d.step_number === 2);
+  if (hasStep2MedianPriceTableDoc(step2Docs, projectType)) return true;
+  return docs.some(
+    (d) => d.step_number === 3 && d.document_type === STEP3_DOC.MEDIAN_BG06,
+  );
+}
 
 export const STEP3_FEEDBACK_HELPER_NONE =
   "หมายเหตุ: กรณีไม่มีผู้เสนอแนะหรือวิจารณ์ ระเบียบพัสดุฯ บังคับให้จัดทำบันทึกข้อความภายในเพื่อรายงานผลให้หัวหน้าหน่วยงานรับทราบ พร้อมแคปหน้าจอหลักฐานสถานะจากระบบ e-GP มัดรวมเป็นไฟล์ PDF เดียวกันแล้วนำมาอัปโหลดที่ช่องนี้";

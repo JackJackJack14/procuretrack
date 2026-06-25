@@ -5,7 +5,6 @@ type Props = {
   mode: StepWorkflowMode;
   stepNumber: number;
   currentWorkflowStep: number;
-  onUnlockEdit: () => void;
   /** ห้ามปลดล็อกแก้ไขย้อนหลัง — ใช้กับขั้นตอนที่ 1 เมื่อต้องถอยกลับก่อนแก้ไขสาระสำคัญ */
   disableUnlockEdit?: boolean;
   unlockBlockedHint?: string;
@@ -15,7 +14,6 @@ export function StepWorkflowBanner({
   mode,
   stepNumber,
   currentWorkflowStep,
-  onUnlockEdit,
   disableUnlockEdit = false,
   unlockBlockedHint,
 }: Props) {
@@ -39,21 +37,13 @@ export function StepWorkflowBanner({
                 : (
                   <>
                     ขั้นตอนปัจจุบันของโครงการคือขั้นที่ {currentWorkflowStep}{" "}
-                    หากต้องการแก้ไขข้อมูลเก่า กดปุ่มด้านขวาแล้วบันทึกใหม่เพื่ออัปเดต Data Flow
+                    — หากต้องการแก้ไขข้อมูลย่อยในขั้นนี้ กดปุ่ม «ปลดล็อกเพื่อแก้ไขข้อมูลขั้นตอนนี้»
+                    ที่แถบด้านล่าง (จะไม่ล้างข้อมูลขั้นถัดไป)
                   </>
                 )}
             </p>
           </div>
         </div>
-        {!disableUnlockEdit && (
-        <button
-          type="button"
-          onClick={onUnlockEdit}
-          className="h-9 px-3 rounded-md border border-primary bg-background text-sm font-medium text-primary hover:bg-primary/5 flex items-center gap-1.5 shrink-0"
-        >
-          <Pencil className="h-3.5 w-3.5" /> แก้ไขข้อมูลในขั้นตอนนี้
-        </button>
-        )}
       </div>
     );
   }
@@ -67,8 +57,8 @@ export function StepWorkflowBanner({
         <Pencil className="h-4 w-4" /> โหมดแก้ไขข้อมูลย้อนหลัง — ขั้นตอนที่ {stepNumber}
       </p>
       <p className="text-xs mt-1 opacity-90">
-        หลังแก้ไขเสร็จ ต้องกด «บันทึกการแก้ไข» เพื่อให้ระบบอัปเดตข้อมูลที่ส่งต่อไปขั้นถัดไป
-        ป้องกันข้อมูลขัดแย้ง (Data Mismatch)
+        แก้ไขได้เฉพาะข้อมูลในขั้นตอนนี้ — กด «บันทึกข้อมูล (Save Changes)» เพื่ออัปเดตทับของเดิม
+        ระบบจะไม่ล้างหรือรีเซ็ตขั้นตอนถัดไป
       </p>
     </div>
   );

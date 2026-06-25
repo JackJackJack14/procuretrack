@@ -18,6 +18,8 @@ import {
   STEP8_DOC,
   STEP8_DOC_LEGACY,
   hasStep2MarketQuotesDoc,
+  hasStep2MedianPriceTableDoc,
+  hasStep2ReferencePriceDoc,
   isStep4CommitteeReportDocType,
   isStep5EgpWinnerDocType,
   isStep5PhysicalBoardDocType,
@@ -29,6 +31,7 @@ import {
   isStep6CommitteeDecisionDocType,
   isStep6NoAppealEgpDocType,
 } from "@/lib/step-doc-types";
+import { isEgpConstructionProjectType } from "@/lib/egp-project-type";
 
 export const FORM_AUDIT_TRAIL_STANDARD = {
   title: "มาตรฐานกลุ่มเอกสารและบันทึกเวลาภายใน (Audit Trail)",
@@ -121,96 +124,104 @@ export const CHECKLIST_EVIDENCE_RULES: ChecklistEvidenceRule[] = [
       message: "ข้อที่ 3: กรุณาระบุเลขที่/วันที่บันทึกข้อความและแนบ PDF บันทึกข้อความเห็นชอบ",
     },
   },
-  // Step 4 — แม่แบบ Audit Trail
+  // Step 4 — ก่อนเปิดซอง
   {
     stepNumber: 4,
-    checklistKey: "egp_summary_downloaded",
+    checklistKey: "procurement_report_uploaded",
     checklistIndex: 1,
     enforce: "always",
     binding: {
       kind: "document",
-      documentTypes: [STEP4_DOC.EGP_BID_SUMMARY],
-      message:
-        "หลักฐานข้อที่ 1: กรุณาแนบไฟล์รายงานสรุปผลการเสนอราคาจากระบบ e-GP (PDF)",
+      documentTypes: [STEP4_DOC.SIGNED_PROCUREMENT_REQUEST],
+      message: "กรุณาแนบรายงานขอซื้อขอจ้างที่ลงนามแล้ว (PDF)",
     },
   },
   {
     stepNumber: 4,
-    checklistKey: "blacklist_checked",
+    checklistKey: "committee_order_uploaded",
     checklistIndex: 2,
     enforce: "always",
     binding: {
       kind: "document",
-      documentTypes: [STEP4_DOC.BLACKLIST_EVIDENCE],
-      message: "ข้อที่ 2: กรุณาแนบหลักฐานตรวจ Blacklist (แคปหน้าจอ e-GP ได้)",
+      documentTypes: [STEP2_DOC.EVALUATION_INSPECTION_ORDER],
+      message: "กรุณาแนบคำสั่งแต่งตั้งคณะกรรมการ (PDF)",
     },
   },
   {
     stepNumber: 4,
-    checklistKey: "conflict_of_interest_checked",
+    checklistKey: "supervisor_order_uploaded",
+    checklistIndex: 3,
+    enforce: "when_checked",
+    binding: {
+      kind: "document",
+      documentTypes: [STEP2_DOC.SITE_SUPERVISOR_ORDER],
+      message: "กรุณาแนบคำสั่งแต่งตั้งผู้ควบคุมงาน (งานก่อสร้าง)",
+    },
+  },
+  // Step 5 — หลังเปิดซอง + ประกาศผู้ชนะ
+  {
+    stepNumber: 5,
+    checklistKey: "price_comparison_uploaded",
+    checklistIndex: 1,
+    enforce: "always",
+    binding: {
+      kind: "document",
+      documentTypes: [STEP4_DOC.PRICE_COMPARISON_TABLE],
+      message: "กรุณาแนบตารางเปรียบเทียบราคา (PDF)",
+    },
+  },
+  {
+    stepNumber: 5,
+    checklistKey: "evaluation_report_uploaded",
+    checklistIndex: 2,
+    enforce: "always",
+    binding: {
+      kind: "document",
+      documentTypes: [STEP4_DOC.COMMITTEE_EVALUATION_REPORT],
+      message: "กรุณาแนบรายงานผลการพิจารณาของคณะกรรมการ (PDF)",
+    },
+  },
+  {
+    stepNumber: 5,
+    checklistKey: "egp_bid_summary_uploaded",
     checklistIndex: 3,
     enforce: "always",
+    binding: {
+      kind: "document",
+      documentTypes: [STEP4_DOC.EGP_BID_SUMMARY],
+      message: "กรุณาแนบตารางสรุปผลการเสนอราคาจาก e-GP (PDF)",
+    },
+  },
+  {
+    stepNumber: 5,
+    checklistKey: "blacklist_checked",
+    checklistIndex: 4,
+    enforce: "when_checked",
+    binding: {
+      kind: "document",
+      documentTypes: [STEP4_DOC.BLACKLIST_EVIDENCE],
+      message: "กรุณาแนบหลักฐานตรวจ Blacklist",
+    },
+  },
+  {
+    stepNumber: 5,
+    checklistKey: "conflict_of_interest_checked",
+    checklistIndex: 5,
+    enforce: "when_checked",
     binding: {
       kind: "all",
       bindings: [
         { kind: "fields", fieldKeys: ["winning_bidder_name"], message: "" },
         { kind: "document", documentTypes: [STEP4_DOC.CONFLICT_EVIDENCE], message: "" },
       ],
-      message:
-        "ข้อที่ 3: กรุณาระบุชื่อผู้ชนะและแนบหลักฐานตรวจผลประโยชน์ร่วมกัน",
-    },
-  },
-  {
-    stepNumber: 4,
-    checklistKey: "technical_price_reviewed",
-    checklistIndex: 4,
-    enforce: "always",
-    binding: {
-      kind: "all",
-      bindings: [
-        {
-          kind: "fields",
-          fieldKeys: ["winning_bid_amount"],
-          message: "",
-        },
-        {
-          kind: "document",
-          documentTypes: [STEP4_DOC.COMMITTEE_EVALUATION_REPORT],
-          message: "",
-        },
-      ],
-      message:
-        "หลักฐานข้อที่ 4: กรุณาระบุราคาที่เสนอชนะและแนบรายงานผลการพิจารณาของคณะกรรมการ (PDF)",
-    },
-  },
-  {
-    stepNumber: 4,
-    checklistKey: "evaluation_report_submitted",
-    checklistIndex: 5,
-    enforce: "always",
-    binding: {
-      kind: "all",
-      bindings: [
-        {
-          kind: "fields",
-          fieldKeys: ["evaluation_report_letter_no", "evaluation_report_approval_date"],
-          message: "",
-        },
-        {
-          kind: "document",
-          documentTypes: [STEP4_DOC.COMMITTEE_EVALUATION_REPORT],
-          message: "",
-        },
-      ],
-      message:
-        "ข้อที่ 5: กรุณาระบุเลขที่หนังสือ/วันที่อนุมัติผลและแนบรายงานผลการพิจารณาของคณะกรรมการ (PDF)",
+      message: "กรุณาระบุชื่อผู้ชนะและแนบหลักฐานตรวจผลประโยชน์ร่วมกัน",
     },
   },
   // Step 5 — ประกาศผู้ชนะ (มาตรา 66)
   {
     stepNumber: 5,
     checklistKey: "winner_announcement_recorded",
-    checklistIndex: 1,
+    checklistIndex: 6,
     enforce: "always",
     binding: {
       kind: "fields",
@@ -445,6 +456,15 @@ export function hasStep4PriceComparisonDoc(uploadedDocTypes: string[]): boolean 
   return uploadedDocTypes.includes(STEP4_DOC.PRICE_COMPARISON_TABLE);
 }
 
+/** รวมประเภทเอกสารหลังเปิดซองจากขั้นตอนที่ 4 (เก่า) หรือขั้นตอนที่ 5 */
+export function collectBidEvaluationUploadedDocTypes(
+  docs: Array<{ step_number: number | null; document_type: string }>,
+): string[] {
+  return docs
+    .filter((d) => d.step_number === 4 || d.step_number === 5)
+    .map((d) => d.document_type);
+}
+
 export function hasStep5EgpWinnerDoc(uploadedDocTypes: string[]): boolean {
   return uploadedDocTypes.some((t) => isStep5EgpWinnerDocType(t));
 }
@@ -498,21 +518,32 @@ export function isStep1RequiredDocSatisfied(
   return uploadedTypes.includes(requiredName);
 }
 
-/** ตรวจเอกสารบังคับขั้น 5 — รองรับชื่อเอกสารเก่าใน DB */
+/** ตรวจเอกสารบังคับขั้น 5 — รองรับชื่อเอกสารเก่าใน DB และไฟล์ที่อัปโหลดในขั้น 4 (โครงการเก่า) */
 export function isStep5RequiredDocSatisfied(
   requiredName: string,
   uploadedTypes: string[],
+  legacyStep4Types: string[] = [],
 ): boolean {
+  const merged = [...new Set([...uploadedTypes, ...legacyStep4Types])];
   if (
     requiredName === STEP5_DOC.EGP_WINNER_ANNOUNCEMENT ||
     requiredName === "ประกาศผู้ชนะการเสนอราคา (e-GP)"
   ) {
-    return hasStep5EgpWinnerDoc(uploadedTypes);
+    return hasStep5EgpWinnerDoc(merged);
   }
   if (requiredName === STEP5_DOC.PHYSICAL_BOARD_ANNOUNCEMENT) {
-    return hasStep5PhysicalBoardDoc(uploadedTypes);
+    return hasStep5PhysicalBoardDoc(merged);
   }
-  return uploadedTypes.includes(requiredName);
+  if (requiredName === STEP4_DOC.PRICE_COMPARISON_TABLE) {
+    return hasStep4PriceComparisonDoc(merged);
+  }
+  if (requiredName === STEP4_DOC.EGP_BID_SUMMARY) {
+    return hasStep4EgpBidSummaryDoc(merged);
+  }
+  if (requiredName === STEP4_DOC.COMMITTEE_EVALUATION_REPORT) {
+    return hasStep4CommitteeReportDoc(merged);
+  }
+  return merged.includes(requiredName);
 }
 
 /** ตรวจหลักฐานรองรับ Manual-Check / Audit Trail */
@@ -559,15 +590,6 @@ export function isStep4RequiredDocSatisfied(
   if (requiredName === STEP4_DOC.SIGNED_PROCUREMENT_REQUEST) {
     return hasStep4SignedProcurementRequestDoc(uploadedTypes);
   }
-  if (requiredName === STEP4_DOC.EGP_BID_SUMMARY) {
-    return hasStep4EgpBidSummaryDoc(uploadedTypes);
-  }
-  if (requiredName === STEP4_DOC.COMMITTEE_EVALUATION_REPORT) {
-    return hasStep4CommitteeReportDoc(uploadedTypes);
-  }
-  if (requiredName === STEP4_DOC.PRICE_COMPARISON_TABLE) {
-    return hasStep4PriceComparisonDoc(uploadedTypes);
-  }
   if (requiredName === STEP2_DOC.EVALUATION_INSPECTION_ORDER) {
     return uploadedTypes.includes(STEP2_DOC.EVALUATION_INSPECTION_ORDER);
   }
@@ -605,15 +627,35 @@ export function logStep4OptionalAuditTrailDebug(
   });
 }
 
-/** ตรวจเอกสารบังคับขั้น 2 — รองรับใบเสนอราคาแยกรายซัพพลายเออร์ */
+/** ตรวจเอกสารบังคับขั้น 2 — รองรับใบเสนอราคาแยกรายซัพพลายเออร์ + งานจ้างก่อสร้าง */
 export function isStep2RequiredDocSatisfied(
   requiredName: string,
   uploadedTypes: string[],
+  projectType?: string | null,
 ): boolean {
+  const stepDocs = uploadedTypes.map((document_type) => ({ document_type }));
+  const isConstruction = isEgpConstructionProjectType(projectType);
+
+  if (isConstruction) {
+    if (requiredName === STEP2_DOC.MARKET_QUOTES) {
+      return true;
+    }
+    if (requiredName === STEP2_DOC.BOQ) {
+      return hasStep2ReferencePriceDoc(stepDocs);
+    }
+    if (
+      requiredName === STEP2_DOC.MEDIAN_PRICE_BG06 ||
+      requiredName === STEP2_DOC.MEDIAN_PRICE_BG01
+    ) {
+      return hasStep2MedianPriceTableDoc(stepDocs, projectType);
+    }
+    if (requiredName === STEP2_DOC.REFERENCE_PRICE_SUMMARY) {
+      return hasStep2ReferencePriceDoc(stepDocs);
+    }
+  }
+
   if (requiredName === STEP2_DOC.MARKET_QUOTES) {
-    return hasStep2MarketQuotesDoc(
-      uploadedTypes.map((document_type) => ({ document_type })),
-    );
+    return hasStep2MarketQuotesDoc(stepDocs);
   }
   return uploadedTypes.includes(requiredName);
 }

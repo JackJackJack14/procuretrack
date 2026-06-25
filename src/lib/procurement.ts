@@ -45,15 +45,15 @@ export const STEP_DOCS_DETAILED: DocItem[][] = [
   ],
   [
     { name: STEP4_DOC.SIGNED_PROCUREMENT_REQUEST, required: true },
+    { name: STEP2_DOC.EVALUATION_INSPECTION_ORDER, required: true },
+    { name: STEP2_DOC.SITE_SUPERVISOR_ORDER, required: false },
+  ],
+  [
     { name: STEP4_DOC.PRICE_COMPARISON_TABLE, required: true },
+    { name: STEP4_DOC.COMMITTEE_EVALUATION_REPORT, required: true },
     { name: STEP4_DOC.EGP_BID_SUMMARY, required: true },
     { name: STEP4_DOC.BLACKLIST_EVIDENCE, required: false },
     { name: STEP4_DOC.CONFLICT_EVIDENCE, required: false },
-    { name: STEP4_DOC.COMMITTEE_EVALUATION_REPORT, required: true },
-    { name: STEP2_DOC.EVALUATION_INSPECTION_ORDER, required: true },
-    { name: STEP2_DOC.SITE_SUPERVISOR_ORDER, required: true },
-  ],
-  [
     { name: STEP5_DOC.EGP_WINNER_ANNOUNCEMENT, required: true },
     { name: STEP5_DOC.PHYSICAL_BOARD_ANNOUNCEMENT, required: true },
     { name: STEP5_DOC.ALL_BIDDERS_RESULT_NOTICE, required: false },

@@ -2,7 +2,7 @@ import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useState, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeft, Check, Upload, Eye, Trash2, FileText, Loader2,
+  ArrowLeft, ArrowRight, Check, Upload, Eye, Trash2, FileText, Loader2,
   FolderOpen, Download, FileImage, FileSpreadsheet, File as FileLucide, RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -23,10 +23,10 @@ import {
   buildTimelineValidationContext,
   getTimelineSaveBlockMessage,
 } from "@/lib/timeline-validation";
-import { resolveStep1PlanPublicationDateISO, resolveMergedTimelineProject } from "@/lib/step-milestone-dates";
+import { resolveStep1PlanPublicationDateISO } from "@/lib/step-milestone-dates";
 import { parseCurrencyForDatabase } from "@/lib/currency-format";
 import { resolveDocFilePolicy, validateDocFile } from "@/lib/doc-file-types";
-import { uploadStepDocument } from "@/lib/doc-upload";
+import { uploadStepDocument, deleteStepDocument } from "@/lib/doc-upload";
 import { checkStorageQuota, incrementStorageUsage, decrementStorageUsage } from "@/lib/storage";
 import { ThaiDatePicker } from "@/components/ThaiDatePicker";
 import { GuidelineBox } from "@/components/GuidelineBox";
@@ -83,10 +83,13 @@ import {
   loadStep3FormFromStep,
   EMPTY_STEP3_CHECKLIST,
   EMPTY_STEP3_ANNOUNCEMENT,
+  buildStep3ProceedHearingAnnouncementState,
+  buildStep3SkipAnnouncementState,
+  isStep3HearingOnlyDocType,
   getStep3ComplianceIssues,
   getStep3MandatoryHearingGateIssues,
   isStep3ReadyForNext,
-  countStep3CoreDocumentsReady,
+  countStep3DocumentsProgress,
   countStep3FormRequiredProgress,
   buildStep3ComplianceLog,
   logStep3ComplianceWarnings,
@@ -101,6 +104,7 @@ import {
   resolveStep3PublicationEnd,
   resolveStep2MedianApprovalDate,
   applyStep4WinnerFromBiddersTable,
+  buildStep4CommitteesFromStep2,
   isStep4ProcurementSignDateValid,
   loadStep4FormFromNote,
   loadStep5FormFromNote,
@@ -135,6 +139,7 @@ import {
   getStep2ComplianceIssues,
   isStep2ReadyForNext,
   countStep2CoreDocumentsReady,
+  getStep2RequiredDocsForProject,
   countStep2FormRequiredProgress,
   resolveProjectMedianPrice,
   isStep2MedianApprovalBeforeAppointment,
@@ -248,6 +253,9 @@ import {
   hasStep4PriceComparisonDoc,
   hasStep4CommitteeReportDoc,
   hasStep4EgpBidSummaryDoc,
+  hasStep4BlacklistEvidenceDoc,
+  hasStep4ConflictEvidenceDoc,
+  collectBidEvaluationUploadedDocTypes,
   hasStep5EgpWinnerDoc,
   hasStep5PhysicalBoardDoc,
   hasStep6AgencyReportDoc,
@@ -271,6 +279,8 @@ import {
 } from "@/components/SmartChecklist";
 import { STEP2_DOC, STEP3_DOC } from "@/lib/step-doc-types";
 import {
+  hasStep2MedianPriceTableDoc,
+  hasStep2OrStep3MedianPriceTableDoc,
   isStep5AllBiddersResultDocType,
   isStep7ContractNoticeLetterDocType,
 } from "@/lib/step-doc-types";
@@ -287,11 +297,13 @@ import {
   getStepRollbackProcurementStepWipe,
   getStepRollbackProjectWipe,
   updateProcurementStepWithSchemaFallback,
+  updateProjectWithSchemaFallback,
 } from "@/lib/step-rollback";
 import {
   canCompleteWorkflowStep,
   canRollbackWorkflowStep,
   canSaveHistoricalEdit,
+  isHistoricalWorkflowMode,
   getStepWorkflowMode,
   isWorkflowReadOnly,
   STRICT_SEQUENTIAL_NAVIGATION_MSG,
@@ -332,6 +344,7 @@ import { WorkflowStepper } from "@/components/WorkflowStepper";
 import { ProcurementMethodBadge } from "@/components/ProcurementMethodBadge";
 import { ProjectManagementActions } from "@/components/ProjectManagementActions";
 import { RollbackToEditProjectButton } from "@/components/RollbackToEditProjectButton";
+import { UnlockHistoricalStepButton } from "@/components/UnlockHistoricalStepButton";
 import {
   getDownstreamResetBackendSteps,
   hasCriticalProjectFieldChanges,
@@ -790,18 +803,13 @@ function ProjectDetailPage() {
         projectUpdates.warranty_started_at = null;
         projectUpdates.warranty_end_date = null;
       }
-      const { error: projectUpdateErr } = await supabase
-        .from("projects")
-        .update(projectUpdates)
-        .eq("id", project.id);
-      if (projectUpdateErr) {
-        const retryFields = { current_step: prevStep };
-        const { error: retryErr } = await supabase
-          .from("projects")
-          .update(retryFields)
-          .eq("id", project.id);
-        if (retryErr) throw new Error(retryErr.message);
-        console.warn("[Rollback] project column wipe skipped", projectUpdateErr.message);
+      const projectUpdateResult = await updateProjectWithSchemaFallback(
+        supabase,
+        project.id,
+        projectUpdates,
+      );
+      if (projectUpdateResult.error) {
+        throw new Error(projectUpdateResult.error);
       }
 
       setHistoricalEditUnlocked(false);
@@ -858,7 +866,7 @@ function ProjectDetailPage() {
         "ถอยกลับไปขั้นตอนที่ 1 แล้ว — ขั้นตอนที่ 2-5 ถูกรีเซ็ต กรุณาแก้ไขข้อมูลสาระสำคัญแล้วบันทึก",
       );
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "ถอยกลับเพื่อแก้ไขไม่สำเร็จ";
+      const message = err instanceof Error ? err.message : "ถอยกลับและเริ่มทำใหม่ไม่สำเร็จ";
       setError(message);
       toast.error(message);
     } finally {
@@ -1455,6 +1463,17 @@ function ProjectDetailPage() {
     ]);
   };
 
+  const handleReturnToCurrentStep = () => {
+    if (!project) return;
+    setHistoricalEditUnlocked(false);
+    setActiveStep(backendStepToUiStep(project.current_step, project.method));
+  };
+
+  const handleCancelHistoricalEdit = async () => {
+    setHistoricalEditUnlocked(false);
+    await invalidateAll();
+  };
+
   const setStep2Check = (key: Step2ChecklistKey, checked: boolean) => {
     if (!isManualChecklistKey(2, key)) return;
     setStep2Checklist((prev) => ({ ...prev, [key]: checked }));
@@ -1481,6 +1500,11 @@ function ProjectDetailPage() {
     setStep4BidResult((prev) => ({ ...prev, ...patch }));
   };
 
+  const copyStep4CommitteesFromStep2 = () => {
+    patchStep4BidResult(buildStep4CommitteesFromStep2(step2Committees));
+    toast.success("คัดลอกรายชื่อจากคณะกรรมการราคากลาง (ขั้นตอนที่ 2) แล้ว");
+  };
+
   const patchStep6Appeal = (patch: Partial<Step6AppealState>) => {
     setStep6Appeal((prev) => ({ ...prev, ...patch }));
   };
@@ -1504,7 +1528,9 @@ function ProjectDetailPage() {
   };
 
   const isManualChecklistKey = (stepNumber: number, key: string) =>
-    getSmartChecklistItems(stepNumber).find((i) => i.key === key)?.mode === "manual";
+    getSmartChecklistItems(stepNumber, {
+      isConstructionProject: stepNumber === 4 ? isConstructionProject : undefined,
+    }).find((i) => i.key === key)?.mode === "manual";
 
   const setStep1Check = (key: Step1ChecklistKey, checked: boolean) => {
     if (!isManualChecklistKey(1, key)) return;
@@ -1630,12 +1656,13 @@ function ProjectDetailPage() {
     if (!current || !project) return false;
     setError(null);
     if (workflowReadOnly) {
-      toast.error("อยู่ในโหมดดูอย่างเดียว — กด «แก้ไขข้อมูลในขั้นตอนนี้» ก่อนบันทึก");
+      toast.error("อยู่ในโหมดดูอย่างเดียว — กด «ปลดล็อกเพื่อแก้ไขข้อมูลขั้นตอนนี้» ก่อนบันทึก");
       return false;
     }
 
     const draftSavedToast = (stepLabel: string) => {
       if (canSaveHistoricalEdit(workflowMode)) {
+        setHistoricalEditUnlocked(false);
         toast.success(`บันทึกการแก้ไข${stepLabel}เรียบร้อย — ระบบอัปเดต Data Flow แล้ว`);
       } else {
         toast.success(`บันทึกร่าง${stepLabel}เรียบร้อย`);
@@ -1651,7 +1678,7 @@ function ProjectDetailPage() {
       );
       if (criticalChanged && project.current_step > 1) {
         const blockedMsg =
-          "กรุณาใช้ปุ่ม «ถอยกลับเพื่อแก้ไขโครงการ» ก่อนแก้ไขงบประมาณหรือวิธีจัดซื้อ";
+          "กรุณาใช้ปุ่ม «ถอยกลับและเริ่มทำใหม่ (Reset Workflow)» ก่อนแก้ไขงบประมาณหรือวิธีจัดซื้อ";
         setError(blockedMsg);
         toast.error(blockedMsg);
         return false;
@@ -1735,13 +1762,14 @@ function ProjectDetailPage() {
           ...resetResult.projectFieldWipe,
         };
         if (Object.keys(projectUpdate).length > 0) {
-          const { error: projResetErr } = await supabase
-            .from("projects")
-            .update(projectUpdate)
-            .eq("id", project.id);
-          if (projResetErr) {
-            setError(projResetErr.message);
-            toast.error(projResetErr.message);
+          const projResetResult = await updateProjectWithSchemaFallback(
+            supabase,
+            project.id,
+            projectUpdate,
+          );
+          if (projResetResult.error) {
+            setError(projResetResult.error);
+            toast.error(projResetResult.error);
             return false;
           }
         }
@@ -1822,22 +1850,27 @@ function ProjectDetailPage() {
         return false;
       }
 
-      const { error: projErr } = await supabase
-        .from("projects")
-        .update(
-          buildProjectStep2Fields(step2CommitteeOrder, step2MedianPrice, step2Committees, {
-            isConstructionProject: isConstructionProject,
-            referencePriceDocumentUrl: docs
-              .filter((d) => d.step_number === 2)
-              .find((d) => d.document_type === STEP2_DOC.REFERENCE_PRICE_SUMMARY)
-              ?.storage_path,
-          }),
-        )
-        .eq("id", project.id);
-      if (projErr) {
-        console.warn("[Step2] project fields sync failed", projErr);
+      const projectFields = buildProjectStep2Fields(
+        step2CommitteeOrder,
+        step2MedianPrice,
+        step2Committees,
+        {
+          isConstructionProject: isConstructionProject,
+          referencePriceDocumentUrl: docs
+            .filter((d) => d.step_number === 2)
+            .find((d) => d.document_type === STEP2_DOC.REFERENCE_PRICE_SUMMARY)
+            ?.storage_path,
+        },
+      );
+      const projectUpdateResult = await updateProjectWithSchemaFallback(
+        supabase,
+        project.id,
+        projectFields,
+      );
+      if (projectUpdateResult.error) {
+        console.warn("[Step2] project fields sync failed", projectUpdateResult.error);
         toast.warning(
-          `บันทึกรูปแบบคณะกรรมการลงตาราง projects ไม่สำเร็จ: ${projErr.message} — รัน migration 20260615120000_project_median_approval_letter_no.sql ใน Supabase SQL Editor (หรือ node scripts/apply-step2-median-approval-column.mjs)`,
+          `บันทึกข้อมูลลงตาราง projects ไม่สมบูรณ์: ${projectUpdateResult.error} — รัน scripts/sql/add-construction-reference-price-columns.sql ใน Supabase SQL Editor (หรือ node scripts/apply-construction-reference-price-columns.mjs)`,
         );
       }
 
@@ -1949,7 +1982,7 @@ function ProjectDetailPage() {
       draftSavedToast("ขั้นตอนที่ 3 ");
       await propagateResponsibleToStep1(effectiveResponsibleName);
       await invalidateAll();
-      return;
+      return true;
     }
 
     if (current.step_number === 4) {
@@ -1973,9 +2006,7 @@ function ProjectDetailPage() {
         setError(timelineBlock);
         return false;
       }
-      const bidResultForSave = normalizeStep4BidResult(
-        applyStep4WinnerFromBiddersTable(step4BidResult),
-      );
+      const bidResultForSave = normalizeStep4BidResult(step4BidResult);
       console.log(
         "👥 [STEP 4 STRUCTURED COMMITTEES] Evaluation Committee Array:",
         bidResultForSave.evaluation_committee_members,
@@ -2020,8 +2051,13 @@ function ProjectDetailPage() {
     }
 
     if (current.step_number === 5) {
+      const bidResultForSave = normalizeStep4BidResult(
+        applyStep4WinnerFromBiddersTable(step4BidResult),
+      );
+      setStep4BidResult(bidResultForSave);
       const timelineBlock = getTimelineSaveBlockMessage(5, timelineValidationCtx, {
         step5Announcement: step5Announcement,
+        bidResult: bidResultForSave,
       });
       if (timelineBlock) {
         toast.error(timelineBlock);
@@ -2053,6 +2089,34 @@ function ProjectDetailPage() {
       if (e?.error) {
         setError(e.error.message);
         return;
+      }
+      if (step4Record) {
+        const step4FormNote = serializeStepNote(note, {
+          checklist: step4Checklist,
+          bidResult: bidResultForSave,
+          step4_notes: buildStep4NotesPayload(bidResultForSave),
+        });
+        const { error: step4Err } = await patchStepDraft(
+          step4Record.id,
+          buildStepDraftFields(effectiveResponsibleName, note, ""),
+          { note: step4FormNote || null },
+        );
+        if (step4Err?.error) {
+          setError(step4Err.error.message);
+          return false;
+        }
+        const { error: step4ProjErr } = await supabase
+          .from("projects")
+          .update({
+            ...buildProjectStep4Fields(bidResultForSave),
+            ...buildProjectProcurementRequestFields(
+              step4BidResultToProcurementAnnouncement(bidResultForSave),
+            ),
+          })
+          .eq("id", project.id);
+        if (step4ProjErr) {
+          console.warn("[Step5] bid result sync to step 4 failed", step4ProjErr);
+        }
       }
       const { error: projErr } = await supabase
         .from("projects")
@@ -2340,16 +2404,18 @@ function ProjectDetailPage() {
         !!step3Announcement.hearing_proceed,
         !!step3Announcement.hearing_skipped,
       );
-      if (hearingFormActive) {
-        const pubErr = validateStep3PublicationDates(
-          step3Announcement.publication_start,
-          step3Announcement.publication_end,
-          step3Announcement.approval_letter_date,
-          step3Announcement.publication_end_extension_reason,
-        );
-        if (pubErr) {
-          failStepCompliance(pubErr, inferPublicationComplianceTarget(pubErr));
-          return;
+      if (hearingFormActive || step3Announcement.hearing_skipped) {
+        if (hearingFormActive) {
+          const pubErr = validateStep3PublicationDates(
+            step3Announcement.publication_start,
+            step3Announcement.publication_end,
+            step3Announcement.approval_letter_date,
+            step3Announcement.publication_end_extension_reason,
+          );
+          if (pubErr) {
+            failStepCompliance(pubErr, inferPublicationComplianceTarget(pubErr));
+            return;
+          }
         }
         const step3Docs = docs.filter((d) => d.step_number === 3);
         const step3ComplianceIssues = getStep3ComplianceIssues(step3Checklist, {
@@ -2363,11 +2429,11 @@ function ProjectDetailPage() {
           hasDraftAnnouncementDoc: step3Docs.some(
             (d) => d.document_type === STEP3_DOC.DRAFT_ANNOUNCEMENT_BID,
           ),
-          hasBg06Doc:
-            docs.some(
-              (d) =>
-                d.step_number === 2 && d.document_type === STEP2_DOC.MEDIAN_PRICE_BG06,
-            ) || step3Docs.some((d) => d.document_type === STEP3_DOC.MEDIAN_BG06),
+          hasBg06Doc: hasStep2OrStep3MedianPriceTableDoc(docs, project.project_type),
+          hasMedianPriceTableDoc: hasStep2OrStep3MedianPriceTableDoc(
+            docs,
+            project.project_type,
+          ),
           hasEgpAnnouncementDoc: step3Docs.some(
             (d) => d.document_type === STEP3_DOC.EGP_ANNOUNCEMENT,
           ),
@@ -2377,7 +2443,7 @@ function ProjectDetailPage() {
           hasFeedbackReportDoc: step3Docs.some(
             (d) => d.document_type === STEP3_DOC.FEEDBACK_REPORT,
           ),
-          hearingFormActive: true,
+          hearingFormActive,
           timelineCtx: timelineValidationCtx,
           step3Docs,
         });
@@ -2393,8 +2459,9 @@ function ProjectDetailPage() {
         (d) => d.document_type === STEP2_DOC.APPOINTMENT_ORDER,
       );
       const hasBoqDoc = step2Docs.some((d) => d.document_type === STEP2_DOC.BOQ);
-      const hasBg06Doc = step2Docs.some(
-        (d) => d.document_type === STEP2_DOC.MEDIAN_PRICE_BG06,
+      const hasMedianPriceTableDoc = hasStep2MedianPriceTableDoc(
+        step2Docs,
+        project.project_type,
       );
       const hasIntegrityLetterDoc = step2Docs.some(
         (d) => d.document_type === STEP2_DOC.INTEGRITY_LETTER,
@@ -2407,7 +2474,8 @@ function ProjectDetailPage() {
         medianPrice: step2MedianPrice,
         hasAppointmentOrderDoc: hasAppointmentDoc,
         hasIntegrityLetterDoc,
-        hasBg06Doc,
+        hasMedianPriceTableDoc,
+        isConstructionProject: isConstructionProject,
       });
       const complianceIssues = getStep2ComplianceIssues(
         step2Checklist,
@@ -2418,11 +2486,12 @@ function ProjectDetailPage() {
           responsibleName: effectiveResponsibleName,
           hasAppointmentOrderDoc: hasAppointmentDoc,
           hasBoqDoc,
-          hasBg06Doc,
+          hasMedianPriceTableDoc,
           hasIntegrityLetterDoc,
           hasMarketQuotesDoc,
           hasReferencePriceDoc: hasStep2ReferencePriceDoc(step2Docs),
           isConstructionProject: isConstructionProject,
+          projectType: project.project_type,
           step1Budget: calcBudget,
           stepDocs: step2Docs,
           timelineCtx: timelineValidationCtx,
@@ -2469,14 +2538,20 @@ function ProjectDetailPage() {
     if (!bypassProcurementGates && current.step_number === 5) {
       const step5Docs = docs.filter((d) => d.step_number === 5);
       const step5Uploaded = step5Docs.map((d) => d.document_type);
+      const bidEvalTypes = collectBidEvaluationUploadedDocTypes(docs);
       const complianceIssues = getStep5ComplianceIssues(
         step5Checklist,
         step5Announcement,
+        step4BidResult,
         {
+          hasPriceComparisonDoc: hasStep4PriceComparisonDoc(bidEvalTypes),
+          hasCommitteeReportDoc: hasStep4CommitteeReportDoc(bidEvalTypes),
+          hasEgpBidSummaryDoc: hasStep4EgpBidSummaryDoc(bidEvalTypes),
           hasEgpWinnerDoc: hasStep5EgpWinnerDoc(step5Uploaded),
           hasPhysicalBoardDoc: hasStep5PhysicalBoardDoc(step5Uploaded),
           evaluationApprovalDate: step5EvaluationApprovalDate,
           responsibleName: effectiveResponsibleName,
+          step3PublicationEnd,
           stepDocs: step5Docs,
           timelineCtx: timelineValidationCtx,
         },
@@ -2614,9 +2689,7 @@ function ProjectDetailPage() {
           hasSignedProcurementRequestDoc: hasStep4SignedProcurementRequestDoc(step4Uploaded),
           hasCommitteeOrderDoc: hasStep4EvaluationInspectionOrderDoc(docs),
           hasSupervisorOrderDoc: hasSiteSupervisorOrderDoc(docs),
-          hasPriceComparisonDoc: hasStep4PriceComparisonDoc(step4Uploaded),
-          hasCommitteeReportDoc: hasStep4CommitteeReportDoc(step4Uploaded),
-          hasEgpBidSummaryDoc: hasStep4EgpBidSummaryDoc(step4Uploaded),
+          isConstructionProject,
           step2MedianApprovalDate,
           step3PublicationEnd,
           timelineCtx: timelineValidationCtx,
@@ -2639,7 +2712,11 @@ function ProjectDetailPage() {
       const requiredDocs =
         current.step_number === 1
           ? getStep1RequiredDocsForMethod(stepDocs, procurementMethod).map((d) => d.name)
-          : stepDocs.filter((d) => d.required).map((d) => d.name);
+          : current.step_number === 2
+            ? getStep2RequiredDocsForProject(stepDocs, project.project_type)
+                .filter((d) => d.required)
+                .map((d) => d.name)
+            : stepDocs.filter((d) => d.required).map((d) => d.name);
       const uploaded = docs
         .filter((d) => d.step_number === current.step_number)
         .map((d) => d.document_type);
@@ -2652,13 +2729,22 @@ function ProjectDetailPage() {
           );
         }
         if (current.step_number === 4) {
+          if (
+            name === STEP2_DOC.SITE_SUPERVISOR_ORDER &&
+            !isConstructionProject
+          ) {
+            return false;
+          }
           return !isStep4RequiredDocSatisfied(name, uploaded);
         }
         if (current.step_number === 2) {
-          return !isStep2RequiredDocSatisfied(name, uploaded);
+          return !isStep2RequiredDocSatisfied(name, uploaded, project.project_type);
         }
         if (current.step_number === 5) {
-          return !isStep5RequiredDocSatisfied(name, uploaded);
+          const legacyStep4 = docs
+            .filter((d) => d.step_number === 4)
+            .map((d) => d.document_type);
+          return !isStep5RequiredDocSatisfied(name, uploaded, legacyStep4);
         }
         return !uploaded.includes(name);
       });
@@ -2684,19 +2770,60 @@ function ProjectDetailPage() {
   };
 
   const proceedStep3Hearing = () => {
-    if (!project || activeStep !== project.current_step || workflowReadOnly) return;
-    patchStep3Announcement({ hearing_proceed: true, hearing_skipped: false, skip_reason: undefined });
+    if (!project || current?.step_number !== 3 || workflowReadOnly) return;
+    if (project.current_step > 3) {
+      const ok = window.confirm(
+        "โครงการดำเนินไปขั้นตอนถัดไปแล้ว — หากเปิดการจัดฟังคำวิจารณ์ใหม่ อาจต้องตรวจสอบและทำขั้นตอนที่ 4 ใหม่หลังบันทึก ต้องการดำเนินการต่อหรือไม่?",
+      );
+      if (!ok) return;
+    }
+    setStep3Announcement((prev) => buildStep3ProceedHearingAnnouncementState(prev));
     toast.message("ดำเนินการจัดฟังคำวิจารณ์ร่างประกาศ — กรุณากรอกข้อมูลและแนบเอกสารให้ครบ");
   };
 
+  const clearStep3HearingAttachmentDocs = async () => {
+    if (!project) return;
+    const hearingDocs = docs.filter(
+      (d) => d.step_number === 3 && isStep3HearingOnlyDocType(d.document_type),
+    );
+    if (hearingDocs.length === 0) return;
+    for (const doc of hearingDocs) {
+      await deleteStepDocument(project, doc, { silent: true });
+    }
+    await invalidateAll();
+  };
+
   const skipStep3 = async (reason: Step3SkipReason) => {
-    if (!current || !project || current.step_number !== 3) return;
-    if (activeStep !== project.current_step || workflowReadOnly) return;
+    if (!current || !project || current.step_number !== 3 || workflowReadOnly) return;
     if (getStep3HearingTier(Number(project.budget)) === "mandatory") {
       toast.error(STEP3_MANDATORY_HEARING_BLOCK_MSG);
       setError(STEP3_MANDATORY_HEARING_BLOCK_MSG);
       return;
     }
+
+    const isHistoricalMinorEdit = canSaveHistoricalEdit(workflowMode);
+    const isActiveStep3 = project.current_step === 3;
+
+    if (isHistoricalMinorEdit || !isActiveStep3) {
+      if (step3Announcement.hearing_skipped && step3Announcement.skip_reason === reason) {
+        return;
+      }
+      if (step3Announcement.hearing_proceed && project.current_step > 3) {
+        const ok = window.confirm(
+          "โครงการดำเนินไปขั้นตอนถัดไปแล้ว — หากข้ามการฟังคำวิจารณ์ ข้อมูลวันที่และเอกสารวิจารณ์จะถูกล้างออก อาจต้องตรวจสอบขั้นตอนที่ 4 ใหม่หลังบันทึก ต้องการดำเนินการต่อหรือไม่?",
+        );
+        if (!ok) return;
+      }
+      setStep3Announcement((prev) => buildStep3SkipAnnouncementState(prev, reason));
+      await clearStep3HearingAttachmentDocs();
+      toast.message(
+        reason === "exempt"
+          ? "ตั้งค่าข้ามขั้นตอนรับฟังความคิดเห็นแล้ว — กด «บันทึกข้อมูล» เพื่อบันทึกลงระบบ"
+          : "ตั้งค่าข้ามการฟังคำวิจารณ์แล้ว — กด «บันทึกข้อมูล» เพื่อบันทึกลงระบบ",
+      );
+      return;
+    }
+
     const label =
       reason === "exempt"
         ? "ข้ามขั้นตอนรับฟังความคิดเห็น (ยกเว้นตามวงเงิน)"
@@ -2706,13 +2833,9 @@ function ProjectDetailPage() {
     setStep3Skipping(true);
     setError(null);
     try {
-      const updatedAnnouncement: Step3Announcement = {
-        ...step3Announcement,
-        hearing_skipped: true,
-        skip_reason: reason,
-        hearing_proceed: false,
-      };
+      const updatedAnnouncement = buildStep3SkipAnnouncementState(step3Announcement, reason);
       setStep3Announcement(updatedAnnouncement);
+      await clearStep3HearingAttachmentDocs();
       const formNote = serializeStepNote(note, {
         checklist: step3Checklist,
         announcement: updatedAnnouncement,
@@ -2932,6 +3055,10 @@ function ProjectDetailPage() {
               !!step3Announcement.hearing_proceed,
               !!step3Announcement.hearing_skipped,
             );
+          const showStep3DetailForm =
+            current.step_number === 3 &&
+            step3Tier != null &&
+            (showStep3HearingForm || !!step3Announcement.hearing_skipped);
           const minDays =
             current.step_number === 3
               ? 0
@@ -2981,7 +3108,13 @@ function ProjectDetailPage() {
             dueDateObj! > contractMaxDeadline;
           const stepDocsForAuto = docs.filter((d) => d.step_number === current.step_number);
           const uploadedDocTypesForAuto = stepDocsForAuto.map((d) => d.document_type);
-          const requiredDocsForStep = STEP_DOCS_DETAILED[current.step_number - 1] ?? [];
+          const requiredDocsForStep =
+            current.step_number === 2
+              ? getStep2RequiredDocsForProject(
+                  STEP_DOCS_DETAILED[1] ?? [],
+                  project.project_type,
+                )
+              : STEP_DOCS_DETAILED[current.step_number - 1] ?? [];
           const step3DocsForAuto = docs.filter((d) => d.step_number === 3);
           const autoCheckStates = computeAutoChecklistState({
             stepNumber: current.step_number,
@@ -2993,6 +3126,7 @@ function ProjectDetailPage() {
             committees: step2Committees,
             committeeOrder: step2CommitteeOrder,
             medianPrice: step2MedianPrice,
+            isConstructionProject: isConstructionProject,
             announcement: step3Announcement,
             bidResult: step4BidResult,
             approvedMedianPrice: project.approved_median_price ?? null,
@@ -3004,12 +3138,13 @@ function ProjectDetailPage() {
               (d) => d.document_type === STEP2_DOC.INTEGRITY_LETTER,
             ),
             hasBg06Doc:
-              docs.some(
-                (d) =>
-                  d.step_number === 2 && d.document_type === STEP2_DOC.MEDIAN_PRICE_BG06,
-              ) ||
-              step3DocsForAuto.some((d) => d.document_type === STEP3_DOC.MEDIAN_BG06) ||
-              stepDocsForAuto.some((d) => d.document_type === STEP2_DOC.MEDIAN_PRICE_BG06),
+              current.step_number === 2
+                ? hasStep2MedianPriceTableDoc(stepDocsForAuto, project.project_type)
+                : hasStep2OrStep3MedianPriceTableDoc(docs, project.project_type),
+            hasMedianPriceTableDoc:
+              current.step_number === 2
+                ? hasStep2MedianPriceTableDoc(stepDocsForAuto, project.project_type)
+                : hasStep2OrStep3MedianPriceTableDoc(docs, project.project_type),
             hasDraftTorDoc: step3DocsForAuto.some(
               (d) => d.document_type === STEP3_DOC.DRAFT_TOR_SPEC,
             ),
@@ -3025,9 +3160,38 @@ function ProjectDetailPage() {
             hasMemoDoc: step3DocsForAuto.some(
               (d) => d.document_type === STEP3_DOC.MEMO_APPROVAL,
             ),
-            hasSignedProcurementRequestDoc: hasStep4SignedProcurementRequestDoc(
-              stepDocsForAuto.map((d) => d.document_type),
-            ),
+            hasSignedProcurementRequestDoc:
+              current.step_number === 4
+                ? hasStep4SignedProcurementRequestDoc(
+                    stepDocsForAuto.map((d) => d.document_type),
+                  )
+                : undefined,
+            hasCommitteeOrderDoc:
+              current.step_number === 4
+                ? hasStep4EvaluationInspectionOrderDoc(docs)
+                : undefined,
+            hasSupervisorOrderDoc:
+              current.step_number === 4 ? hasSiteSupervisorOrderDoc(docs) : undefined,
+            hasPriceComparisonDoc:
+              current.step_number === 5
+                ? hasStep4PriceComparisonDoc(collectBidEvaluationUploadedDocTypes(docs))
+                : undefined,
+            hasCommitteeEvaluationDoc:
+              current.step_number === 5
+                ? hasStep4CommitteeReportDoc(collectBidEvaluationUploadedDocTypes(docs))
+                : undefined,
+            hasEgpBidSummaryDoc:
+              current.step_number === 5
+                ? hasStep4EgpBidSummaryDoc(collectBidEvaluationUploadedDocTypes(docs))
+                : undefined,
+            hasBlacklistEvidenceDoc:
+              current.step_number === 5
+                ? hasStep4BlacklistEvidenceDoc(collectBidEvaluationUploadedDocTypes(docs))
+                : undefined,
+            hasConflictEvidenceDoc:
+              current.step_number === 5
+                ? hasStep4ConflictEvidenceDoc(collectBidEvaluationUploadedDocTypes(docs))
+                : undefined,
             appealStatus:
               current.step_number === 6
                 ? step6Appeal.appeal_status
@@ -3062,8 +3226,9 @@ function ProjectDetailPage() {
                     (d) => d.document_type === STEP2_DOC.APPOINTMENT_ORDER,
                   ),
                   hasBoqDoc: docsForStep.some((d) => d.document_type === STEP2_DOC.BOQ),
-                  hasBg06Doc: docsForStep.some(
-                    (d) => d.document_type === STEP2_DOC.MEDIAN_PRICE_BG06,
+                  hasMedianPriceTableDoc: hasStep2MedianPriceTableDoc(
+                    docsForStep,
+                    project.project_type,
                   ),
                   hasIntegrityLetterDoc: docsForStep.some(
                     (d) => d.document_type === STEP2_DOC.INTEGRITY_LETTER,
@@ -3071,6 +3236,7 @@ function ProjectDetailPage() {
                   hasMarketQuotesDoc: hasStep2MarketQuotesDoc(docsForStep),
                   hasReferencePriceDoc: hasStep2ReferencePriceDoc(docsForStep),
                   isConstructionProject: isConstructionProject,
+                  projectType: project.project_type,
                   step1Budget: calcBudget,
                   stepDocs: docsForStep,
                   timelineCtx: timelineValidationCtx,
@@ -3099,11 +3265,10 @@ function ProjectDetailPage() {
               mode={workflowMode}
               stepNumber={current.step_number}
               currentWorkflowStep={isSpecificShortWorkflow ? workflowUiStep : workflowStep}
-              onUnlockEdit={() => setHistoricalEditUnlocked(true)}
               disableUnlockEdit={
                 current.step_number === 1 && workflowStep > 1
               }
-              unlockBlockedHint="การแก้ไขงบประมาณและวิธีจัดซื้อต้องถอยกลับไปขั้นตอนที่ 1 — กดปุ่ม «ถอยกลับเพื่อแก้ไขโครงการ»"
+              unlockBlockedHint="การแก้ไขงบประมาณและวิธีจัดซื้อต้องถอยกลับไปขั้นตอนที่ 1 — กดปุ่ม «ถอยกลับและเริ่มทำใหม่ (Reset Workflow)»"
             />
             {!isStepCompletedView && current.step_number <= 9 && (
               <div className="flex justify-end">
@@ -3325,7 +3490,7 @@ function ProjectDetailPage() {
                       chronologicalCtx={timelineValidationCtx}
                     />
                   )}
-                  {current.step_number === 3 && !isSpecificShortWorkflow && showStep3HearingForm && (
+                  {current.step_number === 3 && !isSpecificShortWorkflow && showStep3DetailForm && (
                     <Step3DetailForm
                       checklist={step3Checklist}
                       onChecklistChange={setStep3Check}
@@ -3348,13 +3513,15 @@ function ProjectDetailPage() {
                         highlightedMissingDocs,
                       }}
                       budget={calcBudget}
+                      hearingFormActive={showStep3HearingForm}
+                      projectType={step1Profile.project_type || project.project_type}
                       step2Committees={step2Committees}
                       complianceLog={step3ComplianceLog}
                       onComplianceLogChange={patchStep3ComplianceLog}
                       chronologicalCtx={timelineValidationCtx}
                     />
                   )}
-                  {current.step_number === 3 && !isSpecificShortWorkflow && !showStep3HearingForm && current.status !== "completed" && (
+                  {current.step_number === 3 && !isSpecificShortWorkflow && !showStep3DetailForm && current.status !== "completed" && (
                     <p className="text-sm text-muted-foreground rounded-md border border-dashed p-4">
                       {step3Tier === "exempt"
                         ? "โครงการวงเงินไม่เกิน 5 ล้านบาท — กดปุ่ม «ข้ามขั้นตอนนี้อัตโนมัติ» ในกล่องไกด์ไลน์ด้านบนเพื่อไปขั้นตอนที่ 4"
@@ -3379,6 +3546,9 @@ function ProjectDetailPage() {
                       approvedMedianPrice={project.approved_median_price ?? null}
                       specificMethodReason={step1SpecificMethodReason}
                       supervisorOrderDocs={step4SupervisorOrderDocs}
+                      isConstructionProject={isConstructionProject}
+                      step2Committees={step2Committees}
+                      onCopyCommitteesFromStep2={copyStep4CommitteesFromStep2}
                       docBinder={{
                         project,
                         stepNumber: 4,
@@ -3387,7 +3557,6 @@ function ProjectDetailPage() {
                         highlightedMissingDocs,
                       }}
                       highlightedComplianceIssues={highlightedComplianceIssues}
-                      winnerDataLocked={isStep4WinnerDataLocked(project.current_step)}
                       chronologicalCtx={timelineValidationCtx}
                     />
                   )}
@@ -3397,21 +3566,17 @@ function ProjectDetailPage() {
                       onChecklistChange={setStep5Check}
                       autoCheckStates={autoCheckStates}
                       readOnly={workflowReadOnly}
+                      bidResult={step4BidResult}
+                      onBidResultChange={patchStep4BidResult}
                       announcement={step5Announcement}
                       onAnnouncementChange={patchStep5Announcement}
-                      evaluationApprovalDate={step5EvaluationApprovalDate}
-                      winningBidderName={
-                        mergedStep4BidResult.winning_bidder_name ||
-                        project.winning_bidder_name ||
-                        ""
-                      }
-                      finalAgreedAmount={
-                        resolveStep4ContractAmount(mergedStep4BidResult, project) ?? null
-                      }
-                      winnerDataLocked={isStep5WinnerDataLocked(project.current_step)}
+                      step4Timeline={step4Timeline}
+                      step3PublicationEnd={step3PublicationEnd}
+                      winnerDataLocked={isStep4WinnerDataLocked(project.current_step)}
                       responsibleName={responsibleName}
                       onResponsibleNameChange={setResponsibleName}
                       step1ResponsibleDefault={step1ResponsibleDefault}
+                      highlightedComplianceIssues={highlightedComplianceIssues}
                       docBinder={{
                         project,
                         stepNumber: 5,
@@ -3619,18 +3784,23 @@ function ProjectDetailPage() {
                 </>
               )}
 
-              {error && !isStepCompletedView && (
+              {error && (isHistoricalWorkflowMode(workflowMode) || !isStepCompletedView) && (
                 <p className="text-sm text-destructive mt-3">{error}</p>
               )}
 
-              {!isStepCompletedView && (() => {
+              {(isHistoricalWorkflowMode(workflowMode) || !isStepCompletedView) && (() => {
                 const stepDocs = STEP_DOCS_DETAILED[current.step_number - 1] ?? [];
                 const requiredDocs =
-                  current.step_number === 3 && !showStep3HearingForm
+                  current.step_number === 3 && !showStep3DetailForm
                     ? []
                     : current.step_number === 1
                       ? getStep1RequiredDocsForMethod(stepDocs, procurementMethod)
-                      : stepDocs.filter((d) => d.required);
+                      : current.step_number === 2
+                        ? getStep2RequiredDocsForProject(
+                            stepDocs,
+                            project.project_type,
+                          ).filter((d) => d.required)
+                        : stepDocs.filter((d) => d.required);
                 const uploadedTypes = docsForStep.map((d) => d.document_type);
                 const completedCount = requiredDocs.filter((d) =>
                   current.step_number === 1
@@ -3639,7 +3809,13 @@ function ProjectDetailPage() {
                         uploadedTypes,
                         procurementMethod,
                       )
-                    : uploadedTypes.includes(d.name),
+                    : current.step_number === 2
+                      ? isStep2RequiredDocSatisfied(
+                          d.name,
+                          uploadedTypes,
+                          project.project_type,
+                        )
+                      : uploadedTypes.includes(d.name),
                 ).length;
                 const total = requiredDocs.length;
                 const allUploaded = total === 0 || completedCount >= total;
@@ -3650,9 +3826,9 @@ function ProjectDetailPage() {
                 const step2HasBoqDoc =
                   current.step_number === 2 &&
                   docsForStep.some((d) => d.document_type === STEP2_DOC.BOQ);
-                const step2HasBg06Doc =
+                const step2HasMedianPriceTableDoc =
                   current.step_number === 2 &&
-                  docsForStep.some((d) => d.document_type === STEP2_DOC.MEDIAN_PRICE_BG06);
+                  hasStep2MedianPriceTableDoc(docsForStep, project.project_type);
                 const step2HasIntegrityLetterDoc =
                   current.step_number === 2 &&
                   docsForStep.some((d) => d.document_type === STEP2_DOC.INTEGRITY_LETTER);
@@ -3679,15 +3855,19 @@ function ProjectDetailPage() {
                   current.step_number === 4 && hasStep4EvaluationInspectionOrderDoc(docs);
                 const step4HasSupervisorOrderDoc =
                   current.step_number === 4 && hasSiteSupervisorOrderDoc(docs);
-                const step4HasPriceComparisonDoc =
-                  current.step_number === 4 &&
-                  hasStep4PriceComparisonDoc(step4UploadedTypes);
-                const step4HasCommitteeReportDoc =
-                  current.step_number === 4 &&
-                  hasStep4CommitteeReportDoc(step4UploadedTypes);
-                const step4HasEgpBidSummaryDoc =
-                  current.step_number === 4 &&
-                  hasStep4EgpBidSummaryDoc(step4UploadedTypes);
+                const bidEvalUploadedTypes =
+                  current.step_number === 5
+                    ? collectBidEvaluationUploadedDocTypes(docs)
+                    : [];
+                const step5HasPriceComparisonDoc =
+                  current.step_number === 5 &&
+                  hasStep4PriceComparisonDoc(bidEvalUploadedTypes);
+                const step5HasCommitteeReportDoc =
+                  current.step_number === 5 &&
+                  hasStep4CommitteeReportDoc(bidEvalUploadedTypes);
+                const step5HasEgpBidSummaryDoc =
+                  current.step_number === 5 &&
+                  hasStep4EgpBidSummaryDoc(bidEvalUploadedTypes);
                 const step5UploadedTypes =
                   current.step_number === 5
                     ? docsForStep.map((d) => d.document_type)
@@ -3701,7 +3881,7 @@ function ProjectDetailPage() {
                   step5UploadedTypes.some((t) => isStep5AllBiddersResultDocType(t));
                 const step3DocsForCompliance = docs.filter((d) => d.step_number === 3);
                 const step3ComplianceOpts =
-                  current.step_number === 3 && showStep3HearingForm
+                  current.step_number === 3 && showStep3DetailForm
                     ? {
                         announcement: step3Announcement,
                         responsibleName: effectiveResponsibleName,
@@ -3717,15 +3897,14 @@ function ProjectDetailPage() {
                         hasDraftAnnouncementDoc: step3DocsForCompliance.some(
                           (d) => d.document_type === STEP3_DOC.DRAFT_ANNOUNCEMENT_BID,
                         ),
-                        hasBg06Doc:
-                          docs.some(
-                            (d) =>
-                              d.step_number === 2 &&
-                              d.document_type === STEP2_DOC.MEDIAN_PRICE_BG06,
-                          ) ||
-                          step3DocsForCompliance.some(
-                            (d) => d.document_type === STEP3_DOC.MEDIAN_BG06,
-                          ),
+                        hasBg06Doc: hasStep2OrStep3MedianPriceTableDoc(
+                          docs,
+                          project.project_type,
+                        ),
+                        hasMedianPriceTableDoc: hasStep2OrStep3MedianPriceTableDoc(
+                          docs,
+                          project.project_type,
+                        ),
                         hasEgpAnnouncementDoc: step3DocsForCompliance.some(
                           (d) => d.document_type === STEP3_DOC.EGP_ANNOUNCEMENT,
                         ),
@@ -3735,7 +3914,7 @@ function ProjectDetailPage() {
                         hasFeedbackReportDoc: step3DocsForCompliance.some(
                           (d) => d.document_type === STEP3_DOC.FEEDBACK_REPORT,
                         ),
-                        hearingFormActive: true,
+                        hearingFormActive: showStep3HearingForm,
                         timelineCtx: timelineValidationCtx,
                         step3Docs: step3DocsForCompliance,
                       }
@@ -3760,7 +3939,7 @@ function ProjectDetailPage() {
                 const step3Ready =
                   current.step_number !== 3 ||
                   (step3MandatoryIssues.length === 0 &&
-                    (!showStep3HearingForm ||
+                    (!showStep3DetailForm ||
                       (step3ComplianceOpts != null &&
                         isStep3ReadyForNext(step3Checklist, step3ComplianceOpts))));
                 const step1ComplianceIssues =
@@ -3808,9 +3987,7 @@ function ProjectDetailPage() {
                           hasSignedProcurementRequestDoc: step4HasSignedProcurementRequest,
                           hasCommitteeOrderDoc: step4HasCommitteeOrderDoc,
                           hasSupervisorOrderDoc: step4HasSupervisorOrderDoc,
-                          hasPriceComparisonDoc: step4HasPriceComparisonDoc,
-                          hasCommitteeReportDoc: step4HasCommitteeReportDoc,
-                          hasEgpBidSummaryDoc: step4HasEgpBidSummaryDoc,
+                          isConstructionProject,
                           step2MedianApprovalDate,
                           step3PublicationEnd,
                           timelineCtx: timelineValidationCtx,
@@ -3831,11 +4008,16 @@ function ProjectDetailPage() {
                     ? getStep5ComplianceIssues(
                         step5Checklist,
                         step5Announcement,
+                        step4BidResult,
                         {
+                          hasPriceComparisonDoc: step5HasPriceComparisonDoc,
+                          hasCommitteeReportDoc: step5HasCommitteeReportDoc,
+                          hasEgpBidSummaryDoc: step5HasEgpBidSummaryDoc,
                           hasEgpWinnerDoc: step5HasEgpWinner,
                           hasPhysicalBoardDoc: step5HasPhysicalBoard,
                           evaluationApprovalDate: step5EvaluationApprovalDate,
                           responsibleName: effectiveResponsibleName,
+                          step3PublicationEnd,
                           stepDocs: docsForStep,
                           timelineCtx: timelineValidationCtx,
                         },
@@ -3845,13 +4027,23 @@ function ProjectDetailPage() {
                 const step5Ready =
                   current.step_number !== 5 ||
                   (!step5DateInvalid &&
-                    isStep5ReadyForNext(step5Checklist, step5Announcement, {
-                      hasEgpWinnerDoc: step5HasEgpWinner,
-                      hasPhysicalBoardDoc: step5HasPhysicalBoard,
-                      evaluationApprovalDate: step5EvaluationApprovalDate,
-                      responsibleName: effectiveResponsibleName,
-                      stepDocs: docsForStep,
-                    }));
+                    isStep5ReadyForNext(
+                      step5Checklist,
+                      step5Announcement,
+                      step4BidResult,
+                      {
+                        hasPriceComparisonDoc: step5HasPriceComparisonDoc,
+                        hasCommitteeReportDoc: step5HasCommitteeReportDoc,
+                        hasEgpBidSummaryDoc: step5HasEgpBidSummaryDoc,
+                        hasEgpWinnerDoc: step5HasEgpWinner,
+                        hasPhysicalBoardDoc: step5HasPhysicalBoard,
+                        evaluationApprovalDate: step5EvaluationApprovalDate,
+                        responsibleName: effectiveResponsibleName,
+                        step3PublicationEnd,
+                        stepDocs: docsForStep,
+                      },
+                      autoCheckStates,
+                    ));
                 const step6ChecklistNormalized = normalizeManualChecklist(
                   6,
                   genericManualChecklist,
@@ -4034,9 +4226,7 @@ function ProjectDetailPage() {
                     hasSignedProcurementRequestDoc: step4HasSignedProcurementRequest,
                     hasCommitteeOrderDoc: step4HasCommitteeOrderDoc,
                     hasSupervisorOrderDoc: step4HasSupervisorOrderDoc,
-                    hasPriceComparisonDoc: step4HasPriceComparisonDoc,
-                    hasCommitteeReportDoc: step4HasCommitteeReportDoc,
-                    hasEgpBidSummaryDoc: step4HasEgpBidSummaryDoc,
+                    isConstructionProject,
                     step2MedianApprovalDate,
                     step3PublicationEnd,
                     timelineCtx: timelineValidationCtx,
@@ -4095,7 +4285,7 @@ function ProjectDetailPage() {
                         hasAppointmentOrderDoc: step2HasAppointmentDoc,
                         hasBoqDoc: step2HasBoqDoc,
                         hasIntegrityLetterDoc: step2HasIntegrityLetterDoc,
-                        hasBg06Doc: step2HasBg06Doc,
+                        hasMedianPriceTableDoc: step2HasMedianPriceTableDoc,
                         stepDocs: docsForStep,
                         isConstructionProject: isConstructionProject,
                       })
@@ -4124,9 +4314,7 @@ function ProjectDetailPage() {
                         hasSignedProcurementRequestDoc: step4HasSignedProcurementRequest,
                         hasCommitteeOrderDoc: step4HasCommitteeOrderDoc,
                         hasSupervisorOrderDoc: step4HasSupervisorOrderDoc,
-                        hasPriceComparisonDoc: step4HasPriceComparisonDoc,
-                        hasCommitteeReportDoc: step4HasCommitteeReportDoc,
-                        hasEgpBidSummaryDoc: step4HasEgpBidSummaryDoc,
+                        isConstructionProject,
                       })
                     : null;
                 const step4FormProgress =
@@ -4141,15 +4329,19 @@ function ProjectDetailPage() {
                 const step5CoreDocsProgress =
                   current.step_number === 5
                     ? countStep5CoreDocumentsReady({
+                        hasPriceComparisonDoc: step5HasPriceComparisonDoc,
+                        hasCommitteeReportDoc: step5HasCommitteeReportDoc,
+                        hasEgpBidSummaryDoc: step5HasEgpBidSummaryDoc,
                         hasEgpWinnerDoc: step5HasEgpWinner,
                         hasPhysicalBoardDoc: step5HasPhysicalBoard,
                       })
                     : null;
                 const step5FormProgress =
                   current.step_number === 5
-                    ? countStep5FormRequiredProgress(step5Announcement, {
+                    ? countStep5FormRequiredProgress(step5Announcement, step4BidResult, {
                         evaluationApprovalDate: step5EvaluationApprovalDate,
                         responsibleName: effectiveResponsibleName,
+                        step3PublicationEnd,
                         timelineCtx: timelineValidationCtx,
                       })
                     : null;
@@ -4172,11 +4364,14 @@ function ProjectDetailPage() {
                       })
                     : null;
                 const step3CoreDocsProgress =
-                  current.step_number === 3 && showStep3HearingForm && step3ComplianceOpts
-                    ? countStep3CoreDocumentsReady(step3ComplianceOpts)
+                  current.step_number === 3 && showStep3DetailForm && step3ComplianceOpts
+                    ? countStep3DocumentsProgress(
+                        step3ComplianceOpts,
+                        showStep3HearingForm,
+                      )
                     : null;
                 const step3FormProgress =
-                  current.step_number === 3 && showStep3HearingForm && step3ComplianceOpts
+                  current.step_number === 3 && showStep3DetailForm && step3ComplianceOpts
                     ? countStep3FormRequiredProgress(step3ComplianceOpts.announcement)
                     : null;
                 const step8FormProgress =
@@ -4258,6 +4453,7 @@ function ProjectDetailPage() {
                           manualForReactive,
                           autoCheckStates,
                           docsForStep,
+                          project.project_type,
                         )
                       : { allDone: true, done: 0, total: 0, effective: {} };
                 const bypassCurrentStep = isProcurementStepBypassed(
@@ -4334,23 +4530,35 @@ function ProjectDetailPage() {
                     blockingIssues: step2ComplianceIssues.map((i) => i.message),
                   });
                 }
-                const isViewingPastStep = activeStep < (isSpecificShortWorkflow ? workflowUiStep : workflowStep);
+                const currentWorkflowUiStep = isSpecificShortWorkflow
+                  ? workflowUiStep
+                  : workflowStep;
+                const isViewingPastStep = activeStep < currentWorkflowUiStep;
+                const disableHistoricalUnlock =
+                  current.step_number === 1 && workflowStep > 1;
+                const showUnlockHistoricalEdit =
+                  workflowMode === "historical_readonly" && !disableHistoricalUnlock;
+                const showCancelHistoricalEdit = workflowMode === "historical_edit";
+                const showSaveHistoricalChanges = canSaveHistoricalEdit(workflowMode);
+                const showReturnToCurrentStep =
+                  isViewingPastStep && workflowMode !== "historical_edit";
                 const showCompleteBtn =
                   workflowMode === "current" &&
                   !isCompleted &&
                   project.status !== PROJECT_STATUS_WARRANTY &&
-                  (isSpecificShortWorkflow || current.step_number !== 3 || showStep3HearingForm);
+                  (isSpecificShortWorkflow || current.step_number !== 3 || showStep3DetailForm);
                 const showSaveDraft =
                   !isViewingPastStep &&
                   !workflowReadOnly &&
                   workflowMode === "current" &&
-                  (isSpecificShortWorkflow || current.step_number !== 3 || showStep3HearingForm);
+                  (isSpecificShortWorkflow || current.step_number !== 3 || showStep3DetailForm);
                 const saveDraftLabel = "บันทึกร่าง";
                 const completeBtnLabel =
                   viewedBackendStep === 10
                     ? "ปิดโครงการจ้างสำเร็จ (Archive Project)"
                     : "บันทึกและไปขั้นตอนถัดไป";
-                const showBackButton = activeStep > 1;
+                const showBackButton =
+                  activeStep > 1 && workflowMode !== "historical_edit";
                 const checklistProgressPct =
                   reactiveChecklist.total > 0
                     ? Math.round((reactiveChecklist.done / reactiveChecklist.total) * 100)
@@ -4359,7 +4567,12 @@ function ProjectDetailPage() {
                 return (
                   <div className="mt-6 pt-5 border-t space-y-4">
                     <ComplianceGateBanner
-                      show={!isCompleted && showCompleteBtn && !reactiveChecklist.allDone}
+                      show={
+                        !isCompleted &&
+                        showCompleteBtn &&
+                        !reactiveChecklist.allDone &&
+                        workflowMode === "current"
+                      }
                       progressPct={checklistProgressPct}
                       issues={complianceGateIssues}
                     />
@@ -4376,11 +4589,27 @@ function ProjectDetailPage() {
                             ย้อนกลับ
                           </button>
                         )}
-                        {shouldShowRollbackToEditProjectButton(project.current_step) && (
+                        {showUnlockHistoricalEdit && (
+                          <UnlockHistoricalStepButton
+                            onClick={() => setHistoricalEditUnlocked(true)}
+                          />
+                        )}
+                        {showCancelHistoricalEdit && (
+                          <button
+                            type="button"
+                            onClick={() => void handleCancelHistoricalEdit()}
+                            className="h-10 px-4 rounded-md border border-input bg-background text-sm font-medium hover:bg-accent"
+                          >
+                            ยกเลิกการแก้ไข
+                          </button>
+                        )}
+                        {shouldShowRollbackToEditProjectButton(project.current_step) &&
+                          !showSaveHistoricalChanges && (
                           <RollbackToEditProjectButton
                             onConfirm={handleRollbackToEditProject}
                             loading={rollingBackToEdit}
                             size="default"
+                            variant="destructive"
                           />
                         )}
                         {showSaveDraft && (
@@ -4394,6 +4623,27 @@ function ProjectDetailPage() {
                         )}
                       </div>
                       <div className="flex flex-wrap gap-3 ml-auto">
+                        {showSaveHistoricalChanges && (
+                          <button
+                            type="button"
+                            onClick={() => void saveDraft()}
+                            className="h-10 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 flex items-center gap-2"
+                          >
+                            <Check className="h-4 w-4" />
+                            บันทึกข้อมูล
+                          </button>
+                        )}
+                        {showReturnToCurrentStep && (
+                          <button
+                            type="button"
+                            onClick={() => handleReturnToCurrentStep()}
+                            title={`กลับไปทำงานต่อที่ขั้นตอนที่ ${currentWorkflowUiStep}`}
+                            className="h-10 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 flex items-center gap-2"
+                          >
+                            กลับไปยังขั้นตอนที่ {currentWorkflowUiStep}
+                            <ArrowRight className="h-4 w-4" />
+                          </button>
+                        )}
                         {showCompleteBtn && (
                           <button
                             onClick={() => completeStep()}
@@ -5118,35 +5368,11 @@ function ProjectTimeline({
     return pruneTimelineForSpecificMethod(items);
   }, [items, isSpecificTimeline]);
 
-  /** true = ยังมีวันที่ cascade/ประมาณการในขั้นตอนที่ 1–5 (ไม่ควรเกิดหลังลบ mock) */
-  const isUsingMockData = useMemo(
-    () =>
-      displayItems.some(
-        (it) => it.estimated && (isSpecificTimeline ? it.uiStep <= 5 : it.backendStep <= 5),
-      ),
-    [displayItems, isSpecificTimeline],
+  /** true = มีวันที่ประมาณการจาก Global Auto-Estimation */
+  const hasEstimatedDates = useMemo(
+    () => displayItems.some((it) => it.estimated && !!it.date),
+    [displayItems],
   );
-
-  useEffect(() => {
-    const merged = resolveMergedTimelineProject(project, timelineNotes);
-    const step4Date = merged.evaluation_report_approval_date ?? "";
-    const step5Date = merged.winner_announcement_date ?? "";
-    console.log(
-      "🚨 [CRITICAL DATE DEBUG] Timeline source data is from DB or Mock?",
-      { isFromDatabase: !isUsingMockData, rawProjectDates: project },
-    );
-    console.log("📅 [STEP DATE VERIFY] Step 4 Date:", step4Date, "Step 5 Date:", step5Date);
-  }, [project, timelineNotes, isUsingMockData, activeStep, items]);
-
-  useEffect(() => {
-    if (!project) return;
-    console.log(
-      "🎯 [STEPPER HIGHLIGHT DEBUG] Active UI Step:",
-      activeStep,
-      "Project Progress DB Step:",
-      project.current_step,
-    );
-  }, [activeStep, project?.current_step, project]);
 
   const timelineStepColor = (
     uiStep: number,
@@ -5162,7 +5388,8 @@ function ProjectTimeline({
     <div className="bg-card border rounded-[10px] p-5">
       <h3 className="font-semibold mb-4">ไทม์ไลน์โครงการ</h3>
       <p className="text-xs text-muted-foreground mb-3">
-        แสดงวันที่มีผลทางระเบียบจากฟอร์มแต่ละขั้น (ไม่ใช่วันที่ระบบสร้างข้อมูล)
+        วันที่จริงจากฟอร์มแต่ละขั้นตอน
+        {hasEstimatedDates && " • วันที่ต่อท้าย ~ เป็นประมาณการจากวันทำการมาตรฐาน"}
       </p>
       <div className="overflow-x-auto">
         <div className="flex items-start gap-2 min-w-max pb-2">
@@ -5207,11 +5434,20 @@ function ProjectTimeline({
                 >
                   {it.uiStep}. {it.label}
                 </p>
-                <p className="text-[11px] text-muted-foreground mt-0.5">
+                <p
+                  className={`text-[11px] mt-0.5 ${
+                    it.estimated
+                      ? "text-muted-foreground italic"
+                      : it.date
+                        ? "text-foreground font-medium"
+                        : "text-muted-foreground"
+                  }`}
+                >
                   {it.date ? (
                     <>
-                      {it.estimated && "~ "}
+                      {it.estimated ? "~ " : ""}
                       {formatThaiDate(it.date)}
+                      {it.estimated ? " (ประมาณการ)" : ""}
                     </>
                   ) : (
                     "—"
