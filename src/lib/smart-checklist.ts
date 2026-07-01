@@ -336,8 +336,7 @@ export function getSmartChecklistItems(
         });
     case 4:
       return withModes(4, STEP4_CHECKLIST_ITEMS).filter(
-        (item) =>
-          item.key !== "supervisor_order_uploaded" || !!opts?.isConstructionProject,
+        (item) => item.key !== "supervisor_order_uploaded",
       );
     case 5:
       return STEP5_CHECKLIST_ITEMS;
@@ -520,8 +519,6 @@ export function computeAutoChecklistState(ctx: SmartChecklistAutoContext): Recor
   if (stepNumber === 4) {
     auto.procurement_report_uploaded = !!ctx.hasSignedProcurementRequestDoc;
     auto.committee_order_uploaded = !!ctx.hasCommitteeOrderDoc;
-    auto.supervisor_order_uploaded =
-      !ctx.isConstructionProject || !!ctx.hasSupervisorOrderDoc;
     return auto;
   }
 

@@ -78,3 +78,18 @@ export const STEP3_DISCRETIONARY_HEARING_WARNING_MSG =
 
 export const STEP3_FEEDBACK_SOFT_WARNING_MSG =
   "ยังไม่ได้กรอก/แนบรายงานผลการรับฟังความคิดเห็น — โครงการวงเงินไม่เกิน 10 ล้านบาท อยู่ในดุลยพินิจของหัวหน้าหน่วยงาน";
+
+/** โครงการจัดรับฟังความคิดเห็นจริงในขั้นตอนที่ 3 (ไม่ข้าม/ไม่ยกเว้น) */
+export function step3HadPublicHearing(
+  budget: number,
+  announcement: {
+    hearing_skipped?: boolean;
+    hearing_proceed?: boolean;
+  },
+): boolean {
+  if (announcement.hearing_skipped) return false;
+  const tier = getStep3HearingTier(budget);
+  if (tier === "exempt") return false;
+  if (tier === "discretionary" && !announcement.hearing_proceed) return false;
+  return true;
+}

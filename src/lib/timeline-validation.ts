@@ -38,6 +38,28 @@ export type StepDateField = {
   label: string;
 };
 
+/** บังคับให้เป็น StepDateField[] — รองรับ legacy object map { fieldId: iso } */
+export function normalizeStepDateFields(dateFields: unknown): StepDateField[] {
+  if (Array.isArray(dateFields)) {
+    return dateFields.filter(
+      (field): field is StepDateField =>
+        field != null &&
+        typeof field === "object" &&
+        typeof (field as StepDateField).id === "string",
+    );
+  }
+  if (dateFields && typeof dateFields === "object") {
+    return Object.entries(dateFields as Record<string, unknown>)
+      .filter(([, iso]) => typeof iso === "string" && iso.trim())
+      .map(([id, iso]) => ({
+        id,
+        iso: (iso as string).trim(),
+        label: id,
+      }));
+  }
+  return [];
+}
+
 export function buildTimelineValidationContext(input: {
   project: StepMilestoneProject;
   steps: Array<{ step_number: number; completed_at: string | null; due_date?: string | null }>;
@@ -74,7 +96,7 @@ function crossStepConflictMessage(
 
 export function getCrossStepTimelineConflictIssues(
   stepNumber: number,
-  dateFields: StepDateField[],
+  dateFields: StepDateField[] | Record<string, string> | unknown,
   ctx: TimelineValidationContext,
 ): TimelineValidationIssue[] {
   if (stepNumber <= 1) return [];
@@ -88,8 +110,9 @@ export function getCrossStepTimelineConflictIssues(
 
   const previousStepNumber = stepNumber - 1;
   const issues: TimelineValidationIssue[] = [];
+  const normalizedDateFields = normalizeStepDateFields(dateFields);
 
-  for (const field of dateFields) {
+  for (const field of normalizedDateFields) {
     const iso = field.iso?.trim() ?? "";
     if (!iso) continue;
     if (isStepDateBeforeReference(iso, previousEndISO)) {
@@ -181,21 +204,24 @@ export function getStep2TimelineDateFields(
   ];
 }
 
-export function getStep4TimelineDateFields(bidResult: Step4BidResult): StepDateField[] {
+export function getStep4TimelineDateFields(
+  bidResult: Step4BidResult | null | undefined,
+): StepDateField[] {
+  const result = bidResult ?? {};
   return [
     {
       id: "procurement_request_approval_date",
-      iso: bidResult.procurement_request_approval_date ?? "",
+      iso: result.procurement_request_approval_date ?? "",
       label: "วันที่หัวหน้าหน่วยงานลงนามในรายงานขอซื้อขอจ้าง",
     },
     {
       id: "evaluation_report_approval_date",
-      iso: bidResult.evaluation_report_approval_date ?? "",
+      iso: result.evaluation_report_approval_date ?? "",
       label: "วันที่หัวหน้าหน่วยงานลงนามอนุมัติผลการพิจารณา",
     },
     {
       id: "review_extension_approval_date",
-      iso: bidResult.review_extension_approval_date ?? "",
+      iso: result.review_extension_approval_date ?? "",
       label: "วันที่หัวหน้าหน่วยงานอนุมัติขยายเวลาพิจารณาผล",
     },
   ];
@@ -319,7 +345,7 @@ export function getStep10TimelineDateFields(rows: Step10InspectionRow[]): StepDa
 export function getFirstTimelineValidationIssue(
   stepNumber: number,
   ctx: TimelineValidationContext,
-  dateFields: StepDateField[],
+  dateFields: StepDateField[] | Record<string, string> | unknown,
   extraIssues: TimelineValidationIssue[] = [],
 ): TimelineValidationIssue | null {
   const issues = [

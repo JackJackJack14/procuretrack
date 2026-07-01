@@ -15,6 +15,7 @@ import {
   getMilestoneLabel,
 } from "@/lib/egp-milestones";
 import { formatThaiDate } from "@/lib/utils";
+import { HELPER_BUTTON_MD, HELPER_BUTTON_SM_WIDE } from "@/lib/helper-button-styles";
 import {
   buildProjectTimelineInput,
   recalculateProjectTimeline,
@@ -104,7 +105,6 @@ import {
   resolveStep3PublicationEnd,
   resolveStep2MedianApprovalDate,
   applyStep4WinnerFromBiddersTable,
-  buildStep4CommitteesFromStep2,
   isStep4ProcurementSignDateValid,
   loadStep4FormFromNote,
   loadStep5FormFromNote,
@@ -149,6 +149,7 @@ import {
   type Step2MedianPrice,
   EMPTY_STEP2_COMMITTEES,
   loadStep2CommitteesFromDb,
+  hydrateStep2CommitteesFromSources,
   buildStep2CommitteeRows,
   STEP2_COMMITTEE_DB_TYPES,
   getStep2CommitteeInsertProfiles,
@@ -215,6 +216,7 @@ import {
   isStep4WinnerDataLocked,
   isStep5WinnerDataLocked,
   computeStep4Timeline,
+  normalizeStep4WorkdayFields,
   resolveStep4ContractAmount,
   buildProjectAppealStatusSync,
   loadStep6FormFromNote,
@@ -287,6 +289,7 @@ import {
 import {
   getStep3HearingTier,
   shouldShowStep3HearingForm,
+  step3HadPublicHearing,
   STEP3_MANDATORY_HEARING_BLOCK_MSG,
   type Step3SkipReason,
 } from "@/lib/step3-hearing";
@@ -917,14 +920,41 @@ function ProjectDetailPage() {
   const step4Timeline = useMemo(
     () =>
       project && project.id === projectId
-        ? computeStep4Timeline(project, step3Record?.note ?? null)
+        ? computeStep4Timeline(
+            {
+              ...project,
+              procurement_request_approval_date:
+                step4BidResult.procurement_request_approval_date?.trim() ||
+                project.procurement_request_approval_date,
+              ...normalizeStep4WorkdayFields(step4BidResult),
+            },
+            step3Record?.note ?? null,
+            {
+            ...step3Announcement,
+            procurement_request_approval_date:
+              step4BidResult.procurement_request_approval_date?.trim() ||
+              step3Announcement.procurement_request_approval_date,
+            ...normalizeStep4WorkdayFields(step4BidResult),
+          })
         : {
             bidPeriodStartISO: "",
             bidPeriodWorkdays: null,
+            bidSubmissionWorkdays: null,
+            committeeReviewWorkdays: null,
             bidSubmissionEndISO: "",
             committeeReviewDeadlineISO: "",
           },
-    [projectId, project?.id, project?.committee_review_workdays, project?.procurement_request_approval_date, step3Record?.note],
+    [
+      projectId,
+      project?.id,
+      project?.committee_review_workdays,
+      project?.procurement_request_approval_date,
+      step3Record?.note,
+      step3Announcement,
+      step4BidResult.procurement_request_approval_date,
+      step4BidResult.bid_submission_workdays,
+      step4BidResult.committee_review_workdays,
+    ],
   );
   const step3PublicationEnd = useMemo(() => {
     const fromAnnouncement = step3Announcement.publication_end?.trim();
@@ -952,6 +982,22 @@ function ProjectDetailPage() {
         .join("\n"),
     [committees],
   );
+
+  /** ซิงค์คณะกรรมการขั้นตอนที่ 2 จาก DB + note — ให้ขั้น 3+ ใช้ได้โดยไม่ต้องเปิดหน้าขั้น 2 ก่อน */
+  useEffect(() => {
+    if (!project || !step2Record) return;
+    if (activeStep === 2) return;
+    setStep2Committees(
+      hydrateStep2CommitteesFromSources(committees, project, step2Record.note),
+    );
+  }, [
+    project?.id,
+    project?.committee_appointment_mode,
+    step2Record?.id,
+    step2Record?.note,
+    committeesDbSnapshot,
+    activeStep,
+  ]);
 
   const timelineValidationCtx = useMemo(() => {
     if (!project || project.id !== projectId) {
@@ -1456,6 +1502,8 @@ function ProjectDetailPage() {
     : 0;
   const calcMethod = procurementMethod;
 
+  const requiresStep3PublicationEnd = step3HadPublicHearing(calcBudget, step3Announcement);
+
   const invalidateAll = async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["project", projectId] }),
@@ -1498,11 +1546,6 @@ function ProjectDetailPage() {
 
   const patchStep4BidResult = (patch: Partial<Step4BidResult>) => {
     setStep4BidResult((prev) => ({ ...prev, ...patch }));
-  };
-
-  const copyStep4CommitteesFromStep2 = () => {
-    patchStep4BidResult(buildStep4CommitteesFromStep2(step2Committees));
-    toast.success("คัดลอกรายชื่อจากคณะกรรมการราคากลาง (ขั้นตอนที่ 2) แล้ว");
   };
 
   const patchStep6Appeal = (patch: Partial<Step6AppealState>) => {
@@ -1992,6 +2035,7 @@ function ProjectDetailPage() {
         !isStep4ProcurementSignDateValid(procApproval, {
           step2MedianApprovalDate,
           step3PublicationEnd,
+          requiresStep3PublicationEnd,
         })
       ) {
         toast.error(STEP4_PROCUREMENT_SIGN_DATE_INVALID_MSG);
@@ -2047,7 +2091,7 @@ function ProjectDetailPage() {
       draftSavedToast("ขั้นตอนที่ 4 ");
       await propagateResponsibleToStep1(effectiveResponsibleName);
       await invalidateAll();
-      return;
+      return true;
     }
 
     if (current.step_number === 5) {
@@ -2692,6 +2736,7 @@ function ProjectDetailPage() {
           isConstructionProject,
           step2MedianApprovalDate,
           step3PublicationEnd,
+          requiresStep3PublicationEnd,
           timelineCtx: timelineValidationCtx,
         },
       );
@@ -2828,7 +2873,7 @@ function ProjectDetailPage() {
       reason === "exempt"
         ? "ข้ามขั้นตอนรับฟังความคิดเห็น (ยกเว้นตามวงเงิน)"
         : "ข้ามการฟังคำวิจารณ์ร่างประกาศ (ดุลยพินิจหัวหน้าหน่วยงาน)";
-    if (!window.confirm(`ยืนยัน${label} และไปขั้นตอนที่ 4 (รายงานขอซื้อขอจ้าง) ทันที?`)) return;
+    if (!window.confirm(`ยืนยัน${label} และไปขั้นตอนที่ 4 (จัดทำรายงานขอซื้อขอจ้าง และแต่งตั้งคณะกรรมการ) ทันที?`)) return;
 
     setStep3Skipping(true);
     setError(null);
@@ -2955,11 +3000,11 @@ function ProjectDetailPage() {
                 <Link
                   to="/projects/$projectId/construction"
                   params={{ projectId: project.id }}
-                  className="h-9 px-3 rounded-md border border-input bg-background text-sm hover:bg-accent flex items-center gap-1.5"
+                  className={`${HELPER_BUTTON_MD} flex items-center gap-1.5`}
                 >
                   <FileText className="h-3.5 w-3.5" /> ติดตามงานก่อสร้าง
                 </Link>
-                <button onClick={() => window.print()} className="h-9 px-3 rounded-md border border-input bg-background text-sm hover:bg-accent flex items-center gap-1.5">
+                <button onClick={() => window.print()} className={`${HELPER_BUTTON_MD} flex items-center gap-1.5`}>
                   <FileText className="h-3.5 w-3.5" /> Export PDF
                 </button>
               </div>
@@ -3542,13 +3587,13 @@ function ProjectDetailPage() {
                       step4Timeline={step4Timeline}
                       step3PublicationEnd={step3PublicationEnd}
                       step2MedianApprovalDate={step2MedianApprovalDate}
+                      requiresStep3PublicationEnd={requiresStep3PublicationEnd}
                       budget={calcBudget}
                       approvedMedianPrice={project.approved_median_price ?? null}
                       specificMethodReason={step1SpecificMethodReason}
                       supervisorOrderDocs={step4SupervisorOrderDocs}
                       isConstructionProject={isConstructionProject}
                       step2Committees={step2Committees}
-                      onCopyCommitteesFromStep2={copyStep4CommitteesFromStep2}
                       docBinder={{
                         project,
                         stepNumber: 4,
@@ -3990,6 +4035,7 @@ function ProjectDetailPage() {
                           isConstructionProject,
                           step2MedianApprovalDate,
                           step3PublicationEnd,
+                          requiresStep3PublicationEnd,
                           timelineCtx: timelineValidationCtx,
                         },
                         autoCheckStates,
@@ -4229,6 +4275,7 @@ function ProjectDetailPage() {
                     isConstructionProject,
                     step2MedianApprovalDate,
                     step3PublicationEnd,
+                    requiresStep3PublicationEnd,
                     timelineCtx: timelineValidationCtx,
                   });
                 const checklistItemsForStep =
@@ -4323,6 +4370,7 @@ function ProjectDetailPage() {
                         responsibleName: effectiveResponsibleName,
                         step2MedianApprovalDate,
                         step3PublicationEnd,
+                        requiresStep3PublicationEnd,
                         timelineCtx: timelineValidationCtx,
                       })
                     : null;
@@ -4895,7 +4943,7 @@ function DocArchive({
                 <button
                   onClick={() => viewDoc(doc)}
                   disabled={openingId === doc.id}
-                  className="h-8 px-2.5 rounded-md border border-input bg-background text-xs hover:bg-accent flex items-center gap-1.5 disabled:opacity-60"
+                  className={`${HELPER_BUTTON_SM_WIDE} flex items-center gap-1.5`}
                   title="ดู / ดาวน์โหลดไฟล์"
                 >
                   {openingId === doc.id

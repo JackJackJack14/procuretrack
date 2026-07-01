@@ -3,6 +3,7 @@ import JSZip from "jszip";
 import { Download, Eye, Loader2, Package } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import { HELPER_BUTTON_SM, HELPER_BUTTON_XS } from "@/lib/helper-button-styles";
 import type { DocItem } from "@/lib/procurement";
 import {
   downloadStepDocument,
@@ -82,7 +83,7 @@ export function StepDocumentHub({ stepNumber, docList, docs, projectName }: Prop
             type="button"
             disabled={zipping}
             onClick={handleZip}
-            className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md border border-input bg-background text-xs font-medium hover:bg-accent disabled:opacity-50"
+            className={HELPER_BUTTON_SM}
           >
             {zipping ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -130,7 +131,7 @@ export function StepDocumentHub({ stepNumber, docList, docs, projectName }: Prop
                         await openStepDocument(doc.storage_path);
                         setOpeningId(null);
                       }}
-                      className="h-7 px-2 rounded border border-input text-xs hover:bg-accent inline-flex items-center gap-1 disabled:opacity-50"
+                      className={HELPER_BUTTON_XS}
                     >
                       {openingId === doc.id ? (
                         <Loader2 className="h-3 w-3 animate-spin" />
@@ -148,7 +149,7 @@ export function StepDocumentHub({ stepNumber, docList, docs, projectName }: Prop
                     <button
                       type="button"
                       onClick={() => downloadStepDocument(doc)}
-                      className="h-7 px-2 rounded border border-input text-xs hover:bg-accent inline-flex items-center gap-1"
+                      className={HELPER_BUTTON_XS}
                     >
                       <Download className="h-3 w-3" />
                       ดาวน์โหลด

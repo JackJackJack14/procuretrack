@@ -10,6 +10,8 @@ import {
 
 } from "@/lib/step3-hearing";
 
+import { HELPER_BUTTON_MD } from "@/lib/helper-button-styles";
+
 import {
 
   getStep3GuidelineAction,
@@ -392,7 +394,7 @@ export function Step3GuidelineBox({
 
             onClick={() => onSkip("discretionary")}
 
-            className="h-9 px-3 rounded-md border border-input bg-background text-sm font-medium hover:bg-accent disabled:opacity-50"
+            className={HELPER_BUTTON_MD}
 
           >
 
@@ -434,7 +436,7 @@ export function Step3GuidelineBox({
 
           onClick={() => onSkip("exempt")}
 
-          className="h-9 px-3 rounded-md border border-input bg-background text-sm font-medium hover:bg-accent disabled:opacity-50"
+          className={HELPER_BUTTON_MD}
 
         >
 

@@ -3,6 +3,7 @@ import { Plus, Trash2, Download, ChevronDown, FileText, Loader2, FolderOpen, Che
 import { ChronologicalDatePicker } from "@/components/ChronologicalDatePicker";
 import { ThaiDatePicker } from "@/components/ThaiDatePicker";
 import { formatThaiDate, formatThaiDateSlash } from "@/lib/utils";
+import { HELPER_BUTTON_LG, HELPER_BUTTON_MD, HELPER_BUTTON_MD_WIDE, HELPER_BUTTON_SM, HELPER_BUTTON_SM_WIDE } from "@/lib/helper-button-styles";
 import {
   countWorkdaysAfterStartISO,
   defaultPublicationEndISO,
@@ -107,6 +108,12 @@ import {
   logStep4OptionalAuditTrailDebug,
 } from "@/lib/form-audit-trail";
 import {
+  STEP4_PROCUREMENT_SIGN_DATE_INVALID_MSG,
+  getStep4ProcurementSignDateIssues,
+  getStep4TimelineDisplayLines,
+  resolveStep4ProcurementSignMinDate,
+} from "@/lib/compliance/rules/bid-timeline.rules";
+import {
   STEP1_METHOD_OPTIONS,
   formatBudgetInput,
   parseBudgetInput,
@@ -126,12 +133,11 @@ import {
   resolveLowestValidStep4BidderIndices,
   type Step4Bidder,
   type Step4BidderQualification,
-  STEP4_PROCUREMENT_SIGN_DATE_INVALID_MSG,
-  getStep4ProcurementSignDateIssues,
-  resolveStep4ProcurementSignMinDate,
   STEP4_MIN_COMMITTEE_MEMBERS,
   STEP4_COMMITTEE_ROLE_OPTIONS,
   EMPTY_STEP4_COMMITTEE_MEMBER,
+  STEP4_INSPECTION_COMMITTEE_ROLE_OPTIONS,
+  normalizeStep4WorkdayFields,
   normalizeStep4CommitteeMember,
   normalizeStep4CommitteeMembers,
   formatStep4CommitteeMembersForDisplay,
@@ -186,11 +192,12 @@ import {
   getStep3ComplianceWarnings,
   STEP3_DISCRETIONARY_HEARING_WARNING_MSG,
   applyStep4WinnerFromBiddersTable,
-  buildStep4CommitteesFromStep2,
+  buildStep4EvaluationCommitteeFromStep2,
+  hasStep2MedianPriceCommitteeNames,
+  EMPTY_STEP2_COMMITTEES,
   defaultStep4EvaluationApprovalDateISO,
   isStep4EvaluationApprovalBeforeBidEnd,
   isStep4EvaluationApprovalOverdue,
-  getStep4TimelineDisplayLines,
   type Step4Timeline,
   type Step6AppealState,
   type Step6Checklist,
@@ -639,7 +646,7 @@ function Step1SpecificWorkflowSection({
                 <button
                   type="button"
                   onClick={addInspector}
-                  className="inline-flex items-center gap-1 text-xs text-primary hover:underline mt-2"
+                  className={`${HELPER_BUTTON_SM} mt-2`}
                 >
                   <Plus className="h-3.5 w-3.5" />
                   เพิ่มกรรมการ
@@ -1246,7 +1253,7 @@ function CommitteeMemberList({
           type="button"
           onClick={() => onAddCommittee(listKey)}
           disabled={readOnly}
-          className="h-8 px-2.5 rounded-md border border-input text-xs hover:bg-accent inline-flex items-center gap-1 disabled:opacity-60"
+          className={HELPER_BUTTON_SM}
         >
           <Plus className="h-3.5 w-3.5" />
           เพิ่มกรรมการ
@@ -1358,9 +1365,9 @@ function Step2MarketQuotesModal({
         <button
           type="button"
           disabled={readOnly}
-          className="inline-flex items-center gap-2 h-9 px-3 rounded-md border border-input bg-background text-sm hover:bg-accent disabled:opacity-60"
+          className={HELPER_BUTTON_MD}
         >
-          <FolderOpen className="h-4 w-4 text-muted-foreground" />
+          <FolderOpen className="h-4 w-4" />
           จัดการราคาตลาด
           <span
             className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
@@ -2875,6 +2882,8 @@ type Step4FormProps = {
   step4Timeline?: Step4Timeline;
   step3PublicationEnd?: string;
   step2MedianApprovalDate?: string;
+  /** false เมื่อข้าม/ไม่จัดรับฟังความคิดเห็นในขั้นตอนที่ 3 */
+  requiresStep3PublicationEnd?: boolean;
   budget: number;
   approvedMedianPrice?: number | null;
   specificMethodReason?: string;
@@ -2882,10 +2891,17 @@ type Step4FormProps = {
   supervisorOrderDocs?: StepDocRecord[];
   isConstructionProject?: boolean;
   step2Committees?: Step2CommitteesState;
-  onCopyCommitteesFromStep2?: () => void;
   /** issue.id ที่ต้องเน้นแดงหลัง validation ไม่ผ่าน */
   highlightedComplianceIssues?: string[];
 } & ChronologicalFormProps;
+
+const STEP4_COPY_MEDIAN_COMMITTEE_LABEL =
+  "คัดลอกรายชื่อจากคณะกรรมการราคากลาง (ขั้นตอนที่ 2)";
+
+const STEP4_COPY_MEDIAN_COMMITTEE_EMPTY_MSG =
+  "⚠️ ไม่พบข้อมูลกรรมการในขั้นตอนที่ 2 กรุณากลับไปบันทึกข้อมูลขั้นตอนที่ 2 ก่อน";
+
+const STEP4_COPY_MEDIAN_COMMITTEE_SUCCESS_MSG = "✓ คัดลอกรายชื่อกรรมการราคากลางสำเร็จ";
 
 function Step4CommitteeMembersPanel({
   title,
@@ -2894,6 +2910,9 @@ function Step4CommitteeMembersPanel({
   onMembersChange,
   highlightedComplianceIssues = [],
   readOnly,
+  allowMemberSecretary = true,
+  onCopyFromStep2,
+  showCopyFromStep2 = false,
 }: {
   title: string;
   panelTarget: "evaluation_committee_members" | "inspection_committee_members";
@@ -2901,14 +2920,19 @@ function Step4CommitteeMembersPanel({
   onMembersChange: (next: Step4CommitteeMember[]) => void;
   highlightedComplianceIssues?: string[];
   readOnly?: boolean;
+  allowMemberSecretary?: boolean;
+  onCopyFromStep2?: () => void;
+  showCopyFromStep2?: boolean;
 }) {
-  const safeMembers = normalizeStep4CommitteeMembers(members);
+  const safeMembers = normalizeStep4CommitteeMembers(members, STEP4_MIN_COMMITTEE_MEMBERS, {
+    allowMemberSecretary,
+  });
   const showPanelError = highlightedComplianceIssues.some(
     (id) => id === panelTarget || id.startsWith(`${panelTarget}_row_`),
   );
 
   const emitMembers = (next: Step4CommitteeMember[]) => {
-    onMembersChange(applyStep4CommitteeRoleConstraints(next));
+    onMembersChange(applyStep4CommitteeRoleConstraints(next, { allowMemberSecretary }));
   };
 
   const patchRow = (index: number, patch: Partial<Step4CommitteeMember>) => {
@@ -2957,15 +2981,33 @@ function Step4CommitteeMembersPanel({
           type="button"
           onClick={addRow}
           disabled={readOnly}
-          className="h-8 px-2.5 rounded-md border border-input text-xs font-medium hover:bg-accent inline-flex items-center gap-1 disabled:opacity-60"
+          className={HELPER_BUTTON_SM}
         >
           <Plus className="h-3.5 w-3.5" />
           เพิ่มรายชื่อกรรมการ
         </button>
       </div>
+      {showCopyFromStep2 && onCopyFromStep2 && (
+        <button
+          type="button"
+          onClick={onCopyFromStep2}
+          disabled={readOnly}
+          className={HELPER_BUTTON_SM_WIDE}
+        >
+          {STEP4_COPY_MEDIAN_COMMITTEE_LABEL}
+        </button>
+      )}
       <p className="text-xs text-muted-foreground">
-        บังคับอย่างน้อย {STEP4_MIN_COMMITTEE_MEMBERS} คน — แถวแรกเป็นประธานกรรมการโดยอัตโนมัติ
-        แถวถัดไปเลือกได้เฉพาะกรรมการหรือกรรมการและเลขานุการ
+        {showCopyFromStep2
+          ? "หากใช้คณะกรรมการ ชุดเดียวกับ คณะกรรมการราคากลาง ให้กดปุ่มคัดลอก ระบบจะดึงข้อมูลมาใส่อัตโนมัติ"
+          : (
+            <>
+              บังคับอย่างน้อย {STEP4_MIN_COMMITTEE_MEMBERS} คน — แถวแรกเป็นประธานกรรมการโดยอัตโนมัติ
+              {allowMemberSecretary
+                ? " แถวถัดไปเลือกได้เฉพาะกรรมการหรือกรรมการและเลขานุการ"
+                : " แถวถัดไปเลือกได้เฉพาะกรรมการ (คณะกรรมการตรวจรับไม่มีเลขานุการ)"}
+            </>
+          )}
       </p>
       {showPanelError && (
         <p className="text-xs font-medium text-red-600" role="alert">
@@ -3045,13 +3087,16 @@ function Step4CommitteeMembersPanel({
                     className={`${inputCls} ${hasRowError && !member.role ? "border-red-500 focus:ring-red-500" : ""}`}
                   >
                     <option value="">เลือกบทบาท</option>
-                    {STEP4_COMMITTEE_ROLE_OPTIONS.filter((opt) => opt.value !== "chair").map(
-                      (opt) => (
+                    {(allowMemberSecretary
+                      ? STEP4_COMMITTEE_ROLE_OPTIONS
+                      : STEP4_INSPECTION_COMMITTEE_ROLE_OPTIONS
+                    )
+                      .filter((opt) => opt.value !== "chair")
+                      .map((opt) => (
                         <option key={opt.value} value={opt.value}>
                           {opt.label}
                         </option>
-                      ),
-                    )}
+                      ))}
                   </select>
                 )}
               </div>
@@ -3231,7 +3276,7 @@ function Step4BiddersTable({
         <button
           type="button"
           onClick={addRow}
-          className="h-9 px-3 rounded-md border border-input bg-background text-sm hover:bg-accent inline-flex items-center gap-1.5"
+          className={HELPER_BUTTON_MD}
         >
           <Plus className="h-4 w-4" />
           เพิ่มรายชื่อผู้ยื่นข้อเสนอ
@@ -3241,7 +3286,7 @@ function Step4BiddersTable({
   );
 }
 
-/** ขั้นตอนที่ 4 — รายงานขอซื้อขอจ้าง (ข้อ 22) */
+/** ขั้นตอนที่ 4 — จัดทำรายงานขอซื้อขอจ้าง และแต่งตั้งคณะกรรมการ (ข้อ 22) */
 export function Step4DetailForm({
   checklist: _checklist,
   onChecklistChange: _onChecklistChange,
@@ -3255,6 +3300,7 @@ export function Step4DetailForm({
   step4Timeline,
   step3PublicationEnd = "",
   step2MedianApprovalDate = "",
+  requiresStep3PublicationEnd = true,
   budget,
   approvedMedianPrice = null,
   specificMethodReason = "",
@@ -3262,7 +3308,6 @@ export function Step4DetailForm({
   supervisorOrderDocs = [],
   isConstructionProject = false,
   step2Committees,
-  onCopyCommitteesFromStep2,
   highlightedComplianceIssues = [],
   chronologicalCtx,
 }: Step4FormProps) {
@@ -3277,13 +3322,15 @@ export function Step4DetailForm({
   const timelineLines = getStep4TimelineDisplayLines(timeline);
   const publicationEnd = step3PublicationEnd.trim();
   const medianApprovalDate = step2MedianApprovalDate.trim();
+  const workdays = normalizeStep4WorkdayFields(bidResult);
   const procurementSignMinDate = resolveStep4ProcurementSignMinDate({
     step2MedianApprovalDate: medianApprovalDate,
-    step3PublicationEnd: publicationEnd,
+    step3PublicationEnd: requiresStep3PublicationEnd ? publicationEnd : medianApprovalDate,
   });
   const procurementSignDateOpts = {
     step2MedianApprovalDate: medianApprovalDate,
     step3PublicationEnd: publicationEnd,
+    requiresStep3PublicationEnd,
   };
 
   const medianDisplay = resolveProjectMedianPrice({
@@ -3305,7 +3352,8 @@ export function Step4DetailForm({
       return;
     }
     const issues = getStep4ProcurementSignDateIssues(v, procurementSignDateOpts).filter(
-      (i) => i.id !== "step3_publication_end_missing",
+      (i) =>
+        requiresStep3PublicationEnd || i.id !== "step3_publication_end_missing",
     );
     if (issues.length > 0) {
       setProcApprovalDateRejected(true);
@@ -3320,7 +3368,10 @@ export function Step4DetailForm({
     ? getStep4ProcurementSignDateIssues(
         bidResult.procurement_request_approval_date,
         procurementSignDateOpts,
-      ).filter((i) => i.id !== "step3_publication_end_missing")
+      ).filter(
+        (i) =>
+          requiresStep3PublicationEnd || i.id !== "step3_publication_end_missing",
+      )
     : [];
 
   const showProcApprovalDateError =
@@ -3342,13 +3393,15 @@ export function Step4DetailForm({
   const hasStep2SupervisorOrder = step2SupervisorOrderDocs.length > 0;
 
   const handleCopyCommitteesFromStep2 = () => {
-    if (!step2Committees || readOnly) return;
-    if (onCopyCommitteesFromStep2) {
-      onCopyCommitteesFromStep2();
+    if (readOnly) return;
+    const committees = step2Committees ?? EMPTY_STEP2_COMMITTEES;
+    if (!hasStep2MedianPriceCommitteeNames(committees)) {
+      toast.warning(STEP4_COPY_MEDIAN_COMMITTEE_EMPTY_MSG);
       return;
     }
-    onBidResultChange(buildStep4CommitteesFromStep2(step2Committees));
-    toast.success("คัดลอกรายชื่อจากคณะกรรมการราคากลาง (ขั้นตอนที่ 2) แล้ว");
+    const patch = buildStep4EvaluationCommitteeFromStep2(committees);
+    onBidResultChange(patch);
+    toast.success(STEP4_COPY_MEDIAN_COMMITTEE_SUCCESS_MSG);
   };
 
   const handleEvaluationMembersChange = (evaluationArray: Step4CommitteeMember[]) => {
@@ -3368,7 +3421,9 @@ export function Step4DetailForm({
   };
 
   const handleInspectionMembersChange = (inspectionArray: Step4CommitteeMember[]) => {
-    const constrained = applyStep4CommitteeRoleConstraints(inspectionArray);
+    const constrained = applyStep4CommitteeRoleConstraints(inspectionArray, {
+      allowMemberSecretary: false,
+    });
     console.log(
       "👑 [ROLE CONSTRAINT DEBUG] Inspected Row Index Roles:",
       constrained.map((m, i) => `Row ${i + 1}: ${m.role}`),
@@ -3407,16 +3462,16 @@ export function Step4DetailForm({
             additionalMinDates={[medianApprovalDate, publicationEnd].filter(Boolean)}
             value={bidResult.procurement_request_approval_date ?? ""}
             onChange={handleProcurementApprovalDateChange}
-            disabled={!publicationEnd || readOnly}
+            disabled={(requiresStep3PublicationEnd && !publicationEnd) || readOnly}
             onInvalidDate={() => setProcApprovalDateRejected(true)}
             showChronologicalHint={false}
           />
-          {!publicationEnd && (
+          {requiresStep3PublicationEnd && !publicationEnd && (
             <p className="text-xs text-muted-foreground mt-1">
               กรุณาบันทึกวันสิ้นสุดการรับฟังความคิดเห็นในขั้นตอนที่ 3 ก่อน
             </p>
           )}
-          {publicationEnd && !medianApprovalDate && (
+          {requiresStep3PublicationEnd && publicationEnd && !medianApprovalDate && (
             <p className="text-xs text-muted-foreground mt-1">
               ยังไม่พบวันอนุมัติราคากลางจากขั้นตอนที่ 2 — ระบบจะตรวจสอบเมื่อมีการบันทึกวันที่ลงนาม
             </p>
@@ -3435,7 +3490,7 @@ export function Step4DetailForm({
                   (อนุมัติราคากลางขั้นตอนที่ 2: {formatThaiDateSlash(medianApprovalDate)})
                 </>
               )}
-              {publicationEnd && (
+              {requiresStep3PublicationEnd && publicationEnd && (
                 <>
                   {" "}
                   (สิ้นสุดรับฟังความคิดเห็นขั้นตอนที่ 3: {formatThaiDateSlash(publicationEnd)})
@@ -3444,14 +3499,46 @@ export function Step4DetailForm({
             </p>
           )}
         </FieldRow>
-        <FieldRow label="ระยะเวลารับซองราคา / พิจารณาผล (วันทำการ) *" complianceTarget="committee_review_workdays">
+        <FieldRow
+          label="ระยะเวลาเผยแพร่เอกสารและยื่นข้อเสนอราคา (วันทำการ) *"
+          complianceTarget="bid_submission_workdays"
+        >
           <input
             type="number"
             min={1}
             step={1}
             value={
-              bidResult.committee_review_workdays != null
-                ? String(bidResult.committee_review_workdays)
+              workdays.bid_submission_workdays != null
+                ? String(workdays.bid_submission_workdays)
+                : ""
+            }
+            onChange={(e) => {
+              const raw = e.target.value.trim();
+              if (!raw) {
+                onBidResultChange({ bid_submission_workdays: null });
+                return;
+              }
+              const n = parseInt(raw, 10);
+              onBidResultChange({
+                bid_submission_workdays: Number.isFinite(n) && n > 0 ? n : null,
+              });
+            }}
+            placeholder="เช่น 15 วันทำการ"
+            disabled={readOnly}
+            className={inputCls}
+          />
+        </FieldRow>
+        <FieldRow
+          label="ระยะเวลาพิจารณาผลของคณะกรรมการ (วันทำการ) *"
+          complianceTarget="committee_review_workdays"
+        >
+          <input
+            type="number"
+            min={1}
+            step={1}
+            value={
+              workdays.committee_review_workdays != null
+                ? String(workdays.committee_review_workdays)
                 : ""
             }
             onChange={(e) => {
@@ -3465,17 +3552,20 @@ export function Step4DetailForm({
                 committee_review_workdays: Number.isFinite(n) && n > 0 ? n : null,
               });
             }}
-            placeholder="เช่น 15 วันทำการ"
+            placeholder="เช่น 1 วันทำการ"
             disabled={readOnly}
             className={inputCls}
           />
+          <p className="text-xs text-muted-foreground mt-1">
+            สามารถเลือกมากกว่า 1 วัน ได้ หากโครงการมีความซับซ้อนและคณะกรรมการจำเป็นต้องใช้เวลาพิจารณาผลเพิ่ม
+          </p>
         </FieldRow>
         <div className="flex flex-wrap gap-2 pt-1">
           <button
             type="button"
             onClick={handleMockPrintProcurementRequest}
             disabled={readOnly}
-            className="h-9 px-4 rounded-md border border-input bg-background text-sm font-medium hover:bg-accent disabled:opacity-50 inline-flex items-center gap-2"
+            className={HELPER_BUTTON_MD_WIDE}
           >
             <FileText className="h-4 w-4" />
             พิมพ์/Download บันทึกขอซื้อขอจ้าง
@@ -3497,19 +3587,7 @@ export function Step4DetailForm({
       </div>
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
-        <div className="flex flex-wrap items-start justify-between gap-2">
-          <SectionTitle>คณะกรรมการพิจารณาผลและตรวจรับ</SectionTitle>
-          {step2Committees && (
-            <button
-              type="button"
-              onClick={handleCopyCommitteesFromStep2}
-              disabled={readOnly}
-              className="h-8 px-3 rounded-md border border-input bg-background text-xs font-medium hover:bg-accent disabled:opacity-50 shrink-0"
-            >
-              คัดลอกรายชื่อจากคณะกรรมการราคากลาง (ขั้นตอนที่ 2)
-            </button>
-          )}
-        </div>
+        <SectionTitle>คณะกรรมการพิจารณาผลและตรวจรับ</SectionTitle>
         <p className="text-xs text-muted-foreground -mt-2">
           กรอกรายชื่อและตำแหน่งด้วยตนเองตามคำสั่งแต่งตั้งฉบับจริง (ข้อ 22)
         </p>
@@ -3520,6 +3598,9 @@ export function Step4DetailForm({
           onMembersChange={handleEvaluationMembersChange}
           highlightedComplianceIssues={highlightedComplianceIssues}
           readOnly={readOnly}
+          allowMemberSecretary
+          showCopyFromStep2={!readOnly}
+          onCopyFromStep2={handleCopyCommitteesFromStep2}
         />
         <Step4CommitteeMembersPanel
           title="คณะกรรมการตรวจรับ"
@@ -3528,6 +3609,7 @@ export function Step4DetailForm({
           onMembersChange={handleInspectionMembersChange}
           highlightedComplianceIssues={highlightedComplianceIssues}
           readOnly={readOnly}
+          allowMemberSecretary={false}
         />
       </div>
 
@@ -3854,7 +3936,7 @@ export function Step6AppealForm({
               >
                 <option value="">
                   {bidderOptions.length === 0
-                    ? "— ไม่พบรายชื่อผู้ยื่นซองในขั้นตอนที่ 4 —"
+                    ? "— ไม่พบรายชื่อผู้ยื่นซองในขั้นตอนที่ 5 —"
                     : "— เลือกผู้ประกอบการ —"}
                 </option>
                 {bidderOptions.map((b) => (
@@ -4113,7 +4195,7 @@ type Step5FormProps = {
   highlightedComplianceIssues?: string[];
 } & ChronologicalFormProps;
 
-/** ขั้นตอนที่ 5 — จัดทำและประกาศผู้ชนะการเสนอราคา (มาตรา 66) */
+/** ขั้นตอนที่ 5 — เปิดซองและสรุปผลการพิจารณา (มาตรา 66) */
 export function Step5DetailForm({
   checklist: _checklist,
   onChecklistChange: _onChecklistChange,
@@ -6410,7 +6492,7 @@ export function Step10DetailForm({
           type="button"
           onClick={() => void handlePrintExecutiveReport()}
           disabled={reportGenerating}
-          className="h-10 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-60 flex items-center gap-2 shrink-0"
+          className={`${HELPER_BUTTON_LG} shrink-0`}
         >
           {reportGenerating ? (
             <Loader2 className="h-4 w-4 animate-spin" />

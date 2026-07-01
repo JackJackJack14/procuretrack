@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Archive, Loader2 } from "lucide-react";
+import { HELPER_BUTTON_MD } from "@/lib/helper-button-styles";
 import { downloadStepAuditZip, type StepDocRecord } from "@/lib/doc-upload";
 
 type Props = {
@@ -25,7 +26,7 @@ export function StepAuditZipButton({ stepNumber, stepLabel, docs }: Props) {
           setLoading(false);
         }
       }}
-      className="inline-flex items-center gap-1.5 h-9 px-3 rounded-md border border-input bg-background text-xs font-medium hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+      className={`${HELPER_BUTTON_MD} text-xs shrink-0`}
     >
       {loading ? (
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
