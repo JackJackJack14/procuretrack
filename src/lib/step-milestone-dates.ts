@@ -40,6 +40,7 @@ type Step3AnnouncementFields = {
   publication_end?: string;
   publication_start?: string;
   procurement_request_approval_date?: string;
+  bid_submission_workdays?: number | null;
   committee_review_workdays?: number | null;
 };
 
@@ -131,6 +132,10 @@ export function resolveStep3AnnouncementFields(
       live.procurement_request_approval_date,
       fromNote.procurement_request_approval_date,
     ),
+    bid_submission_workdays:
+      live.bid_submission_workdays != null && live.bid_submission_workdays > 0
+        ? live.bid_submission_workdays
+        : fromNote.bid_submission_workdays,
     committee_review_workdays:
       live.committee_review_workdays != null && live.committee_review_workdays > 0
         ? live.committee_review_workdays

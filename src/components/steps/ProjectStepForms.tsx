@@ -111,6 +111,8 @@ import {
   STEP4_PROCUREMENT_SIGN_DATE_INVALID_MSG,
   getStep4ProcurementSignDateIssues,
   getStep4TimelineDisplayLines,
+  computeStep5AppealTimeline,
+  getStep5AppealTimelineDisplayLines,
   resolveStep4ProcurementSignMinDate,
 } from "@/lib/compliance/rules/bid-timeline.rules";
 import {
@@ -136,7 +138,6 @@ import {
   STEP4_MIN_COMMITTEE_MEMBERS,
   STEP4_COMMITTEE_ROLE_OPTIONS,
   EMPTY_STEP4_COMMITTEE_MEMBER,
-  STEP4_INSPECTION_COMMITTEE_ROLE_OPTIONS,
   normalizeStep4WorkdayFields,
   normalizeStep4CommitteeMember,
   normalizeStep4CommitteeMembers,
@@ -192,6 +193,7 @@ import {
   getStep3ComplianceWarnings,
   STEP3_DISCRETIONARY_HEARING_WARNING_MSG,
   applyStep4WinnerFromBiddersTable,
+  resolveStep4PriceFromBidderRow,
   buildStep4EvaluationCommitteeFromStep2,
   hasStep2MedianPriceCommitteeNames,
   EMPTY_STEP2_COMMITTEES,
@@ -228,8 +230,9 @@ import {
   buildStep10InspectionRows,
   type Step10InspectionRow,
   type Step10ProjectType,
-  isStep5WinnerAnnouncementBeforeEvaluation,
-  getStep5WinnerAnnouncementBeforeEvaluationMsg,
+  computeStep5RequiredAnnouncementDateISO,
+  isStep5WinnerAnnouncementDateInvalid,
+  getStep5WinnerAnnouncementDateInvalidMsg,
   STEP5_CONTRACT_AFTER_APPEAL_MSG,
   STEP5_RESULT_NOTIFICATION_BEFORE_ANNOUNCEMENT_MSG,
   STEP4_WINNER_DATA_LOCKED_MSG,
@@ -2944,7 +2947,11 @@ function Step4CommitteeMembersPanel({
   };
 
   const addRow = () => {
-    emitMembers([...safeMembers, { ...EMPTY_STEP4_COMMITTEE_MEMBER }]);
+    const newMember: Step4CommitteeMember = { ...EMPTY_STEP4_COMMITTEE_MEMBER };
+    if (!allowMemberSecretary) {
+      newMember.role = "member";
+    }
+    emitMembers([...safeMembers, newMember]);
   };
 
   const removeRow = (index: number) => {
@@ -3075,6 +3082,15 @@ function Step4CommitteeMembersPanel({
                   >
                     <option value="chair">ประธานกรรมการ</option>
                   </select>
+                ) : !allowMemberSecretary ? (
+                  <select
+                    value="member"
+                    disabled
+                    className={`${inputCls} bg-muted/40 text-foreground cursor-not-allowed opacity-90`}
+                    aria-readonly
+                  >
+                    <option value="member">กรรมการ</option>
+                  </select>
                 ) : (
                   <select
                     value={member.role}
@@ -3087,16 +3103,13 @@ function Step4CommitteeMembersPanel({
                     className={`${inputCls} ${hasRowError && !member.role ? "border-red-500 focus:ring-red-500" : ""}`}
                   >
                     <option value="">เลือกบทบาท</option>
-                    {(allowMemberSecretary
-                      ? STEP4_COMMITTEE_ROLE_OPTIONS
-                      : STEP4_INSPECTION_COMMITTEE_ROLE_OPTIONS
-                    )
-                      .filter((opt) => opt.value !== "chair")
-                      .map((opt) => (
+                    {STEP4_COMMITTEE_ROLE_OPTIONS.filter((opt) => opt.value !== "chair").map(
+                      (opt) => (
                         <option key={opt.value} value={opt.value}>
                           {opt.label}
                         </option>
-                      ))}
+                      ),
+                    )}
                   </select>
                 )}
               </div>
@@ -3198,11 +3211,16 @@ function Step4BiddersTable({
                       {isLowest && (
                         <p className="text-[11px] text-success font-medium mt-1">
                           🟢 เสนอราคาต่ำสุดและผ่านคุณสมบัติ
-                          {row.offered_price != null && row.offered_price > 0 && (
-                            <span className="block tabular-nums">
-                              {formatCurrencyDisplay(row.offered_price)} บาท
-                            </span>
-                          )}
+                          {(() => {
+                            const prices = resolveStep4PriceFromBidderRow(row);
+                            const effective =
+                              prices.final_agreed_amount ?? prices.winning_bid_amount;
+                            return effective != null && effective > 0 ? (
+                              <span className="block tabular-nums">
+                                {formatCurrencyDisplay(effective)} บาท
+                              </span>
+                            ) : null;
+                          })()}
                         </p>
                       )}
                     </td>
@@ -4236,6 +4254,43 @@ export function Step5DetailForm({
         ? resolvedBid.winning_bid_amount
         : null;
 
+  const biddersSyncSignature = useMemo(
+    () => JSON.stringify(normalizeStep4Bidders(bidResult.bidders ?? [])),
+    [bidResult.bidders],
+  );
+
+  useEffect(() => {
+    if (readOnly || winnerDataLocked) return;
+    const synced = applyStep4WinnerFromBiddersTable(bidResult);
+    if (
+      synced.winning_bidder_name === bidResult.winning_bidder_name &&
+      synced.winning_bid_amount === bidResult.winning_bid_amount &&
+      synced.final_agreed_amount === bidResult.final_agreed_amount
+    ) {
+      return;
+    }
+    onBidResultChange({
+      winning_bidder_name: synced.winning_bidder_name,
+      winning_bid_amount: synced.winning_bid_amount,
+      final_agreed_amount: synced.final_agreed_amount,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sync เมื่อตารางผู้เสนอราคาเปลี่ยน
+  }, [biddersSyncSignature, readOnly, winnerDataLocked]);
+
+  const handleStep5BiddersChange = (next: Step4Bidder[]) => {
+    if (readOnly || winnerDataLocked) {
+      onBidResultChange({ bidders: next });
+      return;
+    }
+    const synced = applyStep4WinnerFromBiddersTable({ ...bidResult, bidders: next });
+    onBidResultChange({
+      bidders: next,
+      winning_bidder_name: synced.winning_bidder_name,
+      winning_bid_amount: synced.winning_bid_amount,
+      final_agreed_amount: synced.final_agreed_amount,
+    });
+  };
+
   const step5UploadedTypes = useMemo(
     () =>
       docBinder.docs
@@ -4361,14 +4416,13 @@ export function Step5DetailForm({
 
   const [announcementDateRejected, setAnnouncementDateRejected] = useState(false);
   const [notificationDateRejected, setNotificationDateRejected] = useState(false);
-  const minAnnouncementDate = evaluationApprovalDate || undefined;
-
-  useEffect(() => {
-    console.log(
-      "⚖️ [LAW COMPLIANCE] Min Allowed Announcement Date Reset To:",
-      minAnnouncementDate ?? "",
-    );
-  }, [minAnnouncementDate]);
+  const minAnnouncementDate = useMemo(
+    () =>
+      evaluationApprovalDate
+        ? computeStep5RequiredAnnouncementDateISO(evaluationApprovalDate)
+        : "",
+    [evaluationApprovalDate],
+  );
 
   const winnerDate = announcement.winner_announcement_date ?? "";
   const notificationDate = announcement.winner_result_notification_date ?? "";
@@ -4376,20 +4430,22 @@ export function Step5DetailForm({
     announcementDateRejected ||
     (!!winnerDate &&
       !!minAnnouncementDate &&
-      isStep5WinnerAnnouncementBeforeEvaluation(winnerDate, minAnnouncementDate));
+      isStep5WinnerAnnouncementDateInvalid(winnerDate, evaluationApprovalDate));
   const notificationBeforeAnnouncement =
     !!winnerDate && !!notificationDate && notificationDate < winnerDate;
   const showNotificationDateError =
     notificationDateRejected || notificationBeforeAnnouncement;
-  const announcementDateErrorMsg = minAnnouncementDate
-    ? getStep5WinnerAnnouncementBeforeEvaluationMsg(minAnnouncementDate)
+  const announcementDateErrorMsg = evaluationApprovalDate
+    ? getStep5WinnerAnnouncementDateInvalidMsg(evaluationApprovalDate)
     : "";
-  const appealDeadlineISO = notificationDate
-    ? computeAppealDeadlineISO(notificationDate)
-    : "";
-  const contractEarliestISO = notificationDate
-    ? computeContractEarliestISO(notificationDate)
-    : "";
+  const appealTimeline = useMemo(
+    () => computeStep5AppealTimeline(winnerDate),
+    [winnerDate],
+  );
+  const appealDisplayLines = useMemo(
+    () => getStep5AppealTimelineDisplayLines(appealTimeline),
+    [appealTimeline],
+  );
 
   const handleWinnerAnnouncementDateChange = (v: string) => {
     if (!v) {
@@ -4399,7 +4455,7 @@ export function Step5DetailForm({
     }
     if (
       minAnnouncementDate &&
-      isStep5WinnerAnnouncementBeforeEvaluation(v, minAnnouncementDate)
+      isStep5WinnerAnnouncementDateInvalid(v, evaluationApprovalDate)
     ) {
       setAnnouncementDateRejected(true);
       toast.error(announcementDateErrorMsg);
@@ -4503,7 +4559,7 @@ export function Step5DetailForm({
         <Step4BiddersTable
           bidders={bidResult.bidders ?? []}
           readOnly={readOnly || winnerDataLocked}
-          onBiddersChange={(next) => onBidResultChange({ bidders: next })}
+          onBiddersChange={handleStep5BiddersChange}
         />
         <FieldRow label="แนบตารางเปรียบเทียบราคาฉบับสมบูรณ์ (PDF) *" complianceTarget="price_comparison_doc">
           <p className="text-xs text-muted-foreground mb-2">
@@ -4803,7 +4859,7 @@ export function Step5DetailForm({
             <ChronologicalDatePicker
               stepNumber={5}
               skipChronologicalLock
-              minDate={minAnnouncementDate}
+              minDate={minAnnouncementDate || undefined}
               value={winnerDate}
               onChange={handleWinnerAnnouncementDateChange}
               disabled={readOnly || !minAnnouncementDate}
@@ -4820,12 +4876,12 @@ export function Step5DetailForm({
             )}
             {minAnnouncementDate ? (
               <p className="text-xs text-muted-foreground">
-                เลือกได้ตั้งแต่ {formatThaiDateSlash(minAnnouncementDate)} เป็นต้นไป
-                (วันที่หัวหน้าหน่วยงานอนุมัติผลการพิจารณา)
+                เลือกได้ตั้งแต่วันที่ {formatThaiDateSlash(minAnnouncementDate)} เป็นต้นไป
+                (ห้ามประกาศผลก่อนหัวหน้าหน่วยงานอนุมัติผล)
               </p>
             ) : (
               <p className="text-xs text-muted-foreground">
-                เลือกได้ตั้งแต่วันที่หัวหน้าหน่วยงานอนุมัติผลการพิจารณาในฟอร์มด้านบนเป็นต้นไป
+                กรุณาระบุวันที่หัวหน้าหน่วยงานลงนามอนุมัติผลการพิจารณาในฟอร์มด้านบนก่อน
               </p>
             )}
             {showAnnouncementDateError && announcementDateErrorMsg && (
@@ -4833,10 +4889,19 @@ export function Step5DetailForm({
                 {announcementDateErrorMsg}
               </p>
             )}
+            {appealDisplayLines && (
+              <div
+                className="rounded-md border border-blue-200/80 bg-blue-50/50 px-3 py-3 space-y-1.5 text-sm text-foreground/90 leading-relaxed mt-2"
+                aria-live="polite"
+              >
+                <p className="font-medium">{appealDisplayLines.appealPeriodLine}</p>
+                <p className="text-foreground/90">{appealDisplayLines.contractEarliestLine}</p>
+              </div>
+            )}
           </div>
         </FieldRow>
         <FieldRow
-          label="วันที่แจ้งผลให้ผู้เสนอราคาทราบ *"
+          label="วันที่แจ้งผลให้ผู้เสนอราคาทราบ (ไม่บังคับ)"
           tooltipKey="step5.winner_result_notification_date"
           complianceTarget="winner_result_notification_date"
         >
@@ -4876,24 +4941,6 @@ export function Step5DetailForm({
             )}
           </div>
         </FieldRow>
-
-        {appealDeadlineISO && contractEarliestISO && (
-          <div
-            className="rounded-md border border-orange-200/80 bg-orange-50/60 px-3 py-3 space-y-2 text-sm leading-relaxed"
-            aria-live="polite"
-          >
-            <p className="font-medium text-foreground">
-              ⏱ วันสิ้นสุดระยะอุทธรณ์: {formatThaiDateSlash(appealDeadlineISO)}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              คำนวณจากวันที่แจ้งผลให้ผู้เสนอราคาทราบ ({formatThaiDateSlash(notificationDate)})
-              + 7 วันทำการ ไม่นับวันหยุดราชการ
-            </p>
-            <p className="text-xs font-semibold text-orange-900">
-              {STEP5_CONTRACT_AFTER_APPEAL_MSG(contractEarliestISO)}
-            </p>
-          </div>
-        )}
 
         <FieldRow label="ประกาศผลผู้ชนะการเสนอราคา (PDF) *" complianceTarget="egp_winner_doc">
           <p className="text-xs text-muted-foreground mb-2">

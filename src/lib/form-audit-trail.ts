@@ -225,8 +225,8 @@ export const CHECKLIST_EVIDENCE_RULES: ChecklistEvidenceRule[] = [
     enforce: "always",
     binding: {
       kind: "fields",
-      fieldKeys: ["winner_announcement_no", "winner_announcement_date", "winner_result_notification_date"],
-      message: "ข้อที่ 1: กรุณาระบุเลขที่ วันที่ประกาศผล และวันที่แจ้งผลให้ผู้เสนอราคาทราบ",
+      fieldKeys: ["winner_announcement_no", "winner_announcement_date"],
+      message: "ข้อที่ 1: กรุณาระบุเลขที่และวันที่ประกาศผล",
     },
   },
   {

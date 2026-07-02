@@ -351,13 +351,24 @@ export function getStepMinDays(stepNumber: number, method: string, budget: numbe
 }
 
 /**
- * วันสิ้นสุดระยะอุทธรณ์ — นับจากวันประกาศผู้ชนะ (ขั้น 5) + 7 วันทำการ
+ * วันทำการแรกของระยะอุทธรณ์ — วันทำการถัดจากวันประกาศผลผู้ชนะ (วันแรกที่ยื่นอุทธรณ์ได้)
+ * ไม่นับวันหยุดราชการ (ใช้ addWorkdays)
+ */
+export function computeAppealPeriodStartISO(winnerAnnouncementISO: string): string {
+  const anchor = parseISODateLocal(winnerAnnouncementISO?.trim() ?? "");
+  if (!anchor) return "";
+  return toISODate(addWorkdays(anchor, 1));
+}
+
+/**
+ * วันสิ้นสุดระยะอุทธรณ์ — วันทำการถัดจากวันประกาศผล + 7 วันทำการ
  * ไม่นับวันหยุดราชการ (ใช้ addWorkdays)
  */
 export function computeAppealDeadlineISO(winnerAnnouncementISO: string): string {
-  const start = parseISODateLocal(winnerAnnouncementISO?.trim() ?? "");
-  if (!start || APPEAL_PERIOD_WORKDAYS < 1) return "";
-  return toISODate(addWorkdays(start, APPEAL_PERIOD_WORKDAYS));
+  const appealStartISO = computeAppealPeriodStartISO(winnerAnnouncementISO);
+  const appealStart = parseISODateLocal(appealStartISO);
+  if (!appealStart || APPEAL_PERIOD_WORKDAYS < 1) return "";
+  return toISODate(addWorkdays(appealStart, APPEAL_PERIOD_WORKDAYS));
 }
 
 /** วันกำหนดส่งเรื่องให้กรมบัญชีกลางสูงสุด — นับจากวันรับหนังสืออุทธรณ์ + 7 วันทำการ */

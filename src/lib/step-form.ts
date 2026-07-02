@@ -60,8 +60,11 @@ import {
   STEP10_INSPECTION_RESULT_OPTIONS,
 } from "@/lib/step10-contract";
 import {
+  addWorkdays,
   countWorkdaysAfterStartISO,
   countWorkdaysBetweenISO,
+  parseISODateLocal,
+  toISODate,
   validateStep3PublicationDates,
   isStep7NotificationLetterTooLate,
   CONTRACT_NOTIFICATION_WORKDAYS,
@@ -1337,28 +1340,15 @@ export function normalizeStep4Bidders(
   return raw.map((row) => normalizeStep4Bidder(row));
 }
 
-/** ดัชนีแถวที่เสนอราคาต่ำสุดและผ่านคุณสมบัติ (รองรับเสมอกัน) */
-export function resolveLowestValidStep4BidderIndices(bidders: Step4Bidder[]): number[] {
-  const candidates: Array<{ index: number; price: number }> = [];
-  bidders.forEach((raw, index) => {
-    const row = normalizeStep4Bidder(raw);
-    if (row.qualification_status !== "passed") return;
-    const price = row.offered_price;
-    if (price == null || price <= 0) return;
-    candidates.push({ index, price });
-  });
-  if (candidates.length === 0) return [];
-  const minPrice = Math.min(...candidates.map((c) => c.price));
-  return candidates.filter((c) => c.price === minPrice).map((c) => c.index);
-}
-
-/** ผู้ยื่นที่เสนอราคาต่ำสุดและผ่านคุณสมบัติ */
-export function resolveLowestValidStep4Bidder(
-  bidders: Step4Bidder[],
-): Step4Bidder | null {
-  const indices = resolveLowestValidStep4BidderIndices(bidders);
-  if (indices.length === 0) return null;
-  return normalizeStep4Bidder(bidders[indices[0]]);
+function parsePriceFromNegotiationNotes(notes: string | undefined): number | null {
+  const trimmed = notes?.trim();
+  if (!trimmed) return null;
+  const direct = stripCurrencyToNumber(trimmed);
+  if (direct != null && direct > 0) return direct;
+  const match = trimmed.match(/[\d,]+(?:\.\d+)?/);
+  if (!match) return null;
+  const parsed = stripCurrencyToNumber(match[0]);
+  return parsed != null && parsed > 0 ? parsed : null;
 }
 
 /** ดึงราคาเสนอชนะ / ราคาตกลงจริงจากแถวผู้ยื่น — ใช้ราคาหลังต่อรองจากหมายเหตุถ้ามี */
@@ -1381,25 +1371,51 @@ export function resolveStep4PriceFromBidderRow(row: Step4Bidder): {
   };
 }
 
-function parsePriceFromNegotiationNotes(notes: string | undefined): number | null {
-  const trimmed = notes?.trim();
-  if (!trimmed) return null;
-  const direct = stripCurrencyToNumber(trimmed);
-  if (direct != null && direct > 0) return direct;
-  const match = trimmed.match(/[\d,]+(?:\.\d+)?/);
-  if (!match) return null;
-  const parsed = stripCurrencyToNumber(match[0]);
-  return parsed != null && parsed > 0 ? parsed : null;
+/** ราคาเปรียบเทียบสำหรับจัดอันดับผู้ชนะ — ใช้ราคาหลังต่อรองถ้ามี ไม่เช่นนั้นใช้ราคาเสนอ */
+export function resolveStep4BidderComparablePrice(row: Step4Bidder): number | null {
+  const prices = resolveStep4PriceFromBidderRow(row);
+  const effective = prices.final_agreed_amount ?? prices.winning_bid_amount;
+  if (effective == null || effective <= 0) return null;
+  return effective;
+}
+
+/** ดัชนีแถวที่เสนอราคาต่ำสุดและผ่านคุณสมบัติ (รองรับเสมอกัน) */
+export function resolveLowestValidStep4BidderIndices(bidders: Step4Bidder[]): number[] {
+  const candidates: Array<{ index: number; price: number }> = [];
+  bidders.forEach((raw, index) => {
+    const row = normalizeStep4Bidder(raw);
+    if (row.qualification_status !== "passed") return;
+    const price = resolveStep4BidderComparablePrice(row);
+    if (price == null) return;
+    candidates.push({ index, price });
+  });
+  if (candidates.length === 0) return [];
+  const minPrice = Math.min(...candidates.map((c) => c.price));
+  return candidates.filter((c) => c.price === minPrice).map((c) => c.index);
+}
+
+/** ผู้ยื่นที่เสนอราคาต่ำสุดและผ่านคุณสมบัติ */
+export function resolveLowestValidStep4Bidder(
+  bidders: Step4Bidder[],
+): Step4Bidder | null {
+  const indices = resolveLowestValidStep4BidderIndices(bidders);
+  if (indices.length === 0) return null;
+  return normalizeStep4Bidder(bidders[indices[0]]);
 }
 
 /** ดึงผู้ชนะจากแถว highlight ในตาราง bidders — บันทึกหลังบ้านก่อน sync DB */
 export function applyStep4WinnerFromBiddersTable(bidResult: Step4BidResult): Step4BidResult {
   const winner = resolveLowestValidStep4Bidder(normalizeStep4Bidders(bidResult.bidders));
-  if (!winner?.company_name) {
-    return bidResult;
+  if (!winner?.company_name?.trim()) {
+    return {
+      ...bidResult,
+      winning_bidder_name: "",
+      winning_bid_amount: null,
+      final_agreed_amount: null,
+    };
   }
   const prices = resolveStep4PriceFromBidderRow(winner);
-  const extractedName = winner.company_name;
+  const extractedName = winner.company_name.trim();
   const extractedPrice = prices.final_agreed_amount;
   console.log("🛡️ [BACKGROUND MAP] Extracted Winner Row to Database:", {
     winner: extractedName,
@@ -1540,7 +1556,7 @@ export function applyStep4CommitteeRoleConstraints(
     if (member.role === "chair") {
       return { ...member, role: "" };
     }
-    if (!allowMemberSecretary && member.role === "member_secretary") {
+    if (!allowMemberSecretary) {
       return { ...member, role: "member" };
     }
     return member;
@@ -2437,21 +2453,47 @@ export function resolveStep4ContractAmount(bidResult: Pick<Step4BidResult, "fina
   return null;
 }
 
-/** วันที่ลงนามประกาศผู้ชนะ (ขั้น 5) อยู่ก่อนวันอนุมัติผลพิจารณา (ขั้น 4) */
+/** วันที่ประกาศผลเร็วสุดที่อนุญาต — วันทำการถัดจากวันหัวหน้าหน่วยงานลงนามอนุมัติผล */
+export function computeStep5RequiredAnnouncementDateISO(
+  evaluationApprovalISO: string,
+): string {
+  const anchor = parseISODateLocal(evaluationApprovalISO?.trim() ?? "");
+  if (!anchor) return "";
+  return toISODate(addWorkdays(anchor, 1));
+}
+
+/** วันที่ประกาศผลอยู่ก่อนวันทำการถัดจากวันอนุมัติผลพิจารณา (ห้ามย้อนหลัง) */
+export function isStep5WinnerAnnouncementDateInvalid(
+  winnerAnnouncementISO: string,
+  evaluationApprovalISO: string,
+): boolean {
+  const minDate = computeStep5RequiredAnnouncementDateISO(evaluationApprovalISO);
+  const winner = winnerAnnouncementISO?.trim() ?? "";
+  if (!minDate || !winner) return false;
+  return winner < minDate;
+}
+
+export function getStep5WinnerAnnouncementDateInvalidMsg(
+  evaluationApprovalISO: string,
+): string {
+  const minDate = computeStep5RequiredAnnouncementDateISO(evaluationApprovalISO);
+  const dateLabel = formatThaiDateSlash(minDate || evaluationApprovalISO);
+  return `❌ วันที่ประกาศผลต้องไม่ก่อนวันที่ ${dateLabel} (ห้ามประกาศผลก่อนหัวหน้าหน่วยงานอนุมัติผล)`;
+}
+
+/** @deprecated ใช้ isStep5WinnerAnnouncementDateInvalid */
 export function isStep5WinnerAnnouncementBeforeEvaluation(
   winnerAnnouncementISO: string,
   evaluationApprovalISO: string,
 ): boolean {
-  const winner = winnerAnnouncementISO.trim();
-  const evaluation = evaluationApprovalISO.trim();
-  return !!evaluation && !!winner && winner < evaluation;
+  return isStep5WinnerAnnouncementDateInvalid(winnerAnnouncementISO, evaluationApprovalISO);
 }
 
+/** @deprecated ใช้ getStep5WinnerAnnouncementDateInvalidMsg */
 export function getStep5WinnerAnnouncementBeforeEvaluationMsg(
   evaluationApprovalISO: string,
 ): string {
-  const dateLabel = formatThaiDateSlash(evaluationApprovalISO);
-  return `❌ วันที่ลงนามในประกาศผลผู้ชนะ ต้องไม่เกิดก่อนวันที่หัวหน้าหน่วยงานอนุมัติผลการพิจารณา (วันที่ ${dateLabel})`;
+  return getStep5WinnerAnnouncementDateInvalidMsg(evaluationApprovalISO);
 }
 
 /** วันนี้ (yyyy-mm-dd) ตามเวลาท้องถิ่น */
@@ -4612,31 +4654,24 @@ export function getStep5RequiredFormFieldIssues(
     });
   } else if (
     evaluationApprovalDate &&
-    isStep5WinnerAnnouncementBeforeEvaluation(
+    isStep5WinnerAnnouncementDateInvalid(
       announcement.winner_announcement_date,
       evaluationApprovalDate,
     )
   ) {
     issues.push({
       id: "winner_announcement_date_min",
-      message: getStep5WinnerAnnouncementBeforeEvaluationMsg(evaluationApprovalDate),
+      message: getStep5WinnerAnnouncementDateInvalidMsg(evaluationApprovalDate),
     });
   }
 
-  if (!announcement.winner_result_notification_date?.trim()) {
+  const notificationDate = announcement.winner_result_notification_date?.trim() ?? "";
+  const announcementDate = announcement.winner_announcement_date?.trim() ?? "";
+  if (notificationDate && announcementDate && notificationDate < announcementDate) {
     issues.push({
       id: "winner_result_notification_date",
-      message: "กรุณาระบุวันที่แจ้งผลให้ผู้เสนอราคาทราบ",
+      message: STEP5_RESULT_NOTIFICATION_BEFORE_ANNOUNCEMENT_MSG,
     });
-  } else {
-    const notificationDate = announcement.winner_result_notification_date.trim();
-    const announcementDate = announcement.winner_announcement_date?.trim() ?? "";
-    if (announcementDate && notificationDate < announcementDate) {
-      issues.push({
-        id: "winner_result_notification_date",
-        message: STEP5_RESULT_NOTIFICATION_BEFORE_ANNOUNCEMENT_MSG,
-      });
-    }
   }
 
   if (!opts.responsibleName.trim()) {
@@ -4670,7 +4705,7 @@ export function countStep5FormRequiredProgress(
     step3PublicationEnd: opts.step3PublicationEnd,
     timelineCtx: opts.timelineCtx,
   });
-  const total = 6;
+  const total = 5;
   return {
     done: Math.max(0, total - announcementIssues.length - bidIssues.length),
     total,

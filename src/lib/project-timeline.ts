@@ -1,29 +1,31 @@
 /**
- * ไทม์ไลน์โครงการ — วันที่จริงจากฐานข้อมูล + ประมาณการล่วงหน้า (Global Auto-Estimation)
+ * ไทม์ไลน์โครงการ — Cascading Timeline Engine + ประมาณการล่วงหน้า
  */
-import {
-  resolveCommitteeReviewWorkdays,
-} from "@/lib/step-form";
 import { resolveWorkflowProcurementMethod } from "@/lib/project-workflow-core";
 import {
+  buildCascadingTimelineProjectData,
+  computeCascadingTimeline,
+  CASCADE_INTERVAL,
+  type CascadingTimelineConnector,
+} from "@/lib/cascading-timeline";
+import {
   isoDatePart,
-  resolveStepMilestoneEndISO,
   resolveStep1PlanPublicationDateISO,
   type Step3TimelineLiveAnnouncement,
   type TimelineNotesContext,
 } from "@/lib/step-milestone-dates";
-import { applyGlobalTimelineAutoEstimation } from "@/lib/timeline-auto-estimation";
-import {
-  PROJECT_TIMELINE_ESTIMATE_STEP3_WORKDAYS,
-  PROJECT_TIMELINE_ESTIMATE_STEP4_DEFAULT_BID_WORKDAYS,
-  PROJECT_TIMELINE_ESTIMATE_STEP5_WORKDAYS,
-  PROJECT_TIMELINE_ESTIMATE_STEP6_WORKDAYS,
-  PROJECT_TIMELINE_ESTIMATE_STEP7_9_WORKDAYS_EACH,
-  STEP4_COMMITTEE_REVIEW_WORKDAYS_AFTER_BID_END,
-  parseISODateLocal,
-} from "@/lib/workdays";
+import { parseISODateLocal } from "@/lib/workdays";
 
-export { resolveStepMilestoneEndISO, resolveStep1PlanPublicationDateISO };
+export { resolveStepMilestoneEndISO, resolveStep1PlanPublicationDateISO } from "@/lib/step-milestone-dates";
+export {
+  computeCascadingTimeline,
+  buildCascadingTimelineProjectData,
+  CASCADE_INTERVAL,
+  CASCADE_CONNECTOR_LABELS,
+  CASCADE_DEFAULT_STEP7_TO_8_WORKDAYS,
+  type CascadingTimelineProjectData,
+  type CascadingTimelineResult,
+} from "@/lib/cascading-timeline";
 
 export type ProjectTimelineProject = {
   id?: string;
@@ -38,6 +40,7 @@ export type ProjectTimelineProject = {
   evaluation_report_approval_date?: string | null;
   winner_announcement_date?: string | null;
   winner_result_notification_date?: string | null;
+  contract_signed_date?: string | null;
 };
 
 export type ProjectTimelineStep = {
@@ -53,6 +56,15 @@ export type ProjectTimelineItem = {
   estimated: boolean;
   isDone: boolean;
   isCurrent: boolean;
+  /** ป้ายระยะเวลาภายในขั้น (เช่น เผยแพร่ +3 วันทำการ) */
+  internalBadge?: string;
+};
+
+export type ProjectTimelineConnector = CascadingTimelineConnector;
+
+export type ProjectTimelineResult = {
+  items: ProjectTimelineItem[];
+  connectors: ProjectTimelineConnector[];
 };
 
 export type ProjectTimelineInput = {
@@ -64,6 +76,21 @@ export type ProjectTimelineInput = {
   step3LiveAnnouncement?: Step3TimelineLiveAnnouncement | null;
   /** note ขั้นตอนที่ 4–5 จาก procurement_steps */
   timelineNotes?: TimelineNotesContext | null;
+  /** ระยะสัญญา (ขั้น 9) — สำหรับประมาณการขั้น 10 */
+  contractDurationDays?: number | null;
+  contractEndDate?: string | null;
+  egpEssentialPublicationDate?: string | null;
+  /** Form State สด — reactive trigger เมื่อแก้ DatePicker */
+  step2Live?: {
+    median_price_approval_date?: string;
+    appointment_order_date?: string;
+  } | null;
+  step8Live?: { contract_signed_date?: string } | null;
+  step9Live?: {
+    contract_duration_days?: number | null;
+    contract_end_date?: string;
+    egp_essential_publication_date?: string;
+  } | null;
 };
 
 export function snapshotTimelineProject(
@@ -82,6 +109,7 @@ export function snapshotTimelineProject(
     evaluation_report_approval_date: project.evaluation_report_approval_date ?? null,
     winner_announcement_date: project.winner_announcement_date ?? null,
     winner_result_notification_date: project.winner_result_notification_date ?? null,
+    contract_signed_date: project.contract_signed_date ?? null,
   };
 }
 
@@ -102,6 +130,14 @@ export function buildProjectTimelineInput(
   step3Note?: string | null,
   step3LiveAnnouncement?: Step3TimelineLiveAnnouncement | null,
   timelineNotes?: TimelineNotesContext | null,
+  extras?: {
+    contractDurationDays?: number | null;
+    contractEndDate?: string | null;
+    egpEssentialPublicationDate?: string | null;
+    step2Live?: ProjectTimelineInput["step2Live"];
+    step8Live?: ProjectTimelineInput["step8Live"];
+    step9Live?: ProjectTimelineInput["step9Live"];
+  },
 ): ProjectTimelineInput {
   return {
     projectId,
@@ -110,6 +146,13 @@ export function buildProjectTimelineInput(
     step3Note: step3Note ?? null,
     step3LiveAnnouncement: step3LiveAnnouncement ?? null,
     timelineNotes: timelineNotes ?? null,
+    contractDurationDays: extras?.contractDurationDays ?? extras?.step9Live?.contract_duration_days,
+    contractEndDate: extras?.contractEndDate ?? extras?.step9Live?.contract_end_date,
+    egpEssentialPublicationDate:
+      extras?.egpEssentialPublicationDate ?? extras?.step9Live?.egp_essential_publication_date,
+    step2Live: extras?.step2Live ?? null,
+    step8Live: extras?.step8Live ?? null,
+    step9Live: extras?.step9Live ?? null,
   };
 }
 
@@ -132,25 +175,89 @@ export function getProjectTimelineInputKey(input: ProjectTimelineInput): string 
     isoDatePart(p.evaluation_report_approval_date),
     isoDatePart(p.winner_announcement_date),
     isoDatePart(p.winner_result_notification_date),
+    isoDatePart(p.contract_signed_date),
     input.step3Note ?? "",
     input.step3LiveAnnouncement?.publication_start ?? "",
     input.step3LiveAnnouncement?.publication_end ?? "",
     input.step3LiveAnnouncement?.procurement_request_approval_date ?? "",
     input.step3LiveAnnouncement?.committee_review_workdays ?? "",
+    input.step3LiveAnnouncement?.bid_submission_workdays ?? "",
     input.timelineNotes?.step4Note ?? "",
     input.timelineNotes?.step5Note ?? "",
     input.timelineNotes?.step4Live?.evaluation_report_approval_date ?? "",
     input.timelineNotes?.step5Live?.winner_announcement_date ?? "",
     input.timelineNotes?.step5Live?.winner_result_notification_date ?? "",
+    input.contractDurationDays ?? "",
+    input.contractEndDate ?? "",
+    input.egpEssentialPublicationDate ?? "",
+    input.step2Live?.median_price_approval_date ?? "",
+    input.step2Live?.appointment_order_date ?? "",
+    input.step8Live?.contract_signed_date ?? "",
+    input.step9Live?.contract_duration_days ?? "",
+    input.step9Live?.contract_end_date ?? "",
+    input.step9Live?.egp_essential_publication_date ?? "",
     stepSig,
   ].join("::");
 }
 
+function buildItemsFromCascading(input: ProjectTimelineInput): ProjectTimelineResult {
+  const projectData = buildCascadingTimelineProjectData({
+    project: {
+      ...input.project,
+      median_price_approval_date: pickLiveStr(
+        input.step2Live?.median_price_approval_date,
+        input.project.median_price_approval_date,
+      ),
+      committee_appointment_order_date: pickLiveStr(
+        input.step2Live?.appointment_order_date,
+        input.project.committee_appointment_order_date,
+      ),
+      contract_signed_date: pickLiveStr(
+        input.step8Live?.contract_signed_date,
+        input.project.contract_signed_date,
+      ),
+    },
+    steps: input.steps,
+    step3Note: input.step3Note,
+    step3LiveAnnouncement: input.step3LiveAnnouncement,
+    timelineNotes: input.timelineNotes,
+    contractDurationDays: input.contractDurationDays ?? input.step9Live?.contract_duration_days,
+    contractEndDate: input.contractEndDate ?? input.step9Live?.contract_end_date,
+    egpEssentialPublicationDate:
+      input.egpEssentialPublicationDate ?? input.step9Live?.egp_essential_publication_date,
+  });
+
+  const cascading = computeCascadingTimeline(projectData);
+
+  const items: ProjectTimelineItem[] = cascading.steps.map((step) => ({
+    stepNumber: step.stepNumber,
+    date: step.displayDateISO ? parseISODateLocal(step.displayDateISO) : null,
+    estimated: step.isEstimated,
+    isDone: step.isDone,
+    isCurrent: step.isCurrent,
+    internalBadge: step.internalBadge,
+  }));
+
+  return { items, connectors: cascading.connectors };
+}
+
+function pickLiveStr(live?: string, stored?: string | null): string | null {
+  const l = live?.trim() ?? "";
+  if (l) return l;
+  return stored ?? null;
+}
+
 export function recalculateProjectTimeline(input: ProjectTimelineInput): ProjectTimelineItem[] {
+  return recalculateProjectTimelineWithConnectors(input).items;
+}
+
+export function recalculateProjectTimelineWithConnectors(
+  input: ProjectTimelineInput,
+): ProjectTimelineResult {
   if (input.project.id && input.project.id !== input.projectId) {
-    return [];
+    return { items: [], connectors: [] };
   }
-  return buildProjectTimelineItemsFromInput(input);
+  return buildItemsFromCascading(input);
 }
 
 /** @deprecated ใช้ resolveStepMilestoneEndISO — คงไว้เพื่อ backward compat */
@@ -160,84 +267,47 @@ export function resolveStepEffectiveDateISO(
   step3Note?: string | null,
   timelineNotes?: TimelineNotesContext | null,
 ): string {
-  return resolveStepMilestoneEndISO(
-    stepNumber,
+  const input = buildProjectTimelineInput(
+    project.id ?? "",
     project,
-    undefined,
+    [],
     step3Note,
-    undefined,
+    null,
     timelineNotes,
-  ).iso;
+  );
+  const result = computeCascadingTimeline(
+    buildCascadingTimelineProjectData({
+      project: input.project,
+      steps: input.steps,
+      step3Note: input.step3Note,
+      timelineNotes: input.timelineNotes,
+    }),
+  );
+  return result.steps.find((s) => s.stepNumber === stepNumber)?.displayDateISO ?? "";
 }
 
-/** ระยะวันทำการขั้นต่ำ Fastest Path — สะสมจากวันสิ้นสุดขั้นก่อนหน้า */
-export function getTimelineFastPathWorkdays(
-  stepNumber: number,
-  project: ProjectTimelineProject,
-  step3Note?: string | null,
-): number {
+/** @deprecated ใช้ CASCADE_INTERVAL แทน */
+export function getTimelineFastPathWorkdays(stepNumber: number): number {
   switch (stepNumber) {
-    case 3:
-      return PROJECT_TIMELINE_ESTIMATE_STEP3_WORKDAYS;
-    case 4: {
-      const bidDays =
-        resolveCommitteeReviewWorkdays(project, step3Note ?? null) ??
-        PROJECT_TIMELINE_ESTIMATE_STEP4_DEFAULT_BID_WORKDAYS;
-      return Math.max(bidDays, 1) + STEP4_COMMITTEE_REVIEW_WORKDAYS_AFTER_BID_END;
-    }
-    case 5:
-      return PROJECT_TIMELINE_ESTIMATE_STEP5_WORKDAYS;
-    case 6:
-      return PROJECT_TIMELINE_ESTIMATE_STEP6_WORKDAYS;
-    case 7:
-    case 8:
-    case 9:
-      return PROJECT_TIMELINE_ESTIMATE_STEP7_9_WORKDAYS_EACH;
-    case 1:
     case 2:
-      return 1;
-    case 10:
-      return 0;
+      return CASCADE_INTERVAL.STEP1_TO_2;
+    case 3:
+      return CASCADE_INTERVAL.STEP2_TO_3 + CASCADE_INTERVAL.STEP3_INTERNAL_PUBLICATION;
+    case 4:
+      return CASCADE_INTERVAL.STEP3_TO_4;
+    case 5:
+      return CASCADE_INTERVAL.STEP4_TO_5;
+    case 6:
+      return CASCADE_INTERVAL.STEP6_INTERNAL_APPEAL;
+    case 7:
+      return CASCADE_INTERVAL.STEP6_TO_7;
+    case 8:
+      return CASCADE_INTERVAL.STEP7_TO_8;
+    case 9:
+      return CASCADE_INTERVAL.STEP8_TO_9;
     default:
       return 0;
   }
-}
-
-function buildProjectTimelineItemsFromInput(
-  input: ProjectTimelineInput,
-): ProjectTimelineItem[] {
-  const { project, steps, step3Note, step3LiveAnnouncement, timelineNotes } = input;
-  const currentStep = project.current_step;
-  const stepByNum = new Map(steps.map((s) => [s.step_number, s]));
-  const method = project.method;
-
-  const baseItems = steps.map((s) => {
-    const stepNum = s.step_number;
-    const isDone = !!s.completed_at;
-    const isCurrent = stepNum === currentStep && !isDone;
-    const stepRecord = stepByNum.get(stepNum);
-
-    const resolution = resolveStepMilestoneEndISO(
-      stepNum,
-      project,
-      stepRecord,
-      step3Note,
-      step3LiveAnnouncement,
-      timelineNotes,
-    );
-
-    const date = resolution.iso ? parseISODateLocal(resolution.iso) : null;
-
-    return {
-      stepNumber: stepNum,
-      date,
-      estimated: resolution.derived && !!date,
-      isDone,
-      isCurrent,
-    };
-  });
-
-  return applyGlobalTimelineAutoEstimation(baseItems, method, steps);
 }
 
 export function buildProjectTimelineItems(

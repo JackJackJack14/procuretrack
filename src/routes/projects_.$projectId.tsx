@@ -14,11 +14,12 @@ import {
   EGP_STEP_LEGAL_HINTS,
   getMilestoneLabel,
 } from "@/lib/egp-milestones";
-import { formatThaiDate } from "@/lib/utils";
+import { formatThaiDate, formatThaiDateSlash } from "@/lib/utils";
 import { HELPER_BUTTON_MD, HELPER_BUTTON_SM_WIDE } from "@/lib/helper-button-styles";
 import {
   buildProjectTimelineInput,
-  recalculateProjectTimeline,
+  recalculateProjectTimelineWithConnectors,
+  type ProjectTimelineConnector,
 } from "@/lib/project-timeline";
 import {
   buildTimelineValidationContext,
@@ -118,8 +119,8 @@ import {
   isStep5ReadyForNext,
   countStep5CoreDocumentsReady,
   countStep5FormRequiredProgress,
-  isStep5WinnerAnnouncementBeforeEvaluation,
-  getStep5WinnerAnnouncementBeforeEvaluationMsg,
+  isStep5WinnerAnnouncementDateInvalid,
+  getStep5WinnerAnnouncementDateInvalidMsg,
   EMPTY_STEP1_CHECKLIST,
   loadStep1FormFromStep,
   isStep1ReadyForNext,
@@ -2111,12 +2112,12 @@ function ProjectDetailPage() {
       if (
         step5Announcement.winner_announcement_date?.trim() &&
         step5EvaluationApprovalDate &&
-        isStep5WinnerAnnouncementBeforeEvaluation(
+        isStep5WinnerAnnouncementDateInvalid(
           step5Announcement.winner_announcement_date,
           step5EvaluationApprovalDate,
         )
       ) {
-        const msg = getStep5WinnerAnnouncementBeforeEvaluationMsg(step5EvaluationApprovalDate);
+        const msg = getStep5WinnerAnnouncementDateInvalidMsg(step5EvaluationApprovalDate);
         toast.error(msg);
         setError(msg);
         return;
@@ -3078,6 +3079,29 @@ function ProjectDetailPage() {
                   winner_announcement_date: step5Announcement.winner_announcement_date,
                   winner_result_notification_date:
                     step5Announcement.winner_result_notification_date,
+                }
+              : null
+          }
+          step2Live={
+            activeStep === 2
+              ? {
+                  median_price_approval_date: step2MedianPrice.median_price_approval_date,
+                  appointment_order_date: step2CommitteeOrder.appointment_order_date,
+                }
+              : null
+          }
+          step8Live={
+            activeStep === 8
+              ? { contract_signed_date: step8ContractExecution.contract_signed_date }
+              : null
+          }
+          step9Live={
+            activeStep === 9
+              ? {
+                  contract_duration_days: step9ContractSchedule.contract_duration_days,
+                  contract_end_date: step9ContractSchedule.contract_end_date,
+                  egp_essential_publication_date:
+                    step9ContractSchedule.egp_essential_publication_date,
                 }
               : null
           }
@@ -4045,7 +4069,7 @@ function ProjectDetailPage() {
                   current.step_number === 5 &&
                   !!step5Announcement.winner_announcement_date?.trim() &&
                   !!step5EvaluationApprovalDate &&
-                  isStep5WinnerAnnouncementBeforeEvaluation(
+                  isStep5WinnerAnnouncementDateInvalid(
                     step5Announcement.winner_announcement_date,
                     step5EvaluationApprovalDate,
                   );
@@ -5328,6 +5352,9 @@ function ProjectTimeline({
   step3LiveAnnouncement = null,
   step4Live = null,
   step5Live = null,
+  step2Live = null,
+  step8Live = null,
+  step9Live = null,
 }: {
   projectId: string;
   project: Project;
@@ -5342,6 +5369,16 @@ function ProjectTimeline({
   step5Live?: {
     winner_announcement_date?: string;
     winner_result_notification_date?: string;
+  } | null;
+  step2Live?: {
+    median_price_approval_date?: string;
+    appointment_order_date?: string;
+  } | null;
+  step8Live?: { contract_signed_date?: string } | null;
+  step9Live?: {
+    contract_duration_days?: number | null;
+    contract_end_date?: string;
+    egp_essential_publication_date?: string;
   } | null;
 }) {
   const timelineNotes = useMemo(
@@ -5369,6 +5406,7 @@ function ProjectTimeline({
         step3Note,
         step3LiveAnnouncement,
         timelineNotes,
+        { step2Live, step8Live, step9Live },
       ),
     [
       projectId,
@@ -5384,6 +5422,7 @@ function ProjectTimeline({
       project.evaluation_report_approval_date,
       project.winner_announcement_date,
       project.winner_result_notification_date,
+      project.contract_signed_date,
       steps,
       step3Note,
       step4Note,
@@ -5393,54 +5432,108 @@ function ProjectTimeline({
       step3LiveAnnouncement?.publication_end,
       step3LiveAnnouncement?.procurement_request_approval_date,
       step3LiveAnnouncement?.committee_review_workdays,
+      step3LiveAnnouncement?.bid_submission_workdays,
       timelineNotes,
+      step2Live?.median_price_approval_date,
+      step2Live?.appointment_order_date,
+      step8Live?.contract_signed_date,
+      step9Live?.contract_duration_days,
+      step9Live?.contract_end_date,
+      step9Live?.egp_essential_publication_date,
     ],
   );
-  const items = useMemo(
-    () => recalculateProjectTimeline(timelineInput),
+
+  const { items, connectors } = useMemo(
+    () => recalculateProjectTimelineWithConnectors(timelineInput),
     [timelineInput],
   );
 
   const isSpecificTimeline = isSpecificMethodShortWorkflow(method);
   const timelineProgressUi = backendStepToUiStep(project.current_step, method);
-  const displayItems = useMemo(() => {
-    if (!isSpecificTimeline) {
-      return items.map((it) => ({
-        uiStep: it.stepNumber,
-        backendStep: it.stepNumber,
-        label: getMilestoneLabel(it.stepNumber),
+
+  type DisplayItem = {
+    uiStep: number;
+    backendStep: number;
+    label: string;
+    date: Date | null | undefined;
+    estimated: boolean;
+    isDone: boolean;
+    internalBadge?: string;
+  };
+
+  const displayItems: DisplayItem[] = useMemo(() => {
+    const base = items.map((it) => ({
+      uiStep: it.stepNumber,
+      backendStep: it.stepNumber,
+      label: getMilestoneLabel(it.stepNumber),
+      date: it.date,
+      estimated: it.estimated,
+      isDone: it.isDone,
+      internalBadge: it.internalBadge,
+    }));
+    if (!isSpecificTimeline) return base;
+    return pruneTimelineForSpecificMethod(items).map((it) => {
+      const full = base.find((b) => b.backendStep === it.backendStep);
+      return {
+        uiStep: it.uiStep,
+        backendStep: it.backendStep,
+        label: it.label,
         date: it.date,
-        estimated: it.estimated,
-      }));
-    }
-    return pruneTimelineForSpecificMethod(items);
+        estimated: it.estimated ?? false,
+        isDone: full?.isDone ?? false,
+        internalBadge: full?.internalBadge,
+      };
+    });
   }, [items, isSpecificTimeline]);
 
-  /** true = มีวันที่ประมาณการจาก Global Auto-Estimation */
+  const displayConnectors = useMemo(() => {
+    if (!isSpecificTimeline) return connectors;
+    const backendOrder = displayItems.map((d) => d.backendStep);
+    const result: ProjectTimelineConnector[] = [];
+    for (let i = 0; i < backendOrder.length - 1; i++) {
+      const from = backendOrder[i];
+      const to = backendOrder[i + 1];
+      const match = connectors.find((c) => c.fromStep === from && c.toStep === to);
+      if (match) {
+        result.push(match);
+        continue;
+      }
+      const chain = connectors.filter((c) => c.fromStep >= from && c.toStep <= to);
+      if (chain.length > 0) {
+        const totalWd = chain.reduce((sum, c) => sum + (c.workdays ?? 0), 0);
+        result.push({
+          fromStep: from,
+          toStep: to,
+          workdays: totalWd || null,
+          label: chain.map((c) => c.label).join(" "),
+        });
+      }
+    }
+    return result;
+  }, [connectors, displayItems, isSpecificTimeline]);
+
+  const connectorByPair = useMemo(() => {
+    const map = new Map<string, ProjectTimelineConnector>();
+    for (const c of displayConnectors) {
+      map.set(`${c.fromStep}-${c.toStep}`, c);
+    }
+    return map;
+  }, [displayConnectors]);
+
   const hasEstimatedDates = useMemo(
     () => displayItems.some((it) => it.estimated && !!it.date),
     [displayItems],
   );
 
-  const timelineStepColor = (
-    uiStep: number,
-    isActiveView: boolean,
-    isCompleted: boolean,
-  ) => {
-    if (isCompleted) return "#16A34A";
-    if (isActiveView) return "#2563EB";
-    return "#9CA3AF";
-  };
-
   return (
     <div className="bg-card border rounded-[10px] p-5">
-      <h3 className="font-semibold mb-4">ไทม์ไลน์โครงการ</h3>
-      <p className="text-xs text-muted-foreground mb-3">
-        วันที่จริงจากฟอร์มแต่ละขั้นตอน
-        {hasEstimatedDates && " • วันที่ต่อท้าย ~ เป็นประมาณการจากวันทำการมาตรฐาน"}
+      <h3 className="font-semibold mb-2">ไทม์ไลน์โครงการ (Cascading Timeline)</h3>
+      <p className="text-xs text-muted-foreground mb-4">
+        วันที่จริงจากฟอร์มแต่ละขั้นตอน — ประมาณการคำนวณแบบลูกโซ่จากวันทำการมาตรฐาน
+        {hasEstimatedDates && " • ปรับอัตโนมัติเมื่อแก้ไขวันที่ในฟอร์ม"}
       </p>
       <div className="overflow-x-auto">
-        <div className="flex items-start gap-2 min-w-max pb-2">
+        <div className="flex items-start gap-0 min-w-max pb-2">
           {displayItems.map((it, i) => {
             const stepKey = isSpecificTimeline ? it.uiStep : it.backendStep;
             const isActiveView = isSpecificTimeline
@@ -5452,78 +5545,114 @@ function ProjectTimeline({
             const isWorkflowStep = isSpecificTimeline
               ? it.uiStep === timelineProgressUi && !isStepCompleted
               : it.backendStep === project.current_step && !isStepCompleted;
+            const nextItem = displayItems[i + 1];
+            const connector =
+              nextItem != null
+                ? connectorByPair.get(`${it.backendStep}-${nextItem.backendStep}`)
+                : undefined;
+
             return (
-            <div key={stepKey} className="flex items-start gap-2">
-              <div className="flex flex-col items-center w-28">
-                <div
-                  className={`h-4 w-4 rounded-full border-2 shadow ${
-                    isStepCompleted
-                      ? "border-green-600"
-                      : isActiveView
-                        ? "border-blue-600 ring-2 ring-blue-500"
-                        : "border-background"
-                  }`}
-                  style={{
-                    backgroundColor: timelineStepColor(
-                      it.uiStep,
-                      isActiveView,
-                      isStepCompleted,
-                    ),
-                  }}
-                />
-                <p
-                  className={`text-[11px] mt-2 text-center leading-tight ${
-                    isStepCompleted
-                      ? "font-semibold text-green-700"
-                      : isActiveView
-                        ? "font-bold text-blue-600"
-                        : "font-medium text-foreground"
-                  }`}
-                >
-                  {it.uiStep}. {it.label}
-                </p>
-                <p
-                  className={`text-[11px] mt-0.5 ${
-                    it.estimated
-                      ? "text-muted-foreground italic"
-                      : it.date
-                        ? "text-foreground font-medium"
-                        : "text-muted-foreground"
-                  }`}
-                >
-                  {it.date ? (
-                    <>
-                      {it.estimated ? "~ " : ""}
-                      {formatThaiDate(it.date)}
-                      {it.estimated ? " (ประมาณการ)" : ""}
-                    </>
-                  ) : (
-                    "—"
+              <div key={stepKey} className="flex items-start">
+                <div className="flex flex-col items-center w-[7.5rem] shrink-0">
+                  <div
+                    className={`h-4 w-4 rounded-full border-2 shadow shrink-0 ${
+                      isStepCompleted
+                        ? "border-green-600 bg-green-600"
+                        : isActiveView
+                          ? "border-blue-600 bg-blue-600 ring-2 ring-blue-300"
+                          : "border-muted-foreground/40 bg-muted"
+                    }`}
+                  />
+                  <p
+                    className={`text-[11px] mt-2 text-center leading-tight px-1 ${
+                      isStepCompleted
+                        ? "font-semibold text-green-700"
+                        : isActiveView
+                          ? "font-bold text-blue-700"
+                          : "font-medium text-foreground"
+                    }`}
+                  >
+                    {it.uiStep}. {it.label}
+                  </p>
+                  {it.internalBadge && (
+                    <span className="text-[9px] mt-1 px-1.5 py-0.5 rounded border border-blue-200 bg-blue-50 text-blue-700 text-center leading-tight">
+                      {it.internalBadge}
+                    </span>
                   )}
-                </p>
-                {isStepCompleted && (
-                  <p className="text-[10px] mt-0.5 font-semibold text-green-700">
-                    เสร็จแล้ว
+                  <p className="text-[10px] mt-1.5 text-center px-0.5 leading-snug">
+                    {it.date ? (
+                      isStepCompleted && !it.estimated ? (
+                        <span className="font-medium text-green-700/85">
+                          วันที่จริง: {formatThaiDateSlash(it.date)}
+                          <span className="block text-[9px] text-green-700/70">(เสร็จสิ้น)</span>
+                        </span>
+                      ) : it.estimated ? (
+                        <span className="font-medium text-blue-700">
+                          วันที่ประมาณการ: ~ {formatThaiDateSlash(it.date)}
+                          <span className="block text-[9px] text-blue-600/90">(ประมาณการ)</span>
+                        </span>
+                      ) : (
+                        <span className="font-medium text-green-700/85">
+                          วันที่จริง: {formatThaiDateSlash(it.date)}
+                        </span>
+                      )
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
                   </p>
+                  {isWorkflowStep && (
+                    <p className="text-[9px] mt-0.5 font-semibold text-blue-600">
+                      กำลังดำเนินการ
+                    </p>
+                  )}
+                  {!isStepCompleted && isActiveView && !isWorkflowStep && (
+                    <p className="text-[9px] mt-0.5 font-semibold text-blue-600">กำลังดู</p>
+                  )}
+                </div>
+                {connector && (
+                  <div
+                    className="flex items-center shrink-0 self-start mt-[7px] min-w-[4.25rem] max-w-[5.75rem] px-0.5"
+                    title={connector.label}
+                  >
+                    <div className="h-px flex-1 bg-border min-w-[0.35rem]" />
+                    <div className="relative mx-0.5 shrink-0">
+                      <span className="flex h-11 w-11 items-center justify-center rounded-full border border-slate-300 bg-white px-1 text-center text-[6.5px] font-semibold leading-[1.15] text-slate-700 shadow-sm">
+                        {connector.label}
+                      </span>
+                    </div>
+                    <div className="relative h-px flex-1 bg-border min-w-[0.35rem]">
+                      <span
+                        className="absolute -right-0.5 top-1/2 -translate-y-1/2 text-[11px] leading-none text-muted-foreground"
+                        aria-hidden
+                      >
+                        →
+                      </span>
+                    </div>
+                  </div>
                 )}
-                {!isStepCompleted && isActiveView && (
-                  <p className="text-[10px] mt-0.5 font-semibold text-blue-600">
-                    {isWorkflowStep ? "กำลังดำเนินการ" : "กำลังดู"}
-                  </p>
+                {!connector && i < displayItems.length - 1 && (
+                  <div className="w-4 h-0.5 bg-border mt-[7px] shrink-0" />
                 )}
               </div>
-              {i < displayItems.length - 1 && (
-                <div className="h-0.5 w-6 bg-border mt-[7px]" />
-              )}
-            </div>
             );
           })}
         </div>
       </div>
-      <div className="flex gap-4 mt-3 text-xs text-muted-foreground">
-        <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: "#16A34A" }} />เสร็จแล้ว</span>
-        <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full border border-blue-600 ring-1 ring-blue-500" style={{ backgroundColor: "#2563EB" }} />กำลังดู / ดำเนินการ</span>
-        <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: "#9CA3AF" }} />~ ประมาณการ</span>
+      <div className="flex flex-wrap gap-4 mt-4 text-xs text-muted-foreground">
+        <span className="flex items-center gap-1.5">
+          <span className="h-2.5 w-2.5 rounded-full bg-green-700/85" />
+          วันที่จริง (เสร็จสิ้น)
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="h-2.5 w-2.5 rounded-full bg-blue-600 ring-1 ring-blue-300" />
+          วันที่ประมาณการ
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="flex h-5 w-5 items-center justify-center rounded-full border border-slate-300 bg-white text-[7px] font-semibold text-slate-600">
+            กฎ
+          </span>
+          ถ้อยคำตามระเบียบบนเส้นเชื่อม
+        </span>
       </div>
     </div>
   );

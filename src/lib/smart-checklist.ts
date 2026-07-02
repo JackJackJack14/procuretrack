@@ -19,6 +19,7 @@ import {
   type Step4BidResult,
   type Step4Checklist,
   type Step6AppealState,
+  computeStep5RequiredAnnouncementDateISO,
 } from "@/lib/step-form";
 import type { DocItem } from "@/lib/procurement";
 import {
@@ -529,19 +530,18 @@ export function computeAutoChecklistState(ctx: SmartChecklistAutoContext): Recor
     auto.price_comparison_uploaded = !!ctx.hasPriceComparisonDoc;
     auto.evaluation_report_uploaded = hasCommitteeReport;
     auto.egp_bid_summary_uploaded = !!ctx.hasEgpBidSummaryDoc;
-    auto.blacklist_checked = !!ctx.hasBlacklistEvidenceDoc;
-    auto.conflict_of_interest_checked =
-      !!ctx.hasConflictEvidenceDoc && !!bid?.winning_bidder_name?.trim();
+    auto.blacklist_checked = false;
+    auto.conflict_of_interest_checked = false;
     const ann = ctx.step5Announcement;
     const annDate = ann?.winner_announcement_date?.trim() ?? "";
     const evalApproval = ctx.evaluationApprovalDate?.trim() ?? "";
-    const dateNotBeforeEvaluation =
-      !annDate || !evalApproval || annDate >= evalApproval;
+    const minAnnouncementDate = evalApproval
+      ? computeStep5RequiredAnnouncementDateISO(evalApproval)
+      : "";
+    const dateValid =
+      !annDate || !minAnnouncementDate || annDate >= minAnnouncementDate;
     auto.winner_announcement_recorded =
-      !!ann?.winner_announcement_no?.trim() &&
-      !!annDate &&
-      !!ann?.winner_result_notification_date?.trim() &&
-      dateNotBeforeEvaluation;
+      !!ann?.winner_announcement_no?.trim() && !!annDate && dateValid;
     return auto;
   }
 

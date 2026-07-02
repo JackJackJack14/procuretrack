@@ -3,8 +3,12 @@
  * Pure functions รับ explicit context เท่านั้น (ไม่ parse note / ไม่ global state)
  */
 import {
+  APPEAL_PERIOD_WORKDAYS,
   bidSubmissionEndAfterPeriodISO,
   committeeReviewDeadlineAfterBidEndISO,
+  computeAppealDeadlineISO,
+  computeAppealPeriodStartISO,
+  computeContractEarliestISO,
   isPublicationEndExtendedBeyondMinimum,
   reviewDeadlineISO,
   STEP3_PUBLICATION_EXTENSION_REASON_MSG,
@@ -459,4 +463,55 @@ export function getStep3PublicationExtensionIssues(
     ];
   }
   return [];
+}
+
+// ─── Step 5: ไทม์ไลน์อุทธรณ์และ Standstill ─────────────────────────────────
+
+/** ไทม์ไลน์อุทธรณ์ — คำนวณจากวันที่ประกาศผลผู้ชนะ (ขั้นตอนที่ 5) */
+export type Step5AppealTimeline = {
+  /** วันทำการแรกของระยะอุทธรณ์ (วันถัดจากวันประกาศผล) */
+  appealPeriodStartISO: string;
+  /** วันสิ้นสุดระยะอุทธรณ์ (วันทำการที่ 7) */
+  appealPeriodEndISO: string;
+  /** วันทำการแรกที่ลงนามสัญญาได้หลังพ้นอุทธรณ์ */
+  contractEarliestISO: string;
+};
+
+export function computeStep5AppealTimeline(
+  winnerAnnouncementISO: string,
+): Step5AppealTimeline {
+  const anchor = winnerAnnouncementISO?.trim() ?? "";
+  if (!anchor) {
+    return {
+      appealPeriodStartISO: "",
+      appealPeriodEndISO: "",
+      contractEarliestISO: "",
+    };
+  }
+  return {
+    appealPeriodStartISO: computeAppealPeriodStartISO(anchor),
+    appealPeriodEndISO: computeAppealDeadlineISO(anchor),
+    contractEarliestISO: computeContractEarliestISO(anchor),
+  };
+}
+
+export function isStep5AppealTimelineComplete(timeline: Step5AppealTimeline): boolean {
+  return !!(
+    timeline.appealPeriodStartISO &&
+    timeline.appealPeriodEndISO &&
+    timeline.contractEarliestISO
+  );
+}
+
+/** ข้อความกำหนดการอ่านอย่างเดียว — ขั้นตอนที่ 5 (Smart Guideline Block) */
+export function getStep5AppealTimelineDisplayLines(
+  timeline: Step5AppealTimeline,
+): { appealPeriodLine: string; contractEarliestLine: string } | null {
+  if (!isStep5AppealTimelineComplete(timeline)) return null;
+  return {
+    appealPeriodLine:
+      `⏱️ วันสิ้นสุดระยะเวลาอุทธรณ์: ${formatThaiDateSlash(timeline.appealPeriodEndISO)}`,
+    contractEarliestLine:
+      `✅ ลงนามในสัญญาได้เร็วที่สุดวันที่: ${formatThaiDateSlash(timeline.contractEarliestISO)}`,
+  };
 }
