@@ -205,10 +205,12 @@ import {
   type Step6AppealState,
   type Step6Checklist,
   type Step6ChecklistKey,
-  APPEAL_HEAD_OPINION_OPTIONS,
-  APPEAL_COMMITTEE_DECISION_OPTIONS,
   isAppealReceivedBeforeStep5Notification,
   STEP6_APPEAL_RECEIVED_BEFORE_STEP5_MSG,
+  STEP6_APPEAL_STATUS_INLINE_ERROR_MSG,
+  computeStep6AppealReceivedMinDateISO,
+  isStep6AppealReceivedDateBeforeMin,
+  getStep6AppealReceivedDateTooEarlyMsg,
   type Step5Announcement,
   type Step5Checklist,
   type Step5ChecklistKey,
@@ -327,21 +329,23 @@ import { downloadExecutiveReportPdf, type ExecutiveReportProject } from "@/lib/e
 import { supabase } from "@/integrations/supabase/client";
 import {
   computeAppealDeadlineISO,
-  computeCgdSubmissionDeadlineISO,
   computeContractEarliestISO,
   computeContractEarliestFromAppealDeadlineISO,
   computeContractNotificationDeadlineISO,
   computeStep7ContractSigningDeadlineISO,
   CONTRACT_NOTIFICATION_WORKDAYS,
   STEP7_CONTRACT_SIGNING_DEADLINE_WORKDAYS,
-  isCgdSubmissionBeyondSevenWorkdays,
 } from "@/lib/workdays";
 import type { DocItem } from "@/lib/procurement";
 import { StepInlineDocList } from "@/components/steps/StepInlineDocList";
 import { StepDocumentHub } from "@/components/steps/StepDocumentHub";
 import { FieldLabelTooltip } from "@/components/FieldLabelTooltip";
 import { getFieldTooltip, type FieldTooltipKey } from "@/constants/tooltips";
-import { STEP6_APPEAL_ACTIVE_BANNER_MSG } from "@/lib/step6-guideline";
+import {
+  STEP6_APPEAL_ACTIVE_BANNER_MSG,
+  computeStep6AppealPendingTimeline,
+  getStep6AppealPendingTimelineDisplayLines,
+} from "@/lib/step6-guideline";
 import {
   STEP8_GUARANTEE_BELOW_MINIMUM_MSG,
   STEP8_SIGNED_OUTSIDE_RANGE_MSG,
@@ -3776,6 +3780,7 @@ type Step6DocBinder = {
   stepNumber: number;
   docs: StepDocRecord[];
   onDocsChange: () => void;
+  highlightedMissingDocs?: string[];
 };
 
 type Step6AppealFormProps = {
@@ -3794,6 +3799,8 @@ type Step6AppealFormProps = {
   step4Bidders: Step4Bidder[];
   readOnly?: boolean;
   docBinder: Step6DocBinder;
+  highlightedComplianceIssues?: string[];
+  complianceSubmitTriggered?: boolean;
 } & ChronologicalFormProps;
 
 const CLEAR_PENDING_APPEAL_FIELDS: Partial<Step6AppealState> = {
@@ -3825,51 +3832,54 @@ export function Step6AppealForm({
   step4Bidders,
   readOnly = false,
   docBinder,
-  chronologicalCtx,
+  highlightedComplianceIssues = [],
+  complianceSubmitTriggered = false,
+  chronologicalCtx: _chronologicalCtx,
 }: Step6AppealFormProps) {
-  console.log(
-    "🔧 [RUNTIME ERROR FIXED] Removed undefined getFieldTooltip reference. Component rendered successfully.",
-  );
+  const complianceHi = highlightedComplianceIssues;
+  const fieldHighlighted = (target: string) =>
+    complianceSubmitTriggered && complianceHi.includes(target);
+  const highlightedDocTypes = complianceSubmitTriggered
+    ? (docBinder.highlightedMissingDocs ?? [])
+    : [];
+
   const appealStatus = appeal.appeal_status ?? "";
   const appealDeadlineISO = winnerAnnouncementDate
     ? computeAppealDeadlineISO(winnerAnnouncementDate)
     : "";
-  const receivedDate =
-    appeal.appeal_received_date?.trim() ||
-    appeal.appeal_report_approval_date?.trim() ||
-    "";
-  const cgdSubmissionDate = appeal.cgd_submission_date ?? "";
-  const bidderOptions = normalizeStep4Bidders(step4Bidders).filter(
-    (b) => b.company_name.trim().length > 0,
-  );
+  const receivedDate = appeal.appeal_received_date?.trim() ?? "";
+  const appealReceivedMinDate = computeStep6AppealReceivedMinDateISO(step5NotificationDate);
+  const receivedBeforeMin =
+    !!receivedDate &&
+    isStep6AppealReceivedDateBeforeMin(receivedDate, step5NotificationDate);
   const receivedBeforeStep5 =
     !!receivedDate &&
     !!step5NotificationDate &&
     isAppealReceivedBeforeStep5Notification(receivedDate, step5NotificationDate);
-  const cgdSubmissionLate =
-    !!receivedDate &&
-    !!cgdSubmissionDate &&
-    isCgdSubmissionBeyondSevenWorkdays(receivedDate, cgdSubmissionDate);
-  const cgdSubmissionDeadlineISO = receivedDate
-    ? computeCgdSubmissionDeadlineISO(receivedDate)
-    : "";
+  const appealReceivedDateErrorMsg = getStep6AppealReceivedDateTooEarlyMsg(
+    step5NotificationDate,
+  );
+  const step6PendingTimelineLines = useMemo(() => {
+    if (!receivedDate || receivedBeforeMin || receivedBeforeStep5) return null;
+    return getStep6AppealPendingTimelineDisplayLines(
+      computeStep6AppealPendingTimeline(receivedDate),
+    );
+  }, [receivedDate, receivedBeforeMin, receivedBeforeStep5]);
+  const bidderSuggestions = normalizeStep4Bidders(step4Bidders)
+    .map((b) => b.company_name.trim())
+    .filter(Boolean);
 
   return (
+    <MissingDocHighlightContext.Provider value={highlightedDocTypes}>
     <div className="space-y-4 max-w-2xl">
-      {appealStatus === "pending" &&
-        (() => {
-          console.log(
-            "🚨 [APPEAL WARNING BANNER]: Displayed red block banner because appeal status is active.",
-          );
-          return (
-            <div
-              role="alert"
-              className="rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm font-medium text-red-800 leading-relaxed"
-            >
-              {STEP6_APPEAL_ACTIVE_BANNER_MSG}
-            </div>
-          );
-        })()}
+      {appealStatus === "pending" && (
+        <div
+          role="status"
+          className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900 leading-relaxed"
+        >
+          {STEP6_APPEAL_ACTIVE_BANNER_MSG}
+        </div>
+      )}
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
         <p className="text-sm font-medium text-foreground">กลุ่มที่ 1: ข้อมูลงานขั้นตอนอุทธรณ์</p>
@@ -3895,33 +3905,46 @@ export function Step6AppealForm({
         <SectionTitle tooltipKey="step6.appeal_status">
           กลุ่มที่ 2: สถานะการอุทธรณ์ผลการจัดซื้อจัดจ้าง
         </SectionTitle>
-        <fieldset disabled={readOnly} className="space-y-2 disabled:opacity-60">
-          <label className="flex items-start gap-2 text-sm cursor-pointer">
-            <input
-              type="radio"
-              name="step6_appeal"
-              checked={appeal.appeal_status === "none"}
-              onChange={() =>
-                onAppealChange({
-                  appeal_status: "none",
-                  ...CLEAR_PENDING_APPEAL_FIELDS,
-                })
-              }
-              className="mt-0.5 h-4 w-4"
-            />
-            ไม่มีผู้ยื่นอุทธรณ์ผลการจัดซื้อจัดจ้าง
-          </label>
-          <label className="flex items-start gap-2 text-sm cursor-pointer">
-            <input
-              type="radio"
-              name="step6_appeal"
-              checked={appeal.appeal_status === "pending"}
-              onChange={() => onAppealChange({ appeal_status: "pending" })}
-              className="mt-0.5 h-4 w-4"
-            />
-            มีผู้ยื่นอุทธรณ์ผลการจัดซื้อจัดจ้าง
-          </label>
-        </fieldset>
+        <div
+          data-compliance-target="appeal_status"
+          className={
+            fieldHighlighted("appeal_status")
+              ? "rounded-md border-2 border-red-500 bg-red-50 p-3 space-y-2"
+              : "rounded-md border border-transparent p-1 space-y-2"
+          }
+        >
+          <fieldset disabled={readOnly} className="space-y-2 disabled:opacity-60">
+            <label className="flex items-start gap-2 text-sm cursor-pointer">
+              <input
+                type="radio"
+                name="step6_appeal"
+                checked={appeal.appeal_status === "none"}
+                onChange={() =>
+                  onAppealChange({
+                    appeal_status: "none",
+                    ...CLEAR_PENDING_APPEAL_FIELDS,
+                  })
+                }
+                className="mt-0.5 h-4 w-4"
+              />
+              ไม่มีผู้ยื่นอุทธรณ์ผลการจัดซื้อจัดจ้าง
+            </label>
+            <label className="flex items-start gap-2 text-sm cursor-pointer">
+              <input
+                type="radio"
+                name="step6_appeal"
+                checked={appeal.appeal_status === "pending"}
+                onChange={() => onAppealChange({ appeal_status: "pending" })}
+                className="mt-0.5 h-4 w-4"
+              />
+              มีผู้ยื่นอุทธรณ์ผลการจัดซื้อจัดจ้าง
+            </label>
+          </fieldset>
+          <ComplianceFieldError
+            show={fieldHighlighted("appeal_status")}
+            message={STEP6_APPEAL_STATUS_INLINE_ERROR_MSG}
+          />
+        </div>
 
         {appeal.appeal_status === "none" && (
           <div className="space-y-4 rounded-md border border-emerald-300/40 bg-emerald-50/40 p-4">
@@ -3961,36 +3984,39 @@ export function Step6AppealForm({
         )}
 
         {appeal.appeal_status === "pending" && (
-          <div className="space-y-4 rounded-md border border-amber-300/50 bg-amber-50/50 p-4">
+          <div className="space-y-4 rounded-md border border-amber-300/50 bg-amber-50/50 p-4 animate-in fade-in slide-in-from-top-2 duration-300">
             <p className="text-sm font-medium text-amber-900">
-              มีผู้ยื่นอุทธรณ์ — กรุณากรอกข้อมูลและแนบหลักฐานให้ครบ
+              มีผู้ยื่นอุทธรณ์ — กรุณากรอกข้อมูลบังคับและแนบรายงานความเห็นของคณะกรรมการ
             </p>
 
             <FieldRow
               label={
                 <>
-                  ชื่อผู้ประกอบการที่ยื่นอุทธรณ์ <span className="text-destructive">*</span>
+                  ชื่อบริษัทผู้ยื่นอุทธรณ์ <span className="text-destructive">*</span>
                 </>
               }
               complianceTarget="appeal_bidder_name"
             >
-              <select
+              <input
+                type="text"
+                list={bidderSuggestions.length > 0 ? "step6-bidder-suggestions" : undefined}
                 value={appeal.appeal_bidder_name ?? ""}
                 onChange={(e) => onAppealChange({ appeal_bidder_name: e.target.value })}
-                disabled={readOnly || bidderOptions.length === 0}
-                className={inputCls}
-              >
-                <option value="">
-                  {bidderOptions.length === 0
-                    ? "— ไม่พบรายชื่อผู้ยื่นซองในขั้นตอนที่ 5 —"
-                    : "— เลือกผู้ประกอบการ —"}
-                </option>
-                {bidderOptions.map((b) => (
-                  <option key={b.company_name} value={b.company_name}>
-                    {b.company_name}
-                  </option>
-                ))}
-              </select>
+                placeholder="ระบุชื่อบริษัท/ห้างหุ้นส่วนจำกัดผู้ยื่นอุทธรณ์"
+                className={complianceHighlightInputCls(
+                  inputCls,
+                  fieldHighlighted("appeal_bidder_name"),
+                )}
+                disabled={readOnly}
+              />
+              {bidderSuggestions.length > 0 && (
+                <datalist id="step6-bidder-suggestions">
+                  {bidderSuggestions.map((name) => (
+                    <option key={name} value={name} />
+                  ))}
+                </datalist>
+              )}
+              <ComplianceFieldError show={fieldHighlighted("appeal_bidder_name")} />
             </FieldRow>
 
             <FieldRow
@@ -4002,9 +4028,8 @@ export function Step6AppealForm({
               complianceTarget="appeal_received_date"
             >
               <div className="space-y-1">
-                <ChronologicalDatePicker
-                  stepNumber={6}
-                  chronologicalCtx={chronologicalCtx}
+                <ThaiDatePicker
+                  minDate={appealReceivedMinDate || undefined}
                   value={receivedDate}
                   onChange={(v) =>
                     onAppealChange({
@@ -4013,19 +4038,51 @@ export function Step6AppealForm({
                     })
                   }
                   disabled={readOnly}
-                  showChronologicalHint={false}
-                  minDate={step5NotificationDate?.trim() || undefined}
+                  workdaysOnly
+                  className={complianceHighlightInputCls(
+                    inputCls,
+                    fieldHighlighted("appeal_received_date") ||
+                      fieldHighlighted("appeal_received_date_min"),
+                  )}
                 />
-                {receivedDate && (
+                {receivedDate && !receivedBeforeMin && !receivedBeforeStep5 && (
                   <p className="text-xs text-muted-foreground">
                     📅 {formatThaiDate(receivedDate)}
                   </p>
                 )}
-                {receivedBeforeStep5 && (
-                  <p className="text-sm text-destructive font-medium">
+                {appealReceivedMinDate && (
+                  <p className="text-xs text-muted-foreground">
+                    เลือกได้ตั้งแต่วันที่ {formatThaiDateSlash(appealReceivedMinDate)} เป็นต้นไป
+                  </p>
+                )}
+                {receivedBeforeMin && (
+                  <p className="text-xs text-destructive font-medium mt-1" role="alert">
+                    {appealReceivedDateErrorMsg}
+                  </p>
+                )}
+                {receivedBeforeStep5 && !receivedBeforeMin && (
+                  <p className="text-xs text-destructive font-medium mt-1" role="alert">
                     {STEP6_APPEAL_RECEIVED_BEFORE_STEP5_MSG}
                   </p>
                 )}
+                {step6PendingTimelineLines && (
+                  <div
+                    key={receivedDate}
+                    className="rounded-md border border-blue-200/80 bg-blue-50/50 px-3 py-3 space-y-1.5 text-sm text-foreground/90 leading-relaxed mt-2"
+                    aria-live="polite"
+                  >
+                    <p className="font-medium">{step6PendingTimelineLines.headOpinionLine}</p>
+                    <p className="text-foreground/90">{step6PendingTimelineLines.cgdReportLine}</p>
+                  </div>
+                )}
+                <ComplianceFieldError
+                  show={
+                    (fieldHighlighted("appeal_received_date") ||
+                      fieldHighlighted("appeal_received_date_min")) &&
+                    !receivedBeforeMin &&
+                    !receivedBeforeStep5
+                  }
+                />
               </div>
             </FieldRow>
 
@@ -4043,175 +4100,43 @@ export function Step6AppealForm({
                 value={appeal.appeal_report_letter_no ?? ""}
                 onChange={(e) => onAppealChange({ appeal_report_letter_no: e.target.value })}
                 placeholder="เช่น กษ ๐๖๐๒ / ๔๕๖"
-                className={inputCls}
-                disabled={readOnly}
-              />
-            </FieldRow>
-
-            <FieldRow
-              label={
-                <>
-                  ผลการพิจารณาของหัวหน้าหน่วยงาน <span className="text-destructive">*</span>
-                </>
-              }
-              complianceTarget="appeal_head_opinion"
-            >
-              <select
-                value={appeal.appeal_head_opinion ?? ""}
-                onChange={(e) =>
-                  onAppealChange({
-                    appeal_head_opinion: e.target.value as Step6AppealState["appeal_head_opinion"],
-                  })
-                }
-                disabled={readOnly}
-                className={inputCls}
-              >
-                <option value="">— เลือกผลการพิจารณา —</option>
-                {APPEAL_HEAD_OPINION_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-            </FieldRow>
-
-            <FieldRow
-              label={
-                <>
-                  เลขที่หนังสือส่งเรื่องให้กรมบัญชีกลาง <span className="text-destructive">*</span>
-                </>
-              }
-              complianceTarget="cgd_submission_letter_no"
-            >
-              <input
-                value={appeal.cgd_submission_letter_no ?? ""}
-                onChange={(e) => onAppealChange({ cgd_submission_letter_no: e.target.value })}
-                placeholder="เช่น กษ ๐๖๐๓ / ๑๒๓"
-                className={inputCls}
-                disabled={readOnly}
-              />
-            </FieldRow>
-
-            <FieldRow
-              label={
-                <>
-                  วันที่ส่งเรื่องให้กรมบัญชีกลาง <span className="text-destructive">*</span>
-                </>
-              }
-              complianceTarget="cgd_submission_date"
-            >
-              <div className="space-y-1">
-                <ChronologicalDatePicker
-                  stepNumber={6}
-                  chronologicalCtx={chronologicalCtx}
-                  value={cgdSubmissionDate}
-                  onChange={(v) => onAppealChange({ cgd_submission_date: v })}
-                  disabled={readOnly}
-                  showChronologicalHint={false}
-                  minDate={receivedDate || undefined}
-                />
-                {cgdSubmissionDate && (
-                  <p className="text-xs text-muted-foreground">
-                    📅 {formatThaiDate(cgdSubmissionDate)}
-                  </p>
+                className={complianceHighlightInputCls(
+                  inputCls,
+                  fieldHighlighted("appeal_report_letter_no"),
                 )}
-                {cgdSubmissionLate && cgdSubmissionDeadlineISO && (
-                  <p className="text-sm text-orange-600 font-medium rounded-md border border-orange-200 bg-orange-50 px-2 py-1.5">
-                    ⚠️ วันที่ส่งเรื่องให้กรมบัญชีกลางเกิน 7 วันทำการนับจากวันรับหนังสืออุทธรณ์
-                    (กำหนดสูงสุด {formatThaiDateSlash(cgdSubmissionDeadlineISO)}) —
-                    แจ้งเตือนเท่านั้น ไม่บล็อกการบันทึก
-                  </p>
-                )}
-              </div>
-            </FieldRow>
-
-            <FieldRow
-              label={
-                <>
-                  ผลการวินิจฉัยจากคณะกรรมการพิจารณาอุทธรณ์{" "}
-                  <span className="text-destructive">*</span>
-                </>
-              }
-              complianceTarget="appeal_committee_decision"
-            >
-              <select
-                value={appeal.appeal_committee_decision ?? ""}
-                onChange={(e) =>
-                  onAppealChange({
-                    appeal_committee_decision:
-                      e.target.value as Step6AppealState["appeal_committee_decision"],
-                  })
-                }
                 disabled={readOnly}
-                className={inputCls}
-              >
-                <option value="">— เลือกผลการวินิจฉัย —</option>
-                {APPEAL_COMMITTEE_DECISION_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-              {appeal.appeal_committee_decision === "upheld" && (
-                <p className="text-sm text-amber-800 mt-2 font-medium">
-                  อุทธรณ์ฟังขึ้น — ระบบล็อกการไปขั้นตอนถัดไปจนกว่าจะดำเนินการตามผลวินิจฉัย
-                </p>
-              )}
+              />
+              <ComplianceFieldError show={fieldHighlighted("appeal_report_letter_no")} />
             </FieldRow>
 
             <FieldRow
               label={
                 <>
-                  หนังสืออุทธรณ์จากผู้ประกอบการ (PDF){" "}
+                  รายงานความเห็นของคณะกรรมการ (PDF){" "}
                   <span className="text-destructive">*</span>
                 </>
               }
+              complianceTarget="committee_opinion_report_doc"
             >
-              <InlineDocUpload
-                project={docBinder.project}
-                stepNumber={docBinder.stepNumber}
-                documentType={STEP6_DOC.BIDDER_APPEAL_LETTER}
-                label="📎 แนบหนังสืออุทธรณ์ (.pdf)"
-                existing={docBinder.docs}
-                onChange={docBinder.onDocsChange}
-              />
-            </FieldRow>
-
-            <FieldRow
-              label={
-                <>
-                  รายงานความเห็นของหน่วยงาน + หนังสือส่งกรมบัญชีกลาง (PDF){" "}
-                  <span className="text-destructive">*</span>
-                </>
-              }
-            >
-              <InlineDocUpload
-                project={docBinder.project}
-                stepNumber={docBinder.stepNumber}
-                documentType={STEP6_DOC.AGENCY_OPINION_CGD_LETTER}
-                label="📎 แนบรายงานและหนังสือส่ง กบง. (.pdf)"
-                existing={docBinder.docs}
-                onChange={docBinder.onDocsChange}
-              />
-            </FieldRow>
-
-            <FieldRow label="หนังสือแจ้งผลการวินิจฉัยจากคณะกรรมการพิจารณาอุทธรณ์ (PDF)">
               <p className="text-xs text-muted-foreground mb-2">
-                ไม่บังคับแนบในช่วงแรก — แนบเมื่อได้รับหนังสือจากคณะกรรมการแล้ว
+                แนบไฟล์ PDF รายงานความเห็นของคณะกรรมการพิจารณาอุทธรณ์
               </p>
               <InlineDocUpload
                 project={docBinder.project}
                 stepNumber={docBinder.stepNumber}
                 documentType={STEP6_DOC.COMMITTEE_DECISION_LETTER}
-                label="📎 แนบหนังสือผลวินิจฉัย (.pdf)"
+                label="📎 แนบรายงานความเห็นของคณะกรรมการ (PDF)"
                 existing={docBinder.docs}
                 onChange={docBinder.onDocsChange}
+                readOnly={readOnly}
               />
+              <ComplianceFieldError show={fieldHighlighted("committee_opinion_report_doc")} />
             </FieldRow>
           </div>
         )}
       </div>
     </div>
+    </MissingDocHighlightContext.Provider>
   );
 }
 

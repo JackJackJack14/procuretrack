@@ -557,10 +557,7 @@ export function computeAutoChecklistState(ctx: SmartChecklistAutoContext): Recor
           appeal?.appeal_received_date?.trim() ||
           appeal?.appeal_report_approval_date?.trim()
         ) &&
-        !!appeal?.appeal_report_letter_no?.trim() &&
-        !!appeal?.appeal_head_opinion?.trim() &&
-        !!appeal?.cgd_submission_letter_no?.trim() &&
-        !!appeal?.appeal_committee_decision?.trim();
+        !!appeal?.appeal_report_letter_no?.trim();
     } else {
       auto.appeal_status_recorded = false;
     }

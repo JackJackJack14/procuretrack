@@ -1,4 +1,4 @@
-import { STEP2_DOC, STEP3_DOC, STEP4_DOC, STEP5_DOC } from "@/lib/step-doc-types";
+import { STEP2_DOC, STEP3_DOC, STEP4_DOC, STEP5_DOC, STEP6_DOC } from "@/lib/step-doc-types";
 
 export const COMPLIANCE_TARGET_ATTR = "data-compliance-target";
 
@@ -23,6 +23,9 @@ const COMPLIANCE_ISSUE_TO_DOC_TYPE: Record<string, string> = {
   supervisor_order_doc: STEP2_DOC.SITE_SUPERVISOR_ORDER,
   egp_winner_doc: STEP5_DOC.EGP_WINNER_ANNOUNCEMENT,
   physical_board_doc: STEP5_DOC.PHYSICAL_BOARD_ANNOUNCEMENT,
+  committee_opinion_report_doc: STEP6_DOC.COMMITTEE_DECISION_LETTER,
+  bidder_appeal_letter_doc: STEP6_DOC.BIDDER_APPEAL_LETTER,
+  agency_opinion_cgd_doc: STEP6_DOC.AGENCY_OPINION_CGD_LETTER,
 };
 
 const DOC_TYPE_TO_COMPLIANCE_TARGET: Record<string, string> = {
@@ -41,6 +44,9 @@ const DOC_TYPE_TO_COMPLIANCE_TARGET: Record<string, string> = {
   [STEP2_DOC.SITE_SUPERVISOR_ORDER]: "supervisor_order_doc",
   [STEP5_DOC.EGP_WINNER_ANNOUNCEMENT]: "egp_winner_doc",
   [STEP5_DOC.PHYSICAL_BOARD_ANNOUNCEMENT]: "physical_board_doc",
+  [STEP6_DOC.COMMITTEE_DECISION_LETTER]: "committee_opinion_report_doc",
+  [STEP6_DOC.BIDDER_APPEAL_LETTER]: "bidder_appeal_letter_doc",
+  [STEP6_DOC.AGENCY_OPINION_CGD_LETTER]: "agency_opinion_cgd_doc",
 };
 
 const ISSUE_ID_ALIASES: Record<string, string> = {
@@ -70,7 +76,8 @@ export function resolveDocTypeFromComplianceIssue(issueIdOrDocType: string): str
   if (
     Object.values(STEP3_DOC).includes(issueIdOrDocType as (typeof STEP3_DOC)[keyof typeof STEP3_DOC]) ||
     Object.values(STEP4_DOC).includes(issueIdOrDocType as (typeof STEP4_DOC)[keyof typeof STEP4_DOC]) ||
-    Object.values(STEP2_DOC).includes(issueIdOrDocType as (typeof STEP2_DOC)[keyof typeof STEP2_DOC])
+    Object.values(STEP2_DOC).includes(issueIdOrDocType as (typeof STEP2_DOC)[keyof typeof STEP2_DOC]) ||
+    Object.values(STEP6_DOC).includes(issueIdOrDocType as (typeof STEP6_DOC)[keyof typeof STEP6_DOC])
   ) {
     return issueIdOrDocType;
   }

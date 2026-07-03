@@ -261,11 +261,7 @@ import {
   collectBidEvaluationUploadedDocTypes,
   hasStep5EgpWinnerDoc,
   hasStep5PhysicalBoardDoc,
-  hasStep6AgencyReportDoc,
-  hasStep6BidderAppealLetterDoc,
-  hasStep6AgencyOpinionCgdDoc,
-  hasStep6CgdReportDoc,
-  hasStep6NoAppealEgpDoc,
+  hasStep6CommitteeDecisionDoc,
   isStep2RequiredDocSatisfied,
   isStep4RequiredDocSatisfied,
   isStep5RequiredDocSatisfied,
@@ -2414,7 +2410,7 @@ function ProjectDetailPage() {
   const failStepCompliance = (message: string, issueId?: string, docType?: string) => {
     setComplianceSubmitTriggered(true);
     toast.error(message);
-    if (current?.step_number !== 5) {
+    if (current?.step_number !== 5 && current?.step_number !== 6) {
       setError(message);
     } else {
       setError(null);
@@ -2627,12 +2623,7 @@ function ProjectDetailPage() {
         step6Appeal,
         step6Checklist,
         {
-          hasNoAppealEgpDoc: hasStep6NoAppealEgpDoc(step6Uploaded),
-          hasBidderAppealLetterDoc: hasStep6BidderAppealLetterDoc(step6Uploaded),
-          hasAgencyOpinionCgdDoc: hasStep6AgencyOpinionCgdDoc(step6Uploaded),
-          hasAgencyReportDoc: hasStep6AgencyReportDoc(step6Uploaded),
-          hasCgdReportDoc: hasStep6CgdReportDoc(step6Uploaded),
-          responsibleName: effectiveResponsibleName,
+          hasCommitteeOpinionReportDoc: hasStep6CommitteeDecisionDoc(step6Uploaded),
           step5NotificationDate,
           stepDocs: step6Docs,
           timelineCtx: timelineValidationCtx,
@@ -3689,11 +3680,14 @@ function ProjectDetailPage() {
                       step5NotificationDate={step5NotificationDate}
                       step4Bidders={mergedStep4BidResult.bidders ?? []}
                       readOnly={workflowReadOnly}
+                      highlightedComplianceIssues={highlightedComplianceIssues}
+                      complianceSubmitTriggered={complianceSubmitTriggered}
                       docBinder={{
                         project,
                         stepNumber: 6,
                         docs: docsForStep,
                         onDocsChange: invalidateAll,
+                        highlightedMissingDocs,
                       }}
                       chronologicalCtx={timelineValidationCtx}
                     />
@@ -3868,6 +3862,7 @@ function ProjectDetailPage() {
 
               {error &&
                 current.step_number !== 5 &&
+                current.step_number !== 6 &&
                 (isHistoricalWorkflowMode(workflowMode) || !isStepCompletedView) && (
                 <p className="text-sm text-destructive mt-3">{error}</p>
               )}
@@ -4133,30 +4128,16 @@ function ProjectDetailPage() {
                   6,
                   genericManualChecklist,
                 ) as Step6Checklist;
-                const step6HasNoAppealEgp =
-                  current.step_number === 6 && hasStep6NoAppealEgpDoc(uploadedTypes);
-                const step6HasBidderLetter =
+                const step6HasCommitteeOpinionReport =
                   current.step_number === 6 &&
-                  hasStep6BidderAppealLetterDoc(uploadedTypes);
-                const step6HasAgencyOpinionCgd =
-                  current.step_number === 6 &&
-                  hasStep6AgencyOpinionCgdDoc(uploadedTypes);
-                const step6HasAgencyReport =
-                  current.step_number === 6 && hasStep6AgencyReportDoc(uploadedTypes);
-                const step6HasCgdReport =
-                  current.step_number === 6 && hasStep6CgdReportDoc(uploadedTypes);
+                  hasStep6CommitteeDecisionDoc(uploadedTypes);
                 const step6ComplianceIssues =
                   current.step_number === 6
                     ? getStep6ComplianceIssues(
                         step6Appeal,
                         step6ChecklistNormalized,
                         {
-                          hasNoAppealEgpDoc: step6HasNoAppealEgp,
-                          hasBidderAppealLetterDoc: step6HasBidderLetter,
-                          hasAgencyOpinionCgdDoc: step6HasAgencyOpinionCgd,
-                          hasAgencyReportDoc: step6HasAgencyReport,
-                          hasCgdReportDoc: step6HasCgdReport,
-                          responsibleName: effectiveResponsibleName,
+                          hasCommitteeOpinionReportDoc: step6HasCommitteeOpinionReport,
                           step5NotificationDate,
                           stepDocs: docsForStep,
                           timelineCtx: timelineValidationCtx,
@@ -4170,12 +4151,7 @@ function ProjectDetailPage() {
                     step6Appeal,
                     step6ChecklistNormalized,
                     {
-                      hasNoAppealEgpDoc: step6HasNoAppealEgp,
-                      hasBidderAppealLetterDoc: step6HasBidderLetter,
-                      hasAgencyOpinionCgdDoc: step6HasAgencyOpinionCgd,
-                      hasAgencyReportDoc: step6HasAgencyReport,
-                      hasCgdReportDoc: step6HasCgdReport,
-                      responsibleName: effectiveResponsibleName,
+                      hasCommitteeOpinionReportDoc: step6HasCommitteeOpinionReport,
                       step5NotificationDate,
                       stepDocs: docsForStep,
                     },
@@ -4434,17 +4410,12 @@ function ProjectDetailPage() {
                 const step6CoreDocsProgress =
                   current.step_number === 6
                     ? countStep6CoreDocumentsReady(step6Appeal.appeal_status ?? "", {
-                        hasNoAppealEgpDoc: step6HasNoAppealEgp,
-                        hasBidderAppealLetterDoc: step6HasBidderLetter,
-                        hasAgencyOpinionCgdDoc: step6HasAgencyOpinionCgd,
-                        hasAgencyReportDoc: step6HasAgencyReport,
-                        hasCgdReportDoc: step6HasCgdReport,
+                        hasCommitteeOpinionReportDoc: step6HasCommitteeOpinionReport,
                       })
                     : null;
                 const step6FormProgress =
                   current.step_number === 6
                     ? countStep6FormRequiredProgress(step6Appeal, {
-                        responsibleName: effectiveResponsibleName,
                         step5NotificationDate,
                         timelineCtx: timelineValidationCtx,
                       })
@@ -4593,7 +4564,7 @@ function ProjectDetailPage() {
                           : current.step_number === 5
                             ? false
                             : current.step_number === 6
-                              ? !step6Ready
+                              ? false
                               : current.step_number === 7
                                 ? !step7Ready
                                 : current.step_number === 8
@@ -4658,7 +4629,8 @@ function ProjectDetailPage() {
                         showCompleteBtn &&
                         !reactiveChecklist.allDone &&
                         workflowMode === "current" &&
-                        current.step_number !== 5
+                        current.step_number !== 5 &&
+                        current.step_number !== 6
                       }
                       progressPct={checklistProgressPct}
                       issues={complianceGateIssues}

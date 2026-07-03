@@ -1,6 +1,7 @@
 /** ขั้นตอนที่ 6 — อุทธรณ์ (มาตรา 117) — อินโฟกราฟิก 3 การ์ด */
 
-import { isWorkday, parseISODateLocal } from "@/lib/workdays";
+import { addWorkdays, isWorkday, parseISODateLocal, toISODate } from "@/lib/workdays";
+import { formatThaiDateSlash } from "@/lib/utils";
 
 const THAI_MONTH_ABBR = [
   "ม.ค.",
@@ -50,15 +51,64 @@ export function formatStep6AppealHolidayBridgeLabel(
   return `เว้นวันหยุดราชการ ${first.getDate()}-${last.getDate()} ${monthAbbr}`;
 }
 
-export const STEP6_GUIDELINE_ACTION_ITEMS = [  "• ตรวจสอบในระบบ e-GP ว่ามีผู้ยื่นอุทธรณ์ผลการจัดซื้อจัดจ้างภายในระยะ 7 วันทำการ นับจากวันที่แจ้งผลให้ผู้เสนอราคาทราบ (ขั้นตอนที่ 5)",
+export const STEP6_GUIDELINE_ACTION_ITEMS = [
+  "• ตรวจสอบในระบบ e-GP ว่ามีผู้ยื่นอุทธรณ์ผลการจัดซื้อจัดจ้างภายในระยะ 7 วันทำการ นับจากวันที่แจ้งผลให้ผู้เสนอราคาทราบ (ขั้นตอนที่ 5)",
   "• กรณี 'ไม่มีผู้ยื่นอุทธรณ์': บันทึกสถานะในระบบ พร้อมแนบภาพหน้าจอตรวจสอบสถานะอุทธรณ์จาก e-GP (ไม่บังคับ) แล้วดำเนินการไปขั้นตอนที่ 7 — แจ้งให้ผู้ชนะมาลงนามในสัญญา",
-  "• กรณี 'มีผู้ยื่นอุทธรณ์': บันทึกชื่อผู้ยื่น วันรับหนังสือ รายงานความเห็นเสนอหัวหน้าหน่วยงาน ส่งกรมบัญชีกลางภายใน 7 วันทำการ และรอผลวินิจฉัยคณะกรรมการ — ห้ามลงนามสัญญาก่อนได้ผล 'อุทธรณ์ฟังไม่ขึ้น'",
+  "• กรณี 'มีผู้ยื่นอุทธรณ์': บันทึกชื่อผู้ยื่น วันรับหนังสือ ทำรายงานความเห็นเสนอหัวหน้าหน่วยงานภายใน 5 วันทำการ และหากหัวหน้าหน่วยงานเห็นว่าอุทธรณ์ฟังไม่ขึ้น ให้ส่งรายงานไปยังกรมบัญชีกลางภายใน 3 วันทำการนับจากวันมีคำวินิจฉัย — ห้ามลงนามสัญญาก่อนได้ผล 'อุทธรณ์ฟังไม่ขึ้น'",
 ] as const;
 
 export const STEP6_GUIDELINE_SCHEDULE_STATIC_ITEMS = [
   "• ระยะอุทธรณ์: 7 วันทำการ นับถัดจากวันที่แจ้งผล (ตาม มาตรา 117)",
-  "• กรณีมีผู้ยื่นอุทธรณ์: ส่งรายงานความเห็นให้กรมบัญชีกลางภายใน 7 วันทำการ นับจากวันที่หน่วยงานได้รับหนังสืออุทธรณ์",
+  "• กรณีมีผู้ยื่นอุทธรณ์: ต้องทำความเห็นเสนอหัวหน้าหน่วยงานภายใน 5 วันทำการ และรายงานส่งกรมบัญชีกลางภายใน 3 วันทำการ (ตามระเบียบฯ ข้อ 118-119)",
 ] as const;
+
+/** กรอบเวลาตามระเบียบฯ ข้อ 118-119 */
+export const STEP6_HEAD_OPINION_DEADLINE_WORKDAYS = 5;
+export const STEP6_CGD_REPORT_AFTER_HEAD_WORKDAYS = 3;
+
+/** เดดไลน์ทำความเห็นเสนอหัวหน้าหน่วยงาน — นับจากวันรับหนังสืออุทธรณ์ + 5 วันทำการ */
+export function computeStep6HeadOpinionDeadlineISO(appealReceivedISO: string): string {
+  const start = parseISODateLocal(appealReceivedISO?.trim() ?? "");
+  if (!start) return "";
+  return toISODate(addWorkdays(start, STEP6_HEAD_OPINION_DEADLINE_WORKDAYS));
+}
+
+/**
+ * เดดไลน์ส่งรายงานกรมบัญชีกลาง — 3 วันทำการหลังวันสุดท้ายของกรอบทำความเห็นเสนอหัวหน้าหน่วยงาน
+ * (ใช้เป็นกรอบวางแผนสูงสุดเมื่อยังไม่มีวันที่หัวหน้าลงนามจริงในฟอร์ม)
+ */
+export function computeStep6CgdReportDeadlineISO(appealReceivedISO: string): string {
+  const headDeadlineISO = computeStep6HeadOpinionDeadlineISO(appealReceivedISO);
+  const anchor = parseISODateLocal(headDeadlineISO);
+  if (!anchor) return "";
+  return toISODate(addWorkdays(anchor, STEP6_CGD_REPORT_AFTER_HEAD_WORKDAYS));
+}
+
+export type Step6AppealPendingTimeline = {
+  headOpinionDeadlineISO: string;
+  cgdReportDeadlineISO: string;
+};
+
+export function computeStep6AppealPendingTimeline(
+  appealReceivedISO: string,
+): Step6AppealPendingTimeline | null {
+  const received = appealReceivedISO?.trim() ?? "";
+  if (!received) return null;
+  const headOpinionDeadlineISO = computeStep6HeadOpinionDeadlineISO(received);
+  const cgdReportDeadlineISO = computeStep6CgdReportDeadlineISO(received);
+  if (!headOpinionDeadlineISO || !cgdReportDeadlineISO) return null;
+  return { headOpinionDeadlineISO, cgdReportDeadlineISO };
+}
+
+export function getStep6AppealPendingTimelineDisplayLines(
+  timeline: Step6AppealPendingTimeline | null,
+): { headOpinionLine: string; cgdReportLine: string } | null {
+  if (!timeline) return null;
+  return {
+    headOpinionLine: `⏱️ เดดไลน์ต้องทำความเห็นเสนอหัวหน้าหน่วยงาน (5 วันทำการ): ภายในวันที่ ${formatThaiDateSlash(timeline.headOpinionDeadlineISO)}`,
+    cgdReportLine: `⏱️ เดดไลน์ต้องรายงานส่งกรมบัญชีกลาง (3 วันทำการหลังหัวหน้าลงนาม): ภายในวันที่ ${formatThaiDateSlash(timeline.cgdReportDeadlineISO)}`,
+  };
+}
 
 export const STEP6_GUIDELINE_WARNING =
   "ห้ามลงนามในสัญญาก่อนพ้นกำหนดระยะเวลาอุทธรณ์ และ/หรือ ก่อนมีผลวินิจฉัย 'อุทธรณ์ฟังไม่ขึ้น' โดยเด็ดขาด หากมีการลงนามก่อนถือว่าสัญญาขัดต่อกฎหมายทันที";

@@ -371,14 +371,17 @@ export function computeAppealDeadlineISO(winnerAnnouncementISO: string): string 
   return toISODate(addWorkdays(appealStart, APPEAL_PERIOD_WORKDAYS));
 }
 
-/** วันกำหนดส่งเรื่องให้กรมบัญชีกลางสูงสุด — นับจากวันรับหนังสืออุทธรณ์ + 7 วันทำการ */
+/** วันกำหนดส่งเรื่องให้กรมบัญชีกลางสูงสุด — กรอบวางแผน 5+3 วันทำการ (ข้อ 118-119) */
 export function computeCgdSubmissionDeadlineISO(appealReceivedISO: string): string {
   const start = parseISODateLocal(appealReceivedISO?.trim() ?? "");
-  if (!start || APPEAL_PERIOD_WORKDAYS < 1) return "";
-  return toISODate(addWorkdays(start, APPEAL_PERIOD_WORKDAYS));
+  if (!start) return "";
+  const headDeadline = toISODate(addWorkdays(start, 5));
+  const anchor = parseISODateLocal(headDeadline);
+  if (!anchor) return "";
+  return toISODate(addWorkdays(anchor, 3));
 }
 
-/** วันที่ส่งเรื่องให้กรมบัญชีกลางเกิน 7 วันทำการจากวันรับหนังสืออุทธรณ์หรือไม่ */
+/** @deprecated ใช้กรอบ 5+3 วันทำการตามข้อ 118-119 */
 export function isCgdSubmissionBeyondSevenWorkdays(
   appealReceivedISO: string,
   cgdSubmissionISO: string,
