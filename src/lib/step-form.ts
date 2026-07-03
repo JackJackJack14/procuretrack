@@ -4598,6 +4598,31 @@ export function countStep5CoreDocumentsReady(opts: {
   return { done, total };
 }
 
+/** ฟิลด์บังคับขั้นตอนที่ 5 — ไม่รวมตารางผู้ยื่นข้อเสนอ / Audit Trail */
+export function getStep5MandatoryFormFieldIssues(
+  announcement: Step5Announcement,
+  bidResult: Step4BidResult,
+  opts: {
+    evaluationApprovalDate: string;
+    responsibleName: string;
+    step3PublicationEnd?: string;
+  },
+): Step5ComplianceIssue[] {
+  const issues: Step5ComplianceIssue[] = [];
+  issues.push(
+    ...getStep4EvaluationApprovalIssues(bidResult, {
+      step3PublicationEnd: opts.step3PublicationEnd,
+    }),
+  );
+  issues.push(
+    ...getStep5RequiredFormFieldIssues(announcement, {
+      evaluationApprovalDate: opts.evaluationApprovalDate,
+      responsibleName: opts.responsibleName,
+    }),
+  );
+  return issues;
+}
+
 export function getStep5BidEvaluationFormFieldIssues(
   bidResult: Step4BidResult,
   opts: {
@@ -4695,19 +4720,12 @@ export function getStep5RequiredFormFieldIssues(
 export function countStep5FormRequiredProgress(
   announcement: Step5Announcement,
   bidResult: Step4BidResult,
-  opts: Parameters<typeof getStep5RequiredFormFieldIssues>[1] & {
-    step3PublicationEnd?: string;
-    timelineCtx?: TimelineValidationContext;
-  },
+  opts: Parameters<typeof getStep5MandatoryFormFieldIssues>[2],
 ): { done: number; total: number } {
-  const announcementIssues = getStep5RequiredFormFieldIssues(announcement, opts);
-  const bidIssues = getStep5BidEvaluationFormFieldIssues(bidResult, {
-    step3PublicationEnd: opts.step3PublicationEnd,
-    timelineCtx: opts.timelineCtx,
-  });
+  const issues = getStep5MandatoryFormFieldIssues(announcement, bidResult, opts);
   const total = 5;
   return {
-    done: Math.max(0, total - announcementIssues.length - bidIssues.length),
+    done: Math.max(0, total - issues.length),
     total,
   };
 }
@@ -4765,17 +4783,10 @@ export function getStep5ComplianceIssues(
   }
 
   issues.push(
-    ...getStep5BidEvaluationFormFieldIssues(bidResult, {
-      step3PublicationEnd: opts.step3PublicationEnd,
-      timelineCtx: opts.timelineCtx,
-    }),
-  );
-
-  issues.push(
-    ...getStep5RequiredFormFieldIssues(announcement, {
+    ...getStep5MandatoryFormFieldIssues(announcement, bidResult, {
       evaluationApprovalDate: opts.evaluationApprovalDate,
       responsibleName: opts.responsibleName,
-      timelineCtx: opts.timelineCtx,
+      step3PublicationEnd: opts.step3PublicationEnd,
     }),
   );
 

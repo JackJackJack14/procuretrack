@@ -105,6 +105,7 @@ import {
   hasStep4CommitteeReportDoc,
   hasStep4ConflictEvidenceDoc,
   hasStep4EgpBidSummaryDoc,
+  hasStep5EgpWinnerDoc,
   logStep4OptionalAuditTrailDebug,
 } from "@/lib/form-audit-trail";
 import {
@@ -357,6 +358,30 @@ import {
 const inputCls =
   "w-full h-10 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring";
 
+export const STEP5_COMPLIANCE_INLINE_ERROR_MSG =
+  "❌ กรุณากรอกข้อมูล/แนบไฟล์หลักในช่องนี้ให้เรียบร้อย";
+
+export function complianceHighlightInputCls(base: string, highlighted: boolean): string {
+  return highlighted
+    ? `${base} border-red-500 bg-red-50 focus:ring-red-500`
+    : base;
+}
+
+function ComplianceFieldError({
+  show,
+  message = STEP5_COMPLIANCE_INLINE_ERROR_MSG,
+}: {
+  show: boolean;
+  message?: string;
+}) {
+  if (!show) return null;
+  return (
+    <p className="text-xs text-red-600 font-medium mt-1" role="alert">
+      {message}
+    </p>
+  );
+}
+
 /** บริบทล็อกวันที่ข้ามขั้นตอน — ส่งจากหน้าโครงการ */
 export type ChronologicalFormProps = {
   chronologicalCtx?: TimelineValidationContext | null;
@@ -408,11 +433,13 @@ export function ResponsibleOfficerField({
   onChange,
   stepNumber,
   step1Default = "",
+  highlightError = false,
 }: {
   value: string;
   onChange: (v: string) => void;
   stepNumber: number;
   step1Default?: string;
+  highlightError?: boolean;
 }) {
   const displayValue =
     value.trim() || (stepNumber > 1 ? step1Default : "") || "";
@@ -431,8 +458,9 @@ export function ResponsibleOfficerField({
               ? "ดึงจากขั้นตอนที่ 1 อัตโนมัติ — แก้ไขได้"
               : "ระบุชื่อเจ้าหน้าที่ผิดชอบโครงการ"
         }
-        className={inputCls}
+        className={complianceHighlightInputCls(inputCls, highlightError)}
       />
+      {highlightError && <ComplianceFieldError show />}
       {stepNumber === 1 && (
         <p className="text-xs text-muted-foreground mt-1">
           ชื่อนี้จะถูกใช้เป็นค่าเริ่มต้นในทุกขั้นตอนถัดไป (แก้ไขได้ในแต่ละขั้น)
@@ -4192,6 +4220,7 @@ type Step5DocBinder = {
   stepNumber: number;
   docs: StepDocRecord[];
   onDocsChange: () => void;
+  highlightedMissingDocs?: string[];
 };
 
 type Step5FormProps = {
@@ -4211,6 +4240,7 @@ type Step5FormProps = {
   step1ResponsibleDefault?: string;
   docBinder: Step5DocBinder;
   highlightedComplianceIssues?: string[];
+  complianceSubmitTriggered?: boolean;
 } & ChronologicalFormProps;
 
 /** ขั้นตอนที่ 5 — เปิดซองและสรุปผลการพิจารณา (มาตรา 66) */
@@ -4231,8 +4261,16 @@ export function Step5DetailForm({
   step1ResponsibleDefault = "",
   docBinder,
   highlightedComplianceIssues = [],
+  complianceSubmitTriggered = false,
   chronologicalCtx,
 }: Step5FormProps) {
+  const complianceHi = highlightedComplianceIssues;
+  const fieldHighlighted = (target: string) =>
+    complianceSubmitTriggered && complianceHi.includes(target);
+  const highlightedDocTypes = complianceSubmitTriggered
+    ? (docBinder.highlightedMissingDocs ?? [])
+    : [];
+
   const timeline = step4Timeline ?? {
     bidPeriodStartISO: "",
     bidPeriodWorkdays: null,
@@ -4300,6 +4338,11 @@ export function Step5DetailForm({
   );
   const hasCommitteeReportDoc = hasStep4CommitteeReportDoc(step5UploadedTypes);
   const hasEgpSummaryDoc = hasStep4EgpBidSummaryDoc(step5UploadedTypes);
+  const hasEgpWinnerDoc = hasStep5EgpWinnerDoc(
+    docBinder.docs
+      .filter((d) => d.step_number === docBinder.stepNumber)
+      .map((d) => d.document_type),
+  );
   const hasBlacklistDoc = hasStep4BlacklistEvidenceDoc(step5UploadedTypes);
   const hasConflictDoc = hasStep4ConflictEvidenceDoc(step5UploadedTypes);
   const showBidWinnerReason = bidResult.egp_bid_submission_count != null;
@@ -4482,7 +4525,7 @@ export function Step5DetailForm({
   };
 
   return (
-    <MissingDocHighlightContext.Provider value={[]}>
+    <MissingDocHighlightContext.Provider value={highlightedDocTypes}>
     <div className="space-y-4 max-w-2xl">
       <div className="rounded-lg border border-dashed border-border bg-muted/10 p-4 space-y-4">
         <SectionTitle>ข้อมูลการแข่งขัน (ไม่บังคับ)</SectionTitle>
@@ -4574,6 +4617,7 @@ export function Step5DetailForm({
             onChange={docBinder.onDocsChange}
             readOnly={readOnly}
           />
+          <ComplianceFieldError show={fieldHighlighted("price_comparison_doc")} />
         </FieldRow>
       </div>
 
@@ -4609,6 +4653,7 @@ export function Step5DetailForm({
               onChange={docBinder.onDocsChange}
               readOnly={readOnly}
             />
+            <ComplianceFieldError show={fieldHighlighted("committee_evaluation_report_doc")} />
           </FieldRow>
           <FieldRow
             label={step5DocLabel(
@@ -4629,6 +4674,7 @@ export function Step5DetailForm({
               onChange={docBinder.onDocsChange}
               readOnly={readOnly}
             />
+            <ComplianceFieldError show={fieldHighlighted("egp_bid_summary_doc")} />
           </FieldRow>
         </div>
 
@@ -4693,13 +4739,17 @@ export function Step5DetailForm({
             }
             placeholder="เช่น กษ ๐๖๐๒ / ๔๕๖"
             disabled={readOnly}
-            className={`${inputCls}${letterHasGateError ? " border-destructive focus:ring-destructive" : ""}`}
+            className={complianceHighlightInputCls(
+              inputCls,
+              fieldHighlighted("evaluation_report_letter_no"),
+            )}
           />
-          {letterHasGateError && (
+          {letterHasGateError && !fieldHighlighted("evaluation_report_letter_no") && (
             <p className="text-xs text-destructive font-semibold mt-1" role="alert">
               {STEP4_EVALUATION_APPROVAL_GATE_MSG}
             </p>
           )}
+          <ComplianceFieldError show={fieldHighlighted("evaluation_report_letter_no")} />
         </FieldRow>
         <FieldRow
           label="วันที่หัวหน้าหน่วยงานลงนามอนุมัติผล *"
@@ -4722,9 +4772,10 @@ export function Step5DetailForm({
             onInvalidDate={() => setApprovalDateRejected(true)}
             disabled={readOnly}
             showChronologicalHint={false}
-            className={
-              dateHasGateError ? `${inputCls} border-destructive focus:ring-destructive` : inputCls
-            }
+            className={complianceHighlightInputCls(
+              inputCls,
+              fieldHighlighted("evaluation_report_approval_date"),
+            )}
           />
           {approvalDate && !showApprovalDateError && !dateHasGateError && (
             <p className="text-xs text-muted-foreground mt-1">
@@ -4790,6 +4841,7 @@ export function Step5DetailForm({
               </FieldRow>
             </div>
           )}
+          <ComplianceFieldError show={fieldHighlighted("evaluation_report_approval_date")} />
         </FieldRow>
       </div>
 
@@ -4846,9 +4898,13 @@ export function Step5DetailForm({
             value={announcement.winner_announcement_no ?? ""}
             onChange={(e) => onAnnouncementChange({ winner_announcement_no: e.target.value })}
             placeholder="เช่น เลขที่ประกาศจากระบบ e-GP"
-            className={inputCls}
+            className={complianceHighlightInputCls(
+              inputCls,
+              fieldHighlighted("winner_announcement_no"),
+            )}
             disabled={readOnly}
           />
+          <ComplianceFieldError show={fieldHighlighted("winner_announcement_no")} />
         </FieldRow>
         <FieldRow
           label="วันที่ประกาศผล *"
@@ -4856,18 +4912,21 @@ export function Step5DetailForm({
           complianceTarget="winner_announcement_date"
         >
           <div className="space-y-1">
-            <ChronologicalDatePicker
-              stepNumber={5}
-              skipChronologicalLock
+            <ThaiDatePicker
               minDate={minAnnouncementDate || undefined}
               value={winnerDate}
               onChange={handleWinnerAnnouncementDateChange}
               disabled={readOnly || !minAnnouncementDate}
+              workdaysOnly
+              className={complianceHighlightInputCls(
+                inputCls,
+                fieldHighlighted("winner_announcement_date") ||
+                  fieldHighlighted("winner_announcement_date_min"),
+              )}
               onInvalidDate={() => {
                 setAnnouncementDateRejected(true);
                 if (announcementDateErrorMsg) toast.error(announcementDateErrorMsg);
               }}
-              showChronologicalHint={false}
             />
             {winnerDate && !showAnnouncementDateError && (
               <p className="text-xs text-muted-foreground">
@@ -4889,8 +4948,16 @@ export function Step5DetailForm({
                 {announcementDateErrorMsg}
               </p>
             )}
+            <ComplianceFieldError
+              show={
+                (fieldHighlighted("winner_announcement_date") ||
+                  fieldHighlighted("winner_announcement_date_min")) &&
+                !showAnnouncementDateError
+              }
+            />
             {appealDisplayLines && (
               <div
+                key={winnerDate}
                 className="rounded-md border border-blue-200/80 bg-blue-50/50 px-3 py-3 space-y-1.5 text-sm text-foreground/90 leading-relaxed mt-2"
                 aria-live="polite"
               >
@@ -4942,9 +5009,12 @@ export function Step5DetailForm({
           </div>
         </FieldRow>
 
-        <FieldRow label="ประกาศผลผู้ชนะการเสนอราคา (PDF) *" complianceTarget="egp_winner_doc">
+        <FieldRow
+          label={step5DocLabel("ประกาศผลผู้ชนะการเสนอราคา (PDF) *", hasEgpWinnerDoc)}
+          complianceTarget="egp_winner_doc"
+        >
           <p className="text-xs text-muted-foreground mb-2">
-            แนบใบประกาศจากระบบ e-GP หรือฉบับที่หน่วยงานจัดทำตามแบบ สกมช.
+            แนบใบประกาศจากระบบ e-GP หรือฉบับที่หน่วยงานจัดทำตามแบบ สกมช. (บังคับตาม พ.ร.บ. มาตรา 66)
           </p>
           <InlineDocUpload
             project={docBinder.project}
@@ -4955,6 +5025,7 @@ export function Step5DetailForm({
             onChange={docBinder.onDocsChange}
             readOnly={readOnly}
           />
+          <ComplianceFieldError show={fieldHighlighted("egp_winner_doc")} />
         </FieldRow>
         <FieldRow label="ภาพถ่ายบอร์ดประชาสัมพันธ์ปิดประกาศผล *" complianceTarget="physical_board_doc">
           <p className="text-xs text-muted-foreground mb-2">
@@ -4969,6 +5040,7 @@ export function Step5DetailForm({
             onChange={docBinder.onDocsChange}
             readOnly={readOnly}
           />
+          <ComplianceFieldError show={fieldHighlighted("physical_board_doc")} />
         </FieldRow>
       </div>
 
@@ -4995,6 +5067,7 @@ export function Step5DetailForm({
           value={responsibleName}
           onChange={onResponsibleNameChange}
           step1Default={step1ResponsibleDefault}
+          highlightError={fieldHighlighted("responsible_officer")}
         />
       </div>
     </div>

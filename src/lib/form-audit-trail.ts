@@ -233,7 +233,7 @@ export const CHECKLIST_EVIDENCE_RULES: ChecklistEvidenceRule[] = [
     stepNumber: 5,
     checklistKey: "egp_winner_announced",
     checklistIndex: 2,
-    enforce: "always",
+    enforce: "when_checked",
     binding: {
       kind: "document",
       documentTypes: [STEP5_DOC.EGP_WINNER_ANNOUNCEMENT, "ประกาศผู้ชนะการเสนอราคา (e-GP)"],

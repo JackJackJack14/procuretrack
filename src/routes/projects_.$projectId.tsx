@@ -467,6 +467,7 @@ function ProjectDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [highlightedMissingDocs, setHighlightedMissingDocs] = useState<string[]>([]);
   const [highlightedComplianceIssues, setHighlightedComplianceIssues] = useState<string[]>([]);
+  const [complianceSubmitTriggered, setComplianceSubmitTriggered] = useState(false);
 
   // Step edit state
   const [responsibleName, setResponsibleName] = useState("");
@@ -1203,6 +1204,7 @@ function ProjectDetailPage() {
   useEffect(() => {
     setHighlightedMissingDocs([]);
     setHighlightedComplianceIssues([]);
+    setComplianceSubmitTriggered(false);
   }, [activeStep]);
 
   useEffect(() => {
@@ -1699,6 +1701,9 @@ function ProjectDetailPage() {
   const saveDraft = async (opts?: { silent?: boolean }): Promise<boolean> => {
     if (!current || !project) return false;
     setError(null);
+    setHighlightedMissingDocs([]);
+    setHighlightedComplianceIssues([]);
+    setComplianceSubmitTriggered(false);
     if (workflowReadOnly) {
       toast.error("อยู่ในโหมดดูอย่างเดียว — กด «ปลดล็อกเพื่อแก้ไขข้อมูลขั้นตอนนี้» ก่อนบันทึก");
       return false;
@@ -2407,8 +2412,13 @@ function ProjectDetailPage() {
   };
 
   const failStepCompliance = (message: string, issueId?: string, docType?: string) => {
+    setComplianceSubmitTriggered(true);
     toast.error(message);
-    setError(message);
+    if (current?.step_number !== 5) {
+      setError(message);
+    } else {
+      setError(null);
+    }
     const resolvedDocType =
       docType ?? (issueId ? resolveDocTypeFromComplianceIssue(issueId) : null);
     setHighlightedMissingDocs(resolvedDocType ? [resolvedDocType] : []);
@@ -2805,6 +2815,7 @@ function ProjectDetailPage() {
     if (ok) {
       setHighlightedMissingDocs([]);
       setHighlightedComplianceIssues([]);
+      setComplianceSubmitTriggered(false);
       toast.success(
         completedStepNumber === 10
           ? "ปิดโครงการจ้างสำเร็จ — อยู่ระหว่างค้ำประกันความชำรุด 2 ปี"
@@ -3646,11 +3657,13 @@ function ProjectDetailPage() {
                       onResponsibleNameChange={setResponsibleName}
                       step1ResponsibleDefault={step1ResponsibleDefault}
                       highlightedComplianceIssues={highlightedComplianceIssues}
+                      complianceSubmitTriggered={complianceSubmitTriggered}
                       docBinder={{
                         project,
                         stepNumber: 5,
                         docs: docsForStep,
                         onDocsChange: invalidateAll,
+                        highlightedMissingDocs,
                       }}
                       chronologicalCtx={timelineValidationCtx}
                     />
@@ -3853,7 +3866,9 @@ function ProjectDetailPage() {
                 </>
               )}
 
-              {error && (isHistoricalWorkflowMode(workflowMode) || !isStepCompletedView) && (
+              {error &&
+                current.step_number !== 5 &&
+                (isHistoricalWorkflowMode(workflowMode) || !isStepCompletedView) && (
                 <p className="text-sm text-destructive mt-3">{error}</p>
               )}
 
@@ -4414,7 +4429,6 @@ function ProjectDetailPage() {
                         evaluationApprovalDate: step5EvaluationApprovalDate,
                         responsibleName: effectiveResponsibleName,
                         step3PublicationEnd,
-                        timelineCtx: timelineValidationCtx,
                       })
                     : null;
                 const step6CoreDocsProgress =
@@ -4577,7 +4591,7 @@ function ProjectDetailPage() {
                         : current.step_number === 4
                           ? !step4Ready
                           : current.step_number === 5
-                            ? !step5Ready
+                            ? false
                             : current.step_number === 6
                               ? !step6Ready
                               : current.step_number === 7
@@ -4643,7 +4657,8 @@ function ProjectDetailPage() {
                         !isCompleted &&
                         showCompleteBtn &&
                         !reactiveChecklist.allDone &&
-                        workflowMode === "current"
+                        workflowMode === "current" &&
+                        current.step_number !== 5
                       }
                       progressPct={checklistProgressPct}
                       issues={complianceGateIssues}
@@ -4687,7 +4702,6 @@ function ProjectDetailPage() {
                         {showSaveDraft && (
                           <button
                             onClick={saveDraft}
-                            disabled={current.step_number === 5 && step5DateInvalid}
                             className="h-10 px-4 rounded-md border border-input bg-background text-sm font-medium hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             {saveDraftLabel}
