@@ -292,6 +292,12 @@ export const CONTRACT_NOTIFICATION_WORKDAYS = 5;
 /** ระยะลงนามสัญญาหลังผู้รับจ้างได้รับหนังสือเชิญ — ขั้นตอนที่ 7 */
 export const STEP7_CONTRACT_SIGNING_DEADLINE_WORKDAYS = 15;
 
+/** กำหนดลงนามสัญญา — บวกวันปฏิทินธรรมดา (ขั้นตอนที่ 7 พยากรณ์ค่าเริ่มต้น) */
+export const STEP7_CONTRACT_SIGNING_DEADLINE_CALENDAR_DAYS = 15;
+
+/** วันที่ในหนังสือเชิญลงนามเริ่มต้นได้ — หลังพ้นกำหนดอุทธรณ์ (UAT 17/07/2569) */
+export const STEP7_NOTICE_MIN_DATE_ISO = "2026-07-17";
+
 /**
  * ไทม์ไลน์โครงการ — ระยะขั้นต่ำ Fastest Path สำหรับขั้นตอนที่ที่ยังไม่มีวันที่จริง (วันทำการ)
  * ใช้กับ addWorkdays() เท่านั้น — ห้ามบวก Calendar Days
@@ -446,13 +452,54 @@ export function computeContractNotificationDeadlineFromAppealISO(
 }
 
 /**
- * กำหนดวันสุดท้ายที่ต้องมาลงนาม — วันที่ผู้รับจ้างได้รับหนังสือเชิญ + 15 วันทำการ
- * (ไม่นับวันได้รับ — ใช้ addWorkdays เหมือน defaultPublicationEndISO)
+ * กำหนดวันสุดท้ายที่ต้องมาลงนาม — วันที่ในหนังสือเชิญลงนาม + 15 วันทำการ
+ * (ไม่นับวันออกหนังสือ — ใช้ addWorkdays เหมือน defaultPublicationEndISO)
  */
-export function computeStep7ContractSigningDeadlineISO(receivedDateISO: string): string {
-  const start = parseISODateLocal(receivedDateISO?.trim() ?? "");
+export function computeStep7ContractSigningDeadlineISO(noticeDateISO: string): string {
+  const start = parseISODateLocal(noticeDateISO?.trim() ?? "");
   if (!start || STEP7_CONTRACT_SIGNING_DEADLINE_WORKDAYS < 1) return "";
   return toISODate(addWorkdays(start, STEP7_CONTRACT_SIGNING_DEADLINE_WORKDAYS));
+}
+
+/** @deprecated ใช้ computeStep7ContractSigningDeadlineISO (auto-fill) หรือ computeStep7SigningDeadlineCalendarCapISO (เกณฑ์ขยายเวลา) */
+export function computeStep7ContractSigningDeadlineCalendarISO(
+  anchorDateISO: string,
+): string {
+  return computeStep7SigningDeadlineCalendarCapISO(anchorDateISO);
+}
+
+/** เกณฑ์สูงสุดก่อนต้องบันทึกเหตุผลขยายเวลา — วันที่ในหนังสือเชิญ + 15 วันปฏิทินธรรมดา */
+export function computeStep7SigningDeadlineCalendarCapISO(
+  noticeDateISO: string,
+): string {
+  const start = parseISODateLocal(noticeDateISO?.trim() ?? "");
+  if (!start || STEP7_CONTRACT_SIGNING_DEADLINE_CALENDAR_DAYS < 1) return "";
+  const d = new Date(start.getTime());
+  d.setDate(d.getDate() + STEP7_CONTRACT_SIGNING_DEADLINE_CALENDAR_DAYS);
+  return toISODate(d);
+}
+
+/** กำหนดลงนามเกินกรอบ [วันที่ในหนังสือเชิญ + 15 วันปฏิทิน] หรือไม่ */
+export function isStep7SigningDeadlineBeyondStandard(
+  noticeDateISO: string,
+  signingDeadlineISO: string,
+): boolean {
+  const notice = noticeDateISO?.trim() ?? "";
+  const deadline = signingDeadlineISO?.trim() ?? "";
+  if (!notice || !deadline) return false;
+  const calendarCap = computeStep7SigningDeadlineCalendarCapISO(notice);
+  if (!calendarCap) return false;
+  return deadline > calendarCap;
+}
+
+/** วันที่ในหนังสือเชิญลงนามขั้นต่ำ — หลังอุทธรณ์ และไม่ก่อน 17/07/2569 */
+export function computeStep7NoticeLetterMinDateISO(appealDeadlineISO?: string): string {
+  const floor = STEP7_NOTICE_MIN_DATE_ISO;
+  const appealEnd = appealDeadlineISO?.trim() ?? "";
+  if (!appealEnd) return floor;
+  const fromAppeal = computeContractEarliestFromAppealDeadlineISO(appealEnd);
+  if (!fromAppeal) return floor;
+  return fromAppeal > floor ? fromAppeal : floor;
 }
 
 /** วันที่ออกหนังสือแจ้งเกินเดดไลน์ข้อ 161 */

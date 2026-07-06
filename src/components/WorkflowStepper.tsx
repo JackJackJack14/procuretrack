@@ -6,24 +6,24 @@ import {
   canNavigateToUiStep,
 } from "@/lib/dynamic-stepper";
 import { STRICT_SEQUENTIAL_NAVIGATION_MSG } from "@/lib/step-workflow";
-import { isAppealWorkflowLocked, type Step6AppealState } from "@/lib/step-form";
 
 type WorkflowStepperProps = {
   method: string;
   currentBackendStep: number;
   activeUiStep: number;
-  step6Appeal: Step6AppealState;
   onNavigate: (uiStep: number) => void;
   onBlockedNavigate?: (message: string) => void;
+  /** ล็อกขั้น 7–10 ขณะอุทธรณ์ค้าง (HOLD) */
+  appealStepperLocked?: boolean;
 };
 
 export function WorkflowStepper({
   method,
   currentBackendStep,
   activeUiStep,
-  step6Appeal,
   onNavigate,
   onBlockedNavigate,
+  appealStepperLocked = false,
 }: WorkflowStepperProps) {
   const isSpecific = isSpecificMethodShortWorkflow(method);
   const items = getStepperDisplayItems(method);
@@ -38,18 +38,19 @@ export function WorkflowStepper({
       {items.map((item) => {
         const isActive = activeUiStep === item.uiStep;
         const isStepCompleted = item.uiStep < workflowUiStep;
-        const isAppealLocked =
-          !isSpecific &&
-          isAppealWorkflowLocked(step6Appeal) &&
-          (item.backendStep === 7 || item.backendStep === 8);
-        const canNav =
-          canNavigateToUiStep(item.uiStep, currentBackendStep, method) &&
-          !isAppealLocked;
+        const isAppealHoldTarget =
+          appealStepperLocked && item.backendStep >= 7 && item.backendStep <= 10;
+        const canNav = canNavigateToUiStep(item.uiStep, currentBackendStep, method, {
+          appealStepperLocked,
+        });
 
         const handleClick = () => {
-          if (isAppealLocked) return;
           if (!canNav) {
-            onBlockedNavigate?.(STRICT_SEQUENTIAL_NAVIGATION_MSG);
+            onBlockedNavigate?.(
+              isAppealHoldTarget
+                ? "⚠️ ระงับชั่วคราวติดอุทธรณ์ — ไม่สามารถข้ามไปขั้นตอนที่ 7–10 ได้จนกว่าคดีจะจบ"
+                : STRICT_SEQUENTIAL_NAVIGATION_MSG,
+            );
             return;
           }
           onNavigate(item.uiStep);
@@ -62,20 +63,22 @@ export function WorkflowStepper({
             disabled={!canNav}
             onClick={handleClick}
             title={
-              isAppealLocked
-                ? "ล็อก — รอผลวินิจฉัยอุทธรณ์ฟังไม่ขึ้น หรือยืนยันไม่มีผู้ยื่นอุทธรณ์"
-                : !canNav
-                  ? STRICT_SEQUENTIAL_NAVIGATION_MSG
-                  : isStepCompleted
-                    ? "คลิกเพื่อย้อนกลับดูข้อมูลขั้นตอนนี้"
-                    : isActive
-                      ? "ขั้นตอนที่กำลังดูอยู่"
-                      : "ขั้นตอนปัจจุบัน"
+              !canNav
+                ? isAppealHoldTarget
+                  ? "⚠️ ระงับชั่วคราวติดอุทธรณ์ (HOLD)"
+                  : STRICT_SEQUENTIAL_NAVIGATION_MSG
+                : isStepCompleted
+                  ? "คลิกเพื่อย้อนกลับดูข้อมูลขั้นตอนนี้"
+                  : isActive
+                    ? "ขั้นตอนที่กำลังดูอยู่"
+                    : "ขั้นตอนปัจจุบัน"
             }
             style={!canNav ? { cursor: "not-allowed" } : undefined}
             className={`relative flex flex-col items-center gap-1.5 rounded-md border-2 p-2 text-center transition ${
               !canNav
-                ? "bg-muted/30 border-transparent text-muted-foreground/40 opacity-50 cursor-not-allowed"
+                ? isAppealHoldTarget
+                  ? "bg-orange-50/80 border-orange-300/60 text-orange-900/70 opacity-80 cursor-not-allowed"
+                  : "bg-muted/30 border-transparent text-muted-foreground/40 opacity-50 cursor-not-allowed"
                 : isStepCompleted
                   ? "bg-success/15 border-success/30 text-success-foreground hover:bg-success/20 cursor-pointer"
                   : isActive
@@ -86,13 +89,23 @@ export function WorkflowStepper({
             {isStepCompleted && (
               <Check className="absolute top-1 right-1 h-3 w-3 text-success" />
             )}
+            {isAppealHoldTarget && (
+              <span
+                className="absolute top-0.5 right-0.5 text-[8px] font-bold text-orange-700 leading-none"
+                aria-hidden
+              >
+                HOLD
+              </span>
+            )}
             <div
               className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
                 isActive
                   ? "bg-blue-600 text-white"
-                  : isStepCompleted
-                    ? "bg-success/20 text-success"
-                    : "bg-muted text-muted-foreground"
+                  : isAppealHoldTarget
+                    ? "bg-orange-200 text-orange-900"
+                    : isStepCompleted
+                      ? "bg-success/20 text-success"
+                      : "bg-muted text-muted-foreground"
               }`}
             >
               {item.uiStep}

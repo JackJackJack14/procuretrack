@@ -26,7 +26,6 @@ import {
   getTimelineSaveBlockMessage,
 } from "@/lib/timeline-validation";
 import { resolveStep1PlanPublicationDateISO } from "@/lib/step-milestone-dates";
-import { parseCurrencyForDatabase } from "@/lib/currency-format";
 import { resolveDocFilePolicy, validateDocFile } from "@/lib/doc-file-types";
 import { uploadStepDocument, deleteStepDocument } from "@/lib/doc-upload";
 import { checkStorageQuota, incrementStorageUsage, decrementStorageUsage } from "@/lib/storage";
@@ -63,6 +62,7 @@ import {
   computeStep10InstallmentPlannedDates,
   computeWarrantyEndDateISO,
   PROJECT_STATUS_WARRANTY,
+  PROJECT_STATUS_CONTRACT_BREACH_CANCELLED,
   resolveLastInstallmentInspectionDate,
 } from "@/lib/step10-contract";
 import {
@@ -168,6 +168,7 @@ import {
   hasStep2MarketQuotesDoc,
   hasStep2ReferencePriceDoc,
   isAppealBlocking,
+  isAppealStepperAndTimelineLocked,
   isAppealWorkflowLocked,
   isStep4ReadyForNext,
   countStep4CoreDocumentsReady,
@@ -182,9 +183,11 @@ import {
   loadStep7FormFromNote,
   getStep7ComplianceIssues,
   isStep7ReadyForNext,
+  buildStep8ExecutionFromStep7Bond,
   type Step7ContractNotice,
   EMPTY_STEP8_CONTRACT_EXECUTION,
   loadStep8FormFromNote,
+  parseStepNote,
   mergeStep8FromProject,
   resolveDefaultStep8ContractAmount,
   buildProjectStep8Fields,
@@ -262,6 +265,14 @@ import {
   hasStep5EgpWinnerDoc,
   hasStep5PhysicalBoardDoc,
   hasStep6CommitteeDecisionDoc,
+  hasStep6BidderAppealLetterDoc,
+  hasStep6HeadAppealDecisionDoc,
+  hasStep6CgdSubmissionReportDoc,
+  hasStep7PerformanceBondDoc,
+  hasStep7ContractNoticeDeliveryProofDoc,
+  hasStep7ContractDraftApprovalMemoDoc,
+  hasStep7PerformanceBondExemptionDoc,
+  hasStep7AbandonmentReportDoc,
   isStep2RequiredDocSatisfied,
   isStep4RequiredDocSatisfied,
   isStep5RequiredDocSatisfied,
@@ -513,6 +524,9 @@ function ProjectDetailPage() {
   const [basicsEditSessionActive, setBasicsEditSessionActive] = useState(false);
   const [rollingBack, setRollingBack] = useState(false);
   const [rollingBackToEdit, setRollingBackToEdit] = useState(false);
+  const [appealVerdictCancelLoading, setAppealVerdictCancelLoading] = useState(false);
+  const [appealVerdictRollbackLoading, setAppealVerdictRollbackLoading] = useState(false);
+  const [step7BreachEndLoading, setStep7BreachEndLoading] = useState(false);
   const [step4BidResult, setStep4BidResult] = useState<Step4BidResult>({
     ...EMPTY_STEP4_BID_RESULT,
   });
@@ -608,6 +622,10 @@ function ProjectDetailPage() {
     [activeStep, workflowUiStep, workflowStep, isSpecificShortWorkflow, historicalEditUnlocked, effectiveProcurementPath],
   );
   const workflowReadOnly = isWorkflowReadOnly(workflowMode);
+  const appealStepperLocked = useMemo(
+    () => isAppealStepperAndTimelineLocked(step6Appeal),
+    [step6Appeal],
+  );
 
   const resolvedEgpProjectId = useMemo(
     () => resolveEgpProjectId(project),
@@ -678,17 +696,9 @@ function ProjectDetailPage() {
 
   const handleStepNavigation = (stepNumber: number) => {
     if (!project) return;
-    if (
-      !isSpecificShortWorkflow &&
-      isAppealWorkflowLocked(step6Appeal) &&
-      (stepNumber === 7 || stepNumber === 8)
-    ) {
-      toast.message(
-        "ล็อกขั้นตอน 7–8 — ต้องเลือกผลวินิจฉัย «อุทธรณ์ฟังไม่ขึ้น» หรือเลือก «ไม่มีผู้ยื่นอุทธรณ์» ก่อน",
-      );
-      return;
-    }
-    if (!canNavigateToUiStep(stepNumber, workflowStep, procurementMethod)) {
+    if (!canNavigateToUiStep(stepNumber, workflowStep, procurementMethod, {
+      appealStepperLocked,
+    })) {
       toast.message(STRICT_SEQUENTIAL_NAVIGATION_MSG);
       return;
     }
@@ -1549,6 +1559,13 @@ function ProjectDetailPage() {
 
   const patchStep6Appeal = (patch: Partial<Step6AppealState>) => {
     setStep6Appeal((prev) => ({ ...prev, ...patch }));
+    if (patch.appeal_status === "none") {
+      setGenericManualChecklist((prev) => ({
+        ...normalizeManualChecklist(6, prev),
+        appeal_agency_report_done: false,
+        appeal_sent_to_cgd: false,
+      }));
+    }
   };
 
   const setStep4Check = (key: Step4ChecklistKey, checked: boolean) => {
@@ -2425,6 +2442,162 @@ function ProjectDetailPage() {
     );
   };
 
+  const handleAppealVerdictCancelProject = async () => {
+    if (!projectId || !project) return;
+    const confirmed = window.confirm(
+      "ยืนยันจัดทำประกาศยกเลิกโครงการจัดซื้อจัดจ้างนี้ตามผลวินิจฉัย «อุทธรณ์ฟังขึ้น»?",
+    );
+    if (!confirmed) return;
+    setAppealVerdictCancelLoading(true);
+    try {
+      await saveDraft({ silent: true });
+      const projectUpdateResult = await updateProjectWithSchemaFallback(
+        supabase,
+        projectId,
+        { status: "cancelled" },
+      );
+      if (projectUpdateResult.error) {
+        toast.error(projectUpdateResult.error);
+        return;
+      }
+      toast.success("ยกเลิกโครงการจัดซื้อจัดจ้างตามผลวินิจฉัยอุทธรณ์แล้ว");
+      navigate({ to: "/projects" });
+    } finally {
+      setAppealVerdictCancelLoading(false);
+    }
+  };
+
+  const handleAppealVerdictRollbackToStep5 = async () => {
+    if (!projectId || !project || !current) return;
+    const confirmed = window.confirm(
+      "ยืนยันถอยกระบวนการกลับไปแก้ไขในขั้นตอนที่ 5?\n\nข้อมูลขั้นตอนที่ 6 จะถูกล้าง และเปิดให้แก้ไขเปิดซอง/สรุปผลในขั้นตอนที่ 5 ตามคำสั่งกรมบัญชีกลาง",
+    );
+    if (!confirmed) return;
+    setAppealVerdictRollbackLoading(true);
+    setError(null);
+    try {
+      await saveDraft({ silent: true });
+      const columnAvailability = await getProcurementStepColumnAvailability(supabase);
+      const stepNum = 6;
+      const prevStep = 5;
+      const prevStepRecord = steps.find((s) => s.step_number === prevStep);
+      if (!prevStepRecord) throw new Error("ไม่พบขั้นตอนที่ 5");
+
+      const stepDocs = docs.filter((d) => d.step_number === stepNum);
+      if (stepDocs.length > 0) {
+        const paths = stepDocs.map((d) => d.storage_path);
+        const { error: storageErr } = await supabase.storage
+          .from("procurement-docs")
+          .remove(paths);
+        if (storageErr) {
+          console.warn("[Appeal rollback] storage delete partial fail", storageErr);
+        }
+        const totalBytes = stepDocs.reduce((sum, d) => sum + Number(d.file_size ?? 0), 0);
+        if (totalBytes > 0) {
+          await decrementStorageUsage(project.organization_id, totalBytes);
+        }
+        const { error: docErr } = await supabase
+          .from("documents")
+          .delete()
+          .eq("project_id", project.id)
+          .eq("step_number", stepNum);
+        if (docErr) throw new Error(docErr.message);
+      }
+
+      const wipePayload = getStepRollbackProcurementStepWipe(stepNum, columnAvailability);
+      const wipeResult = await updateProcurementStepWithSchemaFallback(
+        supabase,
+        current.id,
+        wipePayload,
+      );
+      if (wipeResult.error) throw new Error(wipeResult.error);
+
+      const reopenResult = await updateProcurementStepWithSchemaFallback(
+        supabase,
+        prevStepRecord.id,
+        getPreviousStepReopenPatch(),
+      );
+      if (reopenResult.error) throw new Error(reopenResult.error);
+
+      const projectUpdateResult = await updateProjectWithSchemaFallback(
+        supabase,
+        project.id,
+        {
+          current_step: prevStep,
+          ...getStepRollbackProjectWipe(stepNum),
+        },
+      );
+      if (projectUpdateResult.error) {
+        throw new Error(projectUpdateResult.error);
+      }
+
+      setStep6Appeal({ ...EMPTY_STEP6_APPEAL });
+      setGenericManualChecklist(createEmptyManualChecklist(stepNum));
+      setActiveStep(backendStepToUiStep(prevStep, project.method));
+      await invalidateAll();
+      toast.success(
+        "ถอยกลับไปขั้นตอนที่ 5 แล้ว — เปิดให้แก้ไขเปิดซองและสรุปผลตามคำสั่งกรมบัญชีกลาง",
+      );
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "ถอยกลับไม่สำเร็จ";
+      setError(message);
+      toast.error(message);
+    } finally {
+      setAppealVerdictRollbackLoading(false);
+    }
+  };
+
+  const handleStep7BreachEndProject = async () => {
+    if (!projectId || !project || !current) return;
+    const confirmed = window.confirm(
+      "ยืนยันบันทึกสถานะเอกชนทิ้งงานและยุติโครงการตามมาตรา 109?\n\nโครงการจะถูกเปลี่ยนสถานะเป็น «เอกชนทิ้งงาน (มาตรา 109)»",
+    );
+    if (!confirmed) return;
+    setStep7BreachEndLoading(true);
+    try {
+      const step7Docs = docs.filter((d) => d.step_number === 7);
+      const step7Uploaded = step7Docs.map((d) => d.document_type);
+      const complianceIssues = getStep7ComplianceIssues(
+        step7ContractNotice,
+        genericManualChecklist,
+        {
+          responsibleName: effectiveResponsibleName,
+          appealDeadlineISO: appealAnchorDate
+            ? computeAppealDeadlineISO(appealAnchorDate)
+            : "",
+          notificationDeadlineISO: "",
+          hasContractNoticeLetterDoc: false,
+          hasContractNoticeDeliveryProofDoc: false,
+          hasContractDraftApprovalMemoDoc: false,
+          hasPerformanceBondDoc: false,
+          hasPerformanceBondExemptionDoc: false,
+          hasAbandonmentReportDoc: hasStep7AbandonmentReportDoc(step7Uploaded),
+          winningProjectAmount: resolveStep4ContractAmount(mergedStep4BidResult, project),
+          stepDocs: step7Docs,
+          timelineCtx: timelineValidationCtx,
+        },
+      );
+      if (complianceIssues.length > 0) {
+        failStepCompliance(complianceIssues[0].message, complianceIssues[0].id);
+        return;
+      }
+      await saveDraft({ silent: true });
+      const projectUpdateResult = await updateProjectWithSchemaFallback(
+        supabase,
+        projectId,
+        { status: PROJECT_STATUS_CONTRACT_BREACH_CANCELLED },
+      );
+      if (projectUpdateResult.error) {
+        toast.error(projectUpdateResult.error);
+        return;
+      }
+      toast.success("บันทึกสถานะเอกชนทิ้งงานและยุติโครงการตามมาตรา 109 แล้ว");
+      navigate({ to: "/projects" });
+    } finally {
+      setStep7BreachEndLoading(false);
+    }
+  };
+
   const completeStep = async (opts?: { skipDocValidation?: boolean }) => {
     if (!current || !project) return;
     if (!canCompleteWorkflowStep(
@@ -2623,7 +2796,10 @@ function ProjectDetailPage() {
         step6Appeal,
         step6Checklist,
         {
+          hasBidderAppealLetterDoc: hasStep6BidderAppealLetterDoc(step6Uploaded),
           hasCommitteeOpinionReportDoc: hasStep6CommitteeDecisionDoc(step6Uploaded),
+          hasHeadAppealDecisionDoc: hasStep6HeadAppealDecisionDoc(step6Uploaded),
+          hasCgdSubmissionReportDoc: hasStep6CgdSubmissionReportDoc(step6Uploaded),
           step5NotificationDate,
           stepDocs: step6Docs,
           timelineCtx: timelineValidationCtx,
@@ -2635,7 +2811,14 @@ function ProjectDetailPage() {
       }
     }
     if (!bypassProcurementGates && current.step_number === 7) {
+      if (step7ContractNotice.notice_outcome === "breach_no_show") {
+        toast.error(
+          "กรณีผู้ชนะไม่มาลงนาม — กรุณาใช้ปุ่ม «สิ้นสุดโครงการ/รายงานเอกชนทิ้งงาน»",
+        );
+        return;
+      }
       const step7Docs = docs.filter((d) => d.step_number === 7);
+      const step7Uploaded = step7Docs.map((d) => d.document_type);
       const appealDeadlineISO = appealAnchorDate
         ? computeAppealDeadlineISO(appealAnchorDate)
         : "";
@@ -2649,9 +2832,18 @@ function ProjectDetailPage() {
           responsibleName: effectiveResponsibleName,
           appealDeadlineISO,
           notificationDeadlineISO,
-          hasContractNoticeLetterDoc: step7Docs.some((d) =>
-            isStep7ContractNoticeLetterDocType(d.document_type),
+          hasContractNoticeLetterDoc: step7Uploaded.some((t) =>
+            isStep7ContractNoticeLetterDocType(t),
           ),
+          hasContractNoticeDeliveryProofDoc:
+            hasStep7ContractNoticeDeliveryProofDoc(step7Uploaded),
+          hasContractDraftApprovalMemoDoc:
+            hasStep7ContractDraftApprovalMemoDoc(step7Uploaded),
+          hasPerformanceBondDoc: hasStep7PerformanceBondDoc(step7Uploaded),
+          hasPerformanceBondExemptionDoc:
+            hasStep7PerformanceBondExemptionDoc(step7Uploaded),
+          hasAbandonmentReportDoc: hasStep7AbandonmentReportDoc(step7Uploaded),
+          winningProjectAmount: resolveStep4ContractAmount(mergedStep4BidResult, project),
           stepDocs: step7Docs,
           timelineCtx: timelineValidationCtx,
         },
@@ -2750,8 +2942,39 @@ function ProjectDetailPage() {
     const saved = await saveDraft({ silent: true });
     if (saved === false) return;
     if (
+      current.step_number === 7 &&
+      step7ContractNotice.notice_outcome === "proceed_to_sign"
+    ) {
+      const bondPatch = buildStep8ExecutionFromStep7Bond(step7ContractNotice);
+      const step8Record = steps.find((s) => s.step_number === 8);
+      const existingStep8 = loadStep8FormFromNote(step8Record?.note ?? null);
+      const mergedStep8: Step8ContractExecution = {
+        ...existingStep8.contractExecution,
+        ...step8ContractExecution,
+        ...bondPatch,
+      };
+      setStep8ContractExecution(mergedStep8);
+      if (step8Record) {
+        const { userNote: step8UserNote } = parseStepNote(step8Record.note ?? null);
+        const step8FormNote = serializeStepNote(step8UserNote, {
+          checklist: existingStep8.checklist ?? {},
+          contractExecution: mergedStep8,
+        });
+        await patchStepDraft(step8Record.id, {}, { note: step8FormNote || null });
+      }
+      const { error: step8ProjErr } = await supabase
+        .from("projects")
+        .update(buildProjectStep8Fields(mergedStep8))
+        .eq("id", project.id);
+      if (step8ProjErr) {
+        console.warn("[Step7→8] bond pre-fill sync failed", step8ProjErr);
+      }
+    }
+    if (
       !opts?.skipDocValidation &&
       !bypassProcurementGates &&
+      current.step_number !== 6 &&
+      current.step_number !== 7 &&
       current.step_number !== 9 &&
       current.step_number !== 10
     ) {
@@ -3047,9 +3270,9 @@ function ProjectDetailPage() {
             method={procurementMethod}
             currentBackendStep={workflowStep}
             activeUiStep={activeStep}
-            step6Appeal={step6Appeal}
             onNavigate={handleStepNavigation}
             onBlockedNavigate={(msg) => toast.message(msg)}
+            appealStepperLocked={appealStepperLocked}
           />
         </div>
 
@@ -3107,6 +3330,17 @@ function ProjectDetailPage() {
                 }
               : null
           }
+          step6Note={step6Record?.note ?? null}
+          step6Live={
+            workflowStep === 6
+              ? {
+                  appeal_status: step6Appeal.appeal_status,
+                  appeal_resolved_date: step6Appeal.appeal_resolved_date,
+                  appeal_committee_decision: step6Appeal.appeal_committee_decision,
+                }
+              : null
+          }
+          projectAppealStatus={project.appeal_status ?? null}
         />
 
         {/* Detail panel */}
@@ -3726,6 +3960,8 @@ function ProjectDetailPage() {
                       note={note}
                       onNoteChange={setNote}
                       chronologicalCtx={timelineValidationCtx}
+                      highlightedComplianceIssues={highlightedComplianceIssues}
+                      complianceSubmitTriggered={complianceSubmitTriggered}
                     />
                   )}
                   {current.step_number === 8 && !isSpecificShortWorkflow && (
@@ -4131,13 +4367,25 @@ function ProjectDetailPage() {
                 const step6HasCommitteeOpinionReport =
                   current.step_number === 6 &&
                   hasStep6CommitteeDecisionDoc(uploadedTypes);
+                const step6HasBidderAppealLetter =
+                  current.step_number === 6 &&
+                  hasStep6BidderAppealLetterDoc(uploadedTypes);
+                const step6HasHeadAppealDecision =
+                  current.step_number === 6 &&
+                  hasStep6HeadAppealDecisionDoc(uploadedTypes);
+                const step6HasCgdSubmissionReport =
+                  current.step_number === 6 &&
+                  hasStep6CgdSubmissionReportDoc(uploadedTypes);
                 const step6ComplianceIssues =
                   current.step_number === 6
                     ? getStep6ComplianceIssues(
                         step6Appeal,
                         step6ChecklistNormalized,
                         {
+                          hasBidderAppealLetterDoc: step6HasBidderAppealLetter,
                           hasCommitteeOpinionReportDoc: step6HasCommitteeOpinionReport,
+                          hasHeadAppealDecisionDoc: step6HasHeadAppealDecision,
+                          hasCgdSubmissionReportDoc: step6HasCgdSubmissionReport,
                           step5NotificationDate,
                           stepDocs: docsForStep,
                           timelineCtx: timelineValidationCtx,
@@ -4151,7 +4399,10 @@ function ProjectDetailPage() {
                     step6Appeal,
                     step6ChecklistNormalized,
                     {
+                      hasBidderAppealLetterDoc: step6HasBidderAppealLetter,
                       hasCommitteeOpinionReportDoc: step6HasCommitteeOpinionReport,
+                      hasHeadAppealDecisionDoc: step6HasHeadAppealDecision,
+                      hasCgdSubmissionReportDoc: step6HasCgdSubmissionReport,
                       step5NotificationDate,
                       stepDocs: docsForStep,
                     },
@@ -4160,34 +4411,76 @@ function ProjectDetailPage() {
                 const step7HasContractNoticeLetterDoc =
                   current.step_number === 7 &&
                   docsForStep.some((d) => isStep7ContractNoticeLetterDocType(d.document_type));
+                const step7HasContractNoticeDeliveryProofDoc =
+                  current.step_number === 7 &&
+                  hasStep7ContractNoticeDeliveryProofDoc(
+                    docsForStep.map((d) => d.document_type),
+                  );
+                const step7HasContractDraftApprovalMemoDoc =
+                  current.step_number === 7 &&
+                  hasStep7ContractDraftApprovalMemoDoc(
+                    docsForStep.map((d) => d.document_type),
+                  );
+                const step7HasPerformanceBondDoc =
+                  current.step_number === 7 &&
+                  hasStep7PerformanceBondDoc(docsForStep.map((d) => d.document_type));
+                const step7HasAbandonmentReportDoc =
+                  current.step_number === 7 &&
+                  hasStep7AbandonmentReportDoc(docsForStep.map((d) => d.document_type));
+                const step7HasPerformanceBondExemptionDoc =
+                  current.step_number === 7 &&
+                  hasStep7PerformanceBondExemptionDoc(
+                    docsForStep.map((d) => d.document_type),
+                  );
+                const step7WinningAmount =
+                  resolveStep4ContractAmount(mergedStep4BidResult, project) ?? null;
+                const step7ComplianceOpts = {
+                  responsibleName: effectiveResponsibleName,
+                  appealDeadlineISO: step7AppealDeadlineISO,
+                  notificationDeadlineISO: step7NotificationDeadlineISO,
+                  hasContractNoticeLetterDoc: step7HasContractNoticeLetterDoc,
+                  hasContractNoticeDeliveryProofDoc: step7HasContractNoticeDeliveryProofDoc,
+                  hasContractDraftApprovalMemoDoc: step7HasContractDraftApprovalMemoDoc,
+                  hasPerformanceBondDoc: step7HasPerformanceBondDoc,
+                  hasPerformanceBondExemptionDoc: step7HasPerformanceBondExemptionDoc,
+                  hasAbandonmentReportDoc: step7HasAbandonmentReportDoc,
+                  winningProjectAmount: step7WinningAmount,
+                  stepDocs: docsForStep,
+                  timelineCtx: timelineValidationCtx,
+                };
                 const step7ComplianceIssues =
                   current.step_number === 7
                     ? getStep7ComplianceIssues(
                         step7ContractNotice,
                         genericManualChecklist,
-                        {
-                          responsibleName: effectiveResponsibleName,
-                          appealDeadlineISO: step7AppealDeadlineISO,
-                          notificationDeadlineISO: step7NotificationDeadlineISO,
-                          hasContractNoticeLetterDoc: step7HasContractNoticeLetterDoc,
-                          stepDocs: docsForStep,
-                          timelineCtx: timelineValidationCtx,
-                        },
+                        step7ComplianceOpts,
                       )
                     : [];
+                const step7BreachNoShow =
+                  current.step_number === 7 &&
+                  step7ContractNotice.notice_outcome === "breach_no_show";
                 const step7Ready =
                   current.step_number !== 7 ||
-                  isStep7ReadyForNext(
+                  (step7ContractNotice.notice_outcome === "proceed_to_sign" &&
+                    isStep7ReadyForNext(
+                      step7ContractNotice,
+                      genericManualChecklist,
+                      step7ComplianceOpts,
+                    ));
+                const step7BreachReady =
+                  step7BreachNoShow &&
+                  getStep7ComplianceIssues(
                     step7ContractNotice,
                     genericManualChecklist,
                     {
-                      responsibleName: effectiveResponsibleName,
-                      appealDeadlineISO: step7AppealDeadlineISO,
-                      notificationDeadlineISO: step7NotificationDeadlineISO,
-                      hasContractNoticeLetterDoc: step7HasContractNoticeLetterDoc,
-                      stepDocs: docsForStep,
+                      ...step7ComplianceOpts,
+                      hasContractNoticeLetterDoc: false,
+                      hasContractNoticeDeliveryProofDoc: false,
+                      hasContractDraftApprovalMemoDoc: false,
+                      hasPerformanceBondDoc: false,
+                      hasPerformanceBondExemptionDoc: false,
                     },
-                  );
+                  ).length === 0;
                 const step8ComplianceIssues =
                   current.step_number === 8
                     ? getStep8ComplianceIssues(
@@ -4410,7 +4703,10 @@ function ProjectDetailPage() {
                 const step6CoreDocsProgress =
                   current.step_number === 6
                     ? countStep6CoreDocumentsReady(step6Appeal.appeal_status ?? "", {
+                        hasBidderAppealLetterDoc: step6HasBidderAppealLetter,
                         hasCommitteeOpinionReportDoc: step6HasCommitteeOpinionReport,
+                        hasHeadAppealDecisionDoc: step6HasHeadAppealDecision,
+                        hasCgdSubmissionReportDoc: step6HasCgdSubmissionReport,
                       })
                     : null;
                 const step6FormProgress =
@@ -4542,6 +4838,21 @@ function ProjectDetailPage() {
                                       : [];
                 const appealBlocking =
                   current.step_number === 6 && isAppealBlocking(step6Appeal);
+                const step6PendingAppeal =
+                  current.step_number === 6 && step6Appeal.appeal_status === "pending";
+                const step6AppealVerdictUpheld =
+                  step6PendingAppeal && step6Appeal.appeal_committee_decision === "upheld";
+                const step6CanAdvanceAfterVerdict =
+                  !step6PendingAppeal ||
+                  step6Appeal.appeal_committee_decision === "not_upheld";
+                const showStep7BreachEndBtn =
+                  workflowMode === "current" &&
+                  !isCompleted &&
+                  step7BreachNoShow;
+                const showAppealVerdictActionBtns =
+                  workflowMode === "current" &&
+                  !isCompleted &&
+                  step6AppealVerdictUpheld;
                 if (current.step_number === 6) {
                   console.log("🔒 [APPEAL HARD LOCK STATE]:", {
                     isLocked: isAppealWorkflowLocked(step6Appeal),
@@ -4594,7 +4905,8 @@ function ProjectDetailPage() {
                 const disableHistoricalUnlock =
                   current.step_number === 1 && workflowStep > 1;
                 const showUnlockHistoricalEdit =
-                  workflowMode === "historical_readonly" && !disableHistoricalUnlock;
+                  workflowMode === "historical_readonly" &&
+                  !disableHistoricalUnlock;
                 const showCancelHistoricalEdit = workflowMode === "historical_edit";
                 const showSaveHistoricalChanges = canSaveHistoricalEdit(workflowMode);
                 const showReturnToCurrentStep =
@@ -4630,7 +4942,8 @@ function ProjectDetailPage() {
                         !reactiveChecklist.allDone &&
                         workflowMode === "current" &&
                         current.step_number !== 5 &&
-                        current.step_number !== 6
+                        current.step_number !== 6 &&
+                        current.step_number !== 7
                       }
                       progressPct={checklistProgressPct}
                       issues={complianceGateIssues}
@@ -4702,7 +5015,9 @@ function ProjectDetailPage() {
                             <ArrowRight className="h-4 w-4" />
                           </button>
                         )}
-                        {showCompleteBtn && (
+                        {showCompleteBtn &&
+                          (current.step_number !== 6 || step6CanAdvanceAfterVerdict) &&
+                          !step7BreachNoShow && (
                           <button
                             onClick={() => completeStep()}
                             disabled={disabled}
@@ -4711,12 +5026,51 @@ function ProjectDetailPage() {
                             <Check className="h-4 w-4" /> {completeBtnLabel}
                           </button>
                         )}
+                        {showStep7BreachEndBtn && (
+                          <button
+                            type="button"
+                            onClick={() => void handleStep7BreachEndProject()}
+                            disabled={!step7BreachReady || step7BreachEndLoading}
+                            className="h-10 px-4 rounded-md bg-destructive text-destructive-foreground text-sm font-semibold hover:bg-destructive/90 disabled:opacity-60 flex items-center gap-2 shadow-sm"
+                          >
+                            {step7BreachEndLoading ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : null}
+                            ❌ บันทึกสถานะเอกชนทิ้งงาน & ยุติโครงการ
+                          </button>
+                        )}
+                        {showAppealVerdictActionBtns && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => void handleAppealVerdictCancelProject()}
+                              disabled={appealVerdictCancelLoading || appealVerdictRollbackLoading}
+                              className="h-10 px-4 rounded-md bg-destructive text-destructive-foreground text-sm font-semibold hover:bg-destructive/90 disabled:opacity-60 flex items-center gap-2 shadow-sm"
+                            >
+                              {appealVerdictCancelLoading ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : null}
+                              ❌ จัดทำประกาศยกเลิกโครงการจัดซื้อจัดจ้างนี้
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void handleAppealVerdictRollbackToStep5()}
+                              disabled={appealVerdictCancelLoading || appealVerdictRollbackLoading}
+                              className="h-10 px-4 rounded-md bg-orange-600 text-white text-sm font-semibold hover:bg-orange-600/90 disabled:opacity-60 flex items-center gap-2 shadow-sm"
+                            >
+                              {appealVerdictRollbackLoading ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : null}
+                              🔄 ถอยกระบวนการกลับไปแก้ไขในขั้นตอนที่ 5
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
-                    {appealBlocking && !isCompleted && (
+                    {appealBlocking && !isCompleted && !step6AppealVerdictUpheld && (
                       <p className="text-sm text-amber-800 mt-3 font-medium rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
-                        ⚠️ มีผู้ยื่นอุทธรณ์ — ระบบล็อกการไปขั้นตอน 7–8 จนกว่าจะเลือกผลวินิจฉัย
-                        «อุทธรณ์ฟังไม่ขึ้น» (หรือเปลี่ยนเป็น «ไม่มีผู้ยื่นอุทธรณ์»)
+                        ⚠️ มีผู้ยื่นอุทธรณ์ — กรอกวันที่ผลวินิจฉัยและเลือก «อุทธรณ์ฟังไม่ขึ้น»
+                        เพื่อปลดล็อกและไปขั้นตอนที่ 7 (หรือเลือก «ฟังขึ้น» เพื่อยกเลิกโครงการ)
                       </p>
                     )}
                   </div>
@@ -5341,6 +5695,9 @@ function ProjectTimeline({
   step2Live = null,
   step8Live = null,
   step9Live = null,
+  step6Note = null,
+  step6Live = null,
+  projectAppealStatus = null,
 }: {
   projectId: string;
   project: Project;
@@ -5366,6 +5723,13 @@ function ProjectTimeline({
     contract_end_date?: string;
     egp_essential_publication_date?: string;
   } | null;
+  step6Note?: string | null;
+  step6Live?: {
+    appeal_status?: string;
+    appeal_resolved_date?: string;
+    appeal_committee_decision?: string;
+  } | null;
+  projectAppealStatus?: string | null;
 }) {
   const timelineNotes = useMemo(
     () => ({
@@ -5392,7 +5756,14 @@ function ProjectTimeline({
         step3Note,
         step3LiveAnnouncement,
         timelineNotes,
-        { step2Live, step8Live, step9Live },
+        {
+          step2Live,
+          step8Live,
+          step9Live,
+          step6Note,
+          step6Live,
+          projectAppealStatus,
+        },
       ),
     [
       projectId,
@@ -5426,6 +5797,11 @@ function ProjectTimeline({
       step9Live?.contract_duration_days,
       step9Live?.contract_end_date,
       step9Live?.egp_essential_publication_date,
+      step6Note,
+      step6Live?.appeal_status,
+      step6Live?.appeal_resolved_date,
+      step6Live?.appeal_committee_decision,
+      projectAppealStatus,
     ],
   );
 
@@ -5445,6 +5821,8 @@ function ProjectTimeline({
     estimated: boolean;
     isDone: boolean;
     internalBadge?: string;
+    isOnHold?: boolean;
+    holdLabel?: string;
   };
 
   const displayItems: DisplayItem[] = useMemo(() => {
@@ -5456,6 +5834,8 @@ function ProjectTimeline({
       estimated: it.estimated,
       isDone: it.isDone,
       internalBadge: it.internalBadge,
+      isOnHold: it.isOnHold,
+      holdLabel: it.holdLabel,
     }));
     if (!isSpecificTimeline) return base;
     return pruneTimelineForSpecificMethod(items).map((it) => {
@@ -5468,6 +5848,8 @@ function ProjectTimeline({
         estimated: it.estimated ?? false,
         isDone: full?.isDone ?? false,
         internalBadge: full?.internalBadge,
+        isOnHold: full?.isOnHold,
+        holdLabel: full?.holdLabel,
       };
     });
   }, [items, isSpecificTimeline]);
@@ -5511,12 +5893,30 @@ function ProjectTimeline({
     [displayItems],
   );
 
+  const hasTimelineHold = useMemo(
+    () => displayItems.some((it) => it.isOnHold),
+    [displayItems],
+  );
+
+  const hasWhatIfSimulation = useMemo(() => {
+    const status = step6Live?.appeal_status;
+    const resolved = step6Live?.appeal_resolved_date?.trim() ?? "";
+    const decision = step6Live?.appeal_committee_decision ?? "";
+    return status === "pending" && !!resolved && decision !== "upheld";
+  }, [
+    step6Live?.appeal_status,
+    step6Live?.appeal_resolved_date,
+    step6Live?.appeal_committee_decision,
+  ]);
+
   return (
     <div className="bg-card border rounded-[10px] p-5">
       <h3 className="font-semibold mb-2">ไทม์ไลน์โครงการ (Cascading Timeline)</h3>
       <p className="text-xs text-muted-foreground mb-4">
         วันที่จริงจากฟอร์มแต่ละขั้นตอน — ประมาณการคำนวณแบบลูกโซ่จากวันทำการมาตรฐาน
         {hasEstimatedDates && " • ปรับอัตโนมัติเมื่อแก้ไขวันที่ในฟอร์ม"}
+        {hasTimelineHold && " • ขั้นตอนที่ 7–10 ถูกระงับชั่วคราว (ติดอุทธรณ์)"}
+        {hasWhatIfSimulation && " • What-if: พยากรณ์จากวันที่สมมุติขั้น 6 (ยังไม่บันทึก DB)"}
       </p>
       <div className="overflow-x-auto">
         <div className="flex items-start gap-0 min-w-max pb-2">
@@ -5566,7 +5966,14 @@ function ProjectTimeline({
                     </span>
                   )}
                   <p className="text-[10px] mt-1.5 text-center px-0.5 leading-snug">
-                    {it.date ? (
+                    {it.isOnHold ? (
+                      <span
+                        className="inline-block rounded border border-orange-300 bg-orange-50 px-1 py-0.5 font-semibold text-orange-800 leading-tight"
+                        title="HOLD (รอผลวินิจฉัย)"
+                      >
+                        {it.holdLabel ?? "⚠️ ระงับชั่วคราว (ติดอุทธรณ์)"}
+                      </span>
+                    ) : it.date ? (
                       isStepCompleted && !it.estimated ? (
                         <span className="font-medium text-green-700/85">
                           วันที่จริง: {formatThaiDateSlash(it.date)}
@@ -5632,6 +6039,12 @@ function ProjectTimeline({
         <span className="flex items-center gap-1.5">
           <span className="h-2.5 w-2.5 rounded-full bg-blue-600 ring-1 ring-blue-300" />
           วันที่ประมาณการ
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="rounded border border-orange-300 bg-orange-50 px-1.5 py-0.5 text-[9px] font-semibold text-orange-800">
+            HOLD
+          </span>
+          ระงับชั่วคราว (ติดอุทธรณ์)
         </span>
         <span className="flex items-center gap-1.5">
           <span className="flex h-5 w-5 items-center justify-center rounded-full border border-slate-300 bg-white text-[7px] font-semibold text-slate-600">

@@ -243,6 +243,7 @@ export function getStep5TimelineDateFields(announcement: Step5Announcement): Ste
 }
 
 export function getStep6TimelineDateFields(appeal: Step6AppealState): StepDateField[] {
+  if (appeal.appeal_status !== "pending") return [];
   const received =
     appeal.appeal_received_date?.trim() ||
     appeal.appeal_report_approval_date?.trim() ||
@@ -254,9 +255,19 @@ export function getStep6TimelineDateFields(appeal: Step6AppealState): StepDateFi
       label: "วันที่หน่วยงานได้รับหนังสืออุทธรณ์",
     },
     {
+      id: "appeal_head_signed_date",
+      iso: appeal.appeal_head_signed_date ?? "",
+      label: "วันที่หัวหน้าหน่วยงานลงนามวินิจฉัยผลอุทธรณ์",
+    },
+    {
       id: "cgd_submission_date",
       iso: appeal.cgd_submission_date ?? "",
       label: "วันที่ส่งเรื่องให้กรมบัญชีกลาง",
+    },
+    {
+      id: "appeal_resolved_date",
+      iso: appeal.appeal_resolved_date ?? "",
+      label: "วันที่หน่วยงานได้รับหนังสือผลวินิจฉัยอุทธรณ์จากกรมบัญชีกลาง",
     },
   ];
 }
@@ -267,6 +278,16 @@ export function getStep7TimelineDateFields(contractNotice: Step7ContractNotice):
       id: "contract_notice_letter_date",
       iso: contractNotice.contract_notice_letter_date ?? "",
       label: "วันที่ในหนังสือเชิญลงนาม",
+    },
+    {
+      id: "actual_contract_signed_date",
+      iso: contractNotice.actual_contract_signed_date ?? "",
+      label: "วันที่ลงนามในสัญญาจริง",
+    },
+    {
+      id: "performance_bond_lg_expiry_date",
+      iso: contractNotice.performance_bond_lg_expiry_date ?? "",
+      label: "วันสิ้นสุดความคุ้มครองของหนังสือค้ำประกัน",
     },
     {
       id: "contractor_received_date",
@@ -404,7 +425,7 @@ export function getTimelineSaveBlockMessage(
         )?.message ?? null
       );
     case 6:
-      if (!input.appeal) return null;
+      if (!input.appeal || input.appeal.appeal_status !== "pending") return null;
       return (
         getFirstTimelineValidationIssue(
           6,

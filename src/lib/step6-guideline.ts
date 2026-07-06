@@ -66,22 +66,61 @@ export const STEP6_GUIDELINE_SCHEDULE_STATIC_ITEMS = [
 export const STEP6_HEAD_OPINION_DEADLINE_WORKDAYS = 5;
 export const STEP6_CGD_REPORT_AFTER_HEAD_WORKDAYS = 3;
 
-/** เดดไลน์ทำความเห็นเสนอหัวหน้าหน่วยงาน — นับจากวันรับหนังสืออุทธรณ์ + 5 วันทำการ */
+export const STEP6_CGD_LATE_SUBMISSION_MSG =
+  "⚠️ หมายเหตุ: วันที่ส่งรายงานเกินกรอบเวลา 3 วันทำการตามระเบียบฯ ข้อ 119 (โปรดเตรียมบันทึกเหตุผลความล่าช้ารองรับการตรวจของ สตง.)";
+
+/** เดดไลน์ทำความเห็นเสนอหัวหน้าหน่วยงาน — นับจากวันรับหนังสืออุทธรณ์ + 5 วันทำการ (ข้อ 118) */
 export function computeStep6HeadOpinionDeadlineISO(appealReceivedISO: string): string {
   const start = parseISODateLocal(appealReceivedISO?.trim() ?? "");
   if (!start) return "";
   return toISODate(addWorkdays(start, STEP6_HEAD_OPINION_DEADLINE_WORKDAYS));
 }
 
-/**
- * เดดไลน์ส่งรายงานกรมบัญชีกลาง — 3 วันทำการหลังวันสุดท้ายของกรอบทำความเห็นเสนอหัวหน้าหน่วยงาน
- * (ใช้เป็นกรอบวางแผนสูงสุดเมื่อยังไม่มีวันที่หัวหน้าลงนามจริงในฟอร์ม)
- */
+/** เดดไลน์ส่งรายงานกรมบัญชีกลาง — 3 วันทำการนับจากวันหัวหน้าลงนามวินิจฉัย (ข้อ 119) เท่านั้น */
+export function computeStep6CgdReportDeadlineFromHeadSignedISO(
+  headSignedISO: string,
+): string {
+  const start = parseISODateLocal(headSignedISO?.trim() ?? "");
+  if (!start) return "";
+  return toISODate(addWorkdays(start, STEP6_CGD_REPORT_AFTER_HEAD_WORKDAYS));
+}
+
+/** @deprecated ใช้ computeStep6CgdReportDeadlineFromHeadSignedISO */
 export function computeStep6CgdReportDeadlineISO(appealReceivedISO: string): string {
-  const headDeadlineISO = computeStep6HeadOpinionDeadlineISO(appealReceivedISO);
-  const anchor = parseISODateLocal(headDeadlineISO);
-  if (!anchor) return "";
-  return toISODate(addWorkdays(anchor, STEP6_CGD_REPORT_AFTER_HEAD_WORKDAYS));
+  return computeStep6CgdReportDeadlineFromHeadSignedISO(appealReceivedISO);
+}
+
+/** วันทำการแรกที่เลือกวันหัวหน้าลงนามได้ — หลังวันรับหนังสืออุทธรณ์ */
+export function computeStep6HeadSignedMinDateISO(appealReceivedISO: string): string {
+  const received = parseISODateLocal(appealReceivedISO?.trim() ?? "");
+  if (!received) return "";
+  const d = new Date(received.getTime());
+  d.setDate(d.getDate() + 1);
+  while (!isWorkday(d)) {
+    d.setDate(d.getDate() + 1);
+  }
+  return toISODate(d);
+}
+
+export function isStep6CgdSubmissionBeyondHeadDeadline(
+  headSignedISO: string,
+  cgdSubmissionISO: string,
+): boolean {
+  const deadline = computeStep6CgdReportDeadlineFromHeadSignedISO(headSignedISO);
+  if (!deadline || !cgdSubmissionISO?.trim()) return false;
+  return cgdSubmissionISO.trim() > deadline;
+}
+
+export function getStep6HeadOpinionDisplayLine(appealReceivedISO: string): string | null {
+  const deadline = computeStep6HeadOpinionDeadlineISO(appealReceivedISO);
+  if (!deadline) return null;
+  return `⏱️ เดดไลน์ต้องทำความเห็นเสนอหัวหน้าหน่วยงาน (5 วันทำการ): ภายในวันที่ ${formatThaiDateSlash(deadline)}`;
+}
+
+export function getStep6CgdReportDisplayLine(headSignedISO: string): string | null {
+  const deadline = computeStep6CgdReportDeadlineFromHeadSignedISO(headSignedISO);
+  if (!deadline) return null;
+  return `⏱️ เดดไลน์ต้องรายงานส่งกรมบัญชีกลาง (3 วันทำการนับจากวันหัวหน้าลงนาม): ภายในวันที่ ${formatThaiDateSlash(deadline)}`;
 }
 
 export type Step6AppealPendingTimeline = {
@@ -91,12 +130,16 @@ export type Step6AppealPendingTimeline = {
 
 export function computeStep6AppealPendingTimeline(
   appealReceivedISO: string,
+  headSignedISO?: string,
 ): Step6AppealPendingTimeline | null {
   const received = appealReceivedISO?.trim() ?? "";
   if (!received) return null;
   const headOpinionDeadlineISO = computeStep6HeadOpinionDeadlineISO(received);
-  const cgdReportDeadlineISO = computeStep6CgdReportDeadlineISO(received);
-  if (!headOpinionDeadlineISO || !cgdReportDeadlineISO) return null;
+  const signed = headSignedISO?.trim() ?? "";
+  const cgdReportDeadlineISO = signed
+    ? computeStep6CgdReportDeadlineFromHeadSignedISO(signed)
+    : "";
+  if (!headOpinionDeadlineISO) return null;
   return { headOpinionDeadlineISO, cgdReportDeadlineISO };
 }
 
@@ -106,7 +149,9 @@ export function getStep6AppealPendingTimelineDisplayLines(
   if (!timeline) return null;
   return {
     headOpinionLine: `⏱️ เดดไลน์ต้องทำความเห็นเสนอหัวหน้าหน่วยงาน (5 วันทำการ): ภายในวันที่ ${formatThaiDateSlash(timeline.headOpinionDeadlineISO)}`,
-    cgdReportLine: `⏱️ เดดไลน์ต้องรายงานส่งกรมบัญชีกลาง (3 วันทำการหลังหัวหน้าลงนาม): ภายในวันที่ ${formatThaiDateSlash(timeline.cgdReportDeadlineISO)}`,
+    cgdReportLine: timeline.cgdReportDeadlineISO
+      ? `⏱️ เดดไลน์ต้องรายงานส่งกรมบัญชีกลาง (3 วันทำการนับจากวันหัวหน้าลงนาม): ภายในวันที่ ${formatThaiDateSlash(timeline.cgdReportDeadlineISO)}`
+      : "",
   };
 }
 
@@ -119,7 +164,6 @@ export const STEP6_SCHEDULE_INCOMPLETE_MSG =
 export const STEP6_CONTRACT_EARLIEST_CALC_NOTE =
   "คำนวณเว้นวันหยุดราชการแล้ว";
 
-/** ข้อความแบนเนอร์เตือนเมื่อมีผู้ยื่นอุทธรณ์ */
 export const STEP6_APPEAL_ACTIVE_BANNER_MSG =
   "⚠️ มีการยื่นอุทธรณ์เข้ามาในระบบ ห้ามลงนามในสัญญาเด็ดขาดตามมาตรา 66 วรรคสอง และต้องทำหนังสือส่งรายงานความเห็นให้กรมบัญชีกลางภายในกรอบเวลากฎหมาย";
 

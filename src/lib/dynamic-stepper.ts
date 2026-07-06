@@ -1,6 +1,7 @@
 import { clampStep, EGP_MILESTONES, EGP_MILESTONE_SHORT } from "@/lib/egp-milestones";
 import {
   canNavigateToWorkflowUiStep,
+  WORKFLOW_TOTAL_STEPS,
 } from "@/lib/step-workflow";
 
 /** วิธีเฉพาะเจาะจง — แสดง 5 ขั้นตอนบน UI แต่บันทึกลง procurement_steps เดิม */
@@ -226,9 +227,18 @@ export function canNavigateToUiStep(
   targetUiStep: number,
   currentBackendStep: number,
   method: string | null | undefined,
+  options?: { appealStepperLocked?: boolean },
 ): boolean {
   const total = getWorkflowDisplayStepCount(method);
   const workflowUi = backendStepToUiStep(currentBackendStep, method);
+  if (
+    options?.appealStepperLocked &&
+    !isSpecificMethodShortWorkflow(method) &&
+    targetUiStep >= 7 &&
+    targetUiStep <= WORKFLOW_TOTAL_STEPS
+  ) {
+    return false;
+  }
   return canNavigateToWorkflowUiStep(targetUiStep, workflowUi, total);
 }
 

@@ -1,4 +1,4 @@
-import { STEP2_DOC, STEP3_DOC, STEP4_DOC, STEP5_DOC, STEP6_DOC } from "@/lib/step-doc-types";
+import { STEP2_DOC, STEP3_DOC, STEP4_DOC, STEP5_DOC, STEP6_DOC, STEP7_DOC } from "@/lib/step-doc-types";
 
 export const COMPLIANCE_TARGET_ATTR = "data-compliance-target";
 
@@ -25,7 +25,15 @@ const COMPLIANCE_ISSUE_TO_DOC_TYPE: Record<string, string> = {
   physical_board_doc: STEP5_DOC.PHYSICAL_BOARD_ANNOUNCEMENT,
   committee_opinion_report_doc: STEP6_DOC.COMMITTEE_DECISION_LETTER,
   bidder_appeal_letter_doc: STEP6_DOC.BIDDER_APPEAL_LETTER,
+  head_appeal_decision_doc: STEP6_DOC.HEAD_APPEAL_DECISION_LETTER,
+  cgd_submission_report_doc: STEP6_DOC.CGD_SUBMISSION_REPORT_LETTER,
   agency_opinion_cgd_doc: STEP6_DOC.AGENCY_OPINION_CGD_LETTER,
+  contract_notice_letter_doc: STEP7_DOC.CONTRACT_NOTICE_LETTER,
+  contract_notice_delivery_proof_doc: STEP7_DOC.CONTRACT_NOTICE_DELIVERY_PROOF,
+  contract_draft_approval_memo_doc: STEP7_DOC.CONTRACT_DRAFT_APPROVAL_MEMO,
+  performance_bond_doc: STEP7_DOC.PERFORMANCE_BOND_LETTER,
+  performance_bond_exemption_doc: STEP7_DOC.PERFORMANCE_BOND_EXEMPTION_MEMO,
+  abandonment_report_doc: STEP7_DOC.ABANDONMENT_REPORT_MEMO,
 };
 
 const DOC_TYPE_TO_COMPLIANCE_TARGET: Record<string, string> = {
@@ -46,7 +54,15 @@ const DOC_TYPE_TO_COMPLIANCE_TARGET: Record<string, string> = {
   [STEP5_DOC.PHYSICAL_BOARD_ANNOUNCEMENT]: "physical_board_doc",
   [STEP6_DOC.COMMITTEE_DECISION_LETTER]: "committee_opinion_report_doc",
   [STEP6_DOC.BIDDER_APPEAL_LETTER]: "bidder_appeal_letter_doc",
+  [STEP6_DOC.HEAD_APPEAL_DECISION_LETTER]: "head_appeal_decision_doc",
+  [STEP6_DOC.CGD_SUBMISSION_REPORT_LETTER]: "cgd_submission_report_doc",
   [STEP6_DOC.AGENCY_OPINION_CGD_LETTER]: "agency_opinion_cgd_doc",
+  [STEP7_DOC.CONTRACT_NOTICE_LETTER]: "contract_notice_letter_doc",
+  [STEP7_DOC.CONTRACT_NOTICE_DELIVERY_PROOF]: "contract_notice_delivery_proof_doc",
+  [STEP7_DOC.CONTRACT_DRAFT_APPROVAL_MEMO]: "contract_draft_approval_memo_doc",
+  [STEP7_DOC.PERFORMANCE_BOND_LETTER]: "performance_bond_doc",
+  [STEP7_DOC.PERFORMANCE_BOND_EXEMPTION_MEMO]: "performance_bond_exemption_doc",
+  [STEP7_DOC.ABANDONMENT_REPORT_MEMO]: "abandonment_report_doc",
 };
 
 const ISSUE_ID_ALIASES: Record<string, string> = {
@@ -55,6 +71,7 @@ const ISSUE_ID_ALIASES: Record<string, string> = {
   procurement_request_approval_before_publication_end: "procurement_request_approval_date",
   evaluation_committee_text: "evaluation_committee_members",
   inspection_committee_text: "inspection_committee_members",
+  performance_bond_amount_min: "performance_bond_amount",
 };
 
 export function mapRequiredDocToComplianceTarget(documentType: string): string {
@@ -77,7 +94,8 @@ export function resolveDocTypeFromComplianceIssue(issueIdOrDocType: string): str
     Object.values(STEP3_DOC).includes(issueIdOrDocType as (typeof STEP3_DOC)[keyof typeof STEP3_DOC]) ||
     Object.values(STEP4_DOC).includes(issueIdOrDocType as (typeof STEP4_DOC)[keyof typeof STEP4_DOC]) ||
     Object.values(STEP2_DOC).includes(issueIdOrDocType as (typeof STEP2_DOC)[keyof typeof STEP2_DOC]) ||
-    Object.values(STEP6_DOC).includes(issueIdOrDocType as (typeof STEP6_DOC)[keyof typeof STEP6_DOC])
+    Object.values(STEP6_DOC).includes(issueIdOrDocType as (typeof STEP6_DOC)[keyof typeof STEP6_DOC]) ||
+    Object.values(STEP7_DOC).includes(issueIdOrDocType as (typeof STEP7_DOC)[keyof typeof STEP7_DOC])
   ) {
     return issueIdOrDocType;
   }

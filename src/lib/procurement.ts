@@ -61,14 +61,21 @@ export const STEP_DOCS_DETAILED: DocItem[][] = [
   [
     { name: STEP6_DOC.NO_APPEAL_EGP_SCREENSHOT, required: false },
     { name: STEP6_DOC.BIDDER_APPEAL_LETTER, required: false },
-    { name: STEP6_DOC.AGENCY_OPINION_CGD_LETTER, required: false },
     { name: STEP6_DOC.COMMITTEE_DECISION_LETTER, required: false },
+    { name: STEP6_DOC.HEAD_APPEAL_DECISION_LETTER, required: false },
+    { name: STEP6_DOC.CGD_SUBMISSION_REPORT_LETTER, required: false },
+    { name: STEP6_DOC.AGENCY_OPINION_CGD_LETTER, required: false },
     { name: STEP6_DOC.AGENCY_APPEAL_REPORT, required: false },
     { name: STEP6_DOC.CGD_APPEAL_REPORT, required: false },
   ],
   [
-    { name: STEP7_DOC.CONTRACT_NOTICE_LETTER, required: true },
+    { name: STEP7_DOC.CONTRACT_NOTICE_LETTER, required: false },
     { name: STEP7_DOC.CONTRACT_NOTICE_DELIVERY_PROOF, required: false },
+    { name: STEP7_DOC.CONTRACT_DRAFT_APPROVAL_MEMO, required: false },
+    { name: STEP7_DOC.PERFORMANCE_BOND_LETTER, required: false },
+    { name: STEP7_DOC.PERFORMANCE_BOND_EXEMPTION_MEMO, required: false },
+    { name: STEP7_DOC.ABANDONMENT_REPORT_MEMO, required: false },
+    { name: STEP7_DOC.DRAFT_CONTRACT, required: false },
   ],
   [
     { name: STEP8_DOC.GUARANTEE_VERIFICATION, required: true },
@@ -101,6 +108,7 @@ export const STATUS_LABEL: Record<string, string> = {
   completed: "เสร็จสิ้น",
   warranty: "ปิดงานจ้างสำเร็จ (อยู่ระหว่างค้ำประกันความชำรุด 2 ปี)",
   cancelled: "ยกเลิก",
+  contract_breach_cancelled: "เอกชนทิ้งงาน (มาตรา 109)",
   on_hold: "พักการดำเนินการ",
 };
 

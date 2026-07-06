@@ -100,6 +100,14 @@ export function isWorkflowReadOnly(mode: StepWorkflowMode): boolean {
   return mode === "historical_readonly";
 }
 
+/** กระดาษทด — ดูขั้น 7–10 ล่วงหน้าขณะ workflow ยังอยู่ขั้น 6 */
+export function isScratchpadPreviewStep(
+  viewedBackendStep: number,
+  currentBackendStep: number,
+): boolean {
+  return currentBackendStep === 6 && viewedBackendStep > 6;
+}
+
 export function canCompleteWorkflowStep(
   viewedStep: number,
   currentWorkflowStep: number,

@@ -12,6 +12,9 @@ import {
 /** สถานะโครงการ — หลังปิดงานจ้าง อยู่ระหว่างค้ำประกัน 2 ปี */
 export const PROJECT_STATUS_WARRANTY = "warranty";
 
+/** สถานะโครงการ — ผู้ชนะไม่มาลงนามสัญญา (มาตรา 109) */
+export const PROJECT_STATUS_CONTRACT_BREACH_CANCELLED = "contract_breach_cancelled";
+
 export const PROJECT_WARRANTY_STATUS_LABEL =
   "ปิดงานจ้างสำเร็จ (อยู่ระหว่างค้ำประกันความชำรุด 2 ปี)";
 

@@ -287,11 +287,17 @@ export const STEP6_DOC = {
   NO_APPEAL_EGP_SCREENSHOT: "ภาพหน้าจอตรวจสอบสถานะอุทธรณ์จากระบบ e-GP",
   /** เคสมีผู้ยื่นอุทธรณ์ — หนังสือจากผู้ประกอบการ */
   BIDDER_APPEAL_LETTER: "หนังสืออุทธรณ์จากผู้ประกอบการ (PDF)",
-  /** เคสมีผู้ยื่นอุทธรณ์ — รายงานหน่วยงาน + ส่ง กบง. รวมไฟล์เดียว */
+  /** เคสมีผู้ยื่นอุทธรณ์ — รายงานความเห็นคณะกรรมการ */
+  COMMITTEE_DECISION_LETTER: "รายงานความเห็นของคณะกรรมการ (PDF)",
+  /** เคสมีผู้ยื่นอุทธรณ์ — คำวินิจฉัยหัวหน้าหน่วยงาน */
+  HEAD_APPEAL_DECISION_LETTER: "เอกสารคำวินิจฉัยผลอุทธรณ์ของหัวหน้าหน่วยงาน (PDF)",
+  /** เคสมีผู้ยื่นอุทธรณ์ — หนังสือส่งรายงานให้กรมบัญชีกลาง */
+  CGD_SUBMISSION_REPORT_LETTER: "หนังสือรายงานส่งกรมบัญชีกลาง (PDF)",
+  /** @deprecated รวมหน่วยงาน+กค. — ใช้ CGD_SUBMISSION_REPORT_LETTER */
   AGENCY_OPINION_CGD_LETTER:
     "รายงานความเห็นของหน่วยงาน + หนังสือส่งกรมบัญชีกลาง (PDF)",
-  /** เคสมีผู้ยื่นอุทธรณ์ — ผลวินิจฉัยคณะกรรมการ (ไม่บังคับช่วงแรก) */
-  COMMITTEE_DECISION_LETTER:
+  /** @deprecated ชื่อเก่า — ผลวินิจฉัยคณะกรรมการ */
+  LEGACY_COMMITTEE_VERDICT_LETTER:
     "หนังสือแจ้งผลการวินิจฉัยจากคณะกรรมการพิจารณาอุทธรณ์ (PDF)",
   /** @deprecated เคสมีผู้ยื่นอุทธรณ์ — รายงานหน่วยงาน */
   AGENCY_APPEAL_REPORT: "หนังสือรายงานผลการพิจารณาอุทธรณ์ของหน่วยงาน (PDF)",
@@ -324,6 +330,17 @@ export function isStep6CommitteeDecisionDocType(documentType: string): boolean {
   return documentType === STEP6_DOC.COMMITTEE_DECISION_LETTER;
 }
 
+export function isStep6HeadAppealDecisionDocType(documentType: string): boolean {
+  return documentType === STEP6_DOC.HEAD_APPEAL_DECISION_LETTER;
+}
+
+export function isStep6CgdSubmissionReportDocType(documentType: string): boolean {
+  return (
+    documentType === STEP6_DOC.CGD_SUBMISSION_REPORT_LETTER ||
+    documentType === STEP6_DOC.CGD_APPEAL_REPORT
+  );
+}
+
 export function isStep6AgencyReportDocType(documentType: string): boolean {
   return (
     documentType === STEP6_DOC.AGENCY_APPEAL_REPORT ||
@@ -346,6 +363,14 @@ export const STEP7_DOC = {
   CONTRACT_NOTICE_DELIVERY_PROOF: "หลักฐานการนำส่งหรือตอบรับหนังสือแจ้งทำสัญญา",
   /** ร่างสัญญาจ้างก่อสร้าง — เตรียมก่อนลงนาม */
   DRAFT_CONTRACT: "ร่างสัญญาจ้างก่อสร้าง",
+  /** หลักประกันสัญญา — ขั้นตอนที่ 7 (ก่อนลงนาม) */
+  PERFORMANCE_BOND_LETTER: "ไฟล์เอกสารหลักประกันสัญญา (PDF)",
+  /** บันทึกขออนุมัติร่างสัญญา — Audit Trail สตง. */
+  CONTRACT_DRAFT_APPROVAL_MEMO: "บันทึกขออนุมัติร่างสัญญาและผลการพิจารณา (PDF)",
+  /** บันทึกขอยกเว้นหลักประกันสัญญา — Audit Trail สตง. */
+  PERFORMANCE_BOND_EXEMPTION_MEMO: "บันทึกขออนุมัติยกเว้นหลักประกันสัญญา",
+  /** รายงานผู้ทิ้งงาน — มาตรา 109 */
+  ABANDONMENT_REPORT_MEMO: "หนังสือรายงานเสนอผู้ทิ้งงานส่งกรมบัญชีกลาง (PDF)",
 } as const;
 
 export const STEP7_DRAFT_CONTRACT_UPLOAD_LABEL =
@@ -356,6 +381,15 @@ export const STEP7_CONTRACT_NOTICE_LETTER_UPLOAD_LABEL =
 
 export const STEP7_CONTRACT_NOTICE_DELIVERY_PROOF_UPLOAD_LABEL =
   "📎 หลักฐานการส่ง/ใบตอบรับไปรษณีย์ (PDF/Image)";
+
+export const STEP7_CONTRACT_DRAFT_APPROVAL_MEMO_UPLOAD_LABEL =
+  "📎 บันทึกขออนุมัติร่างสัญญาและผลการพิจารณา (PDF)";
+
+export const STEP7_CONTRACT_DRAFT_APPROVAL_MEMO_DESCRIPTION =
+  "บันทึกข้อความภายในที่หัวหน้าหน่วยงานลงนามอนุมัติร่างสัญญา";
+
+export const STEP7_PERFORMANCE_BOND_EXEMPTION_MEMO_UPLOAD_LABEL =
+  "📎 บันทึกขออนุมัติยกเว้นหลักประกันสัญญา (PDF)";
 
 /** @deprecated ชื่อเอกสารเก่าใน DB */
 export const STEP7_DOC_LEGACY = {
@@ -370,6 +404,26 @@ export function isStep7DraftContractDocType(documentType: string): boolean {
 
 export function isStep7ContractNoticeLetterDocType(documentType: string): boolean {
   return documentType === STEP7_DOC.CONTRACT_NOTICE_LETTER;
+}
+
+export function isStep7ContractNoticeDeliveryProofDocType(documentType: string): boolean {
+  return documentType === STEP7_DOC.CONTRACT_NOTICE_DELIVERY_PROOF;
+}
+
+export function isStep7ContractDraftApprovalMemoDocType(documentType: string): boolean {
+  return documentType === STEP7_DOC.CONTRACT_DRAFT_APPROVAL_MEMO;
+}
+
+export function isStep7PerformanceBondExemptionMemoDocType(documentType: string): boolean {
+  return documentType === STEP7_DOC.PERFORMANCE_BOND_EXEMPTION_MEMO;
+}
+
+export function isStep7PerformanceBondDocType(documentType: string): boolean {
+  return documentType === STEP7_DOC.PERFORMANCE_BOND_LETTER;
+}
+
+export function isStep7AbandonmentReportDocType(documentType: string): boolean {
+  return documentType === STEP7_DOC.ABANDONMENT_REPORT_MEMO;
 }
 
 /** ประเภทเอกสารขั้นตอนที่ 8 — ตรวจหลักประกันและลงนามสัญญา */

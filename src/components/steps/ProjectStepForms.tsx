@@ -72,6 +72,9 @@ import {
   STEP7_DOC,
   STEP7_CONTRACT_NOTICE_LETTER_UPLOAD_LABEL,
   STEP7_CONTRACT_NOTICE_DELIVERY_PROOF_UPLOAD_LABEL,
+  STEP7_CONTRACT_DRAFT_APPROVAL_MEMO_UPLOAD_LABEL,
+  STEP7_CONTRACT_DRAFT_APPROVAL_MEMO_DESCRIPTION,
+  STEP7_PERFORMANCE_BOND_EXEMPTION_MEMO_UPLOAD_LABEL,
   STEP8_DOC,
   STEP9_DOC,
 } from "@/lib/step-doc-types";
@@ -208,6 +211,8 @@ import {
   isAppealReceivedBeforeStep5Notification,
   STEP6_APPEAL_RECEIVED_BEFORE_STEP5_MSG,
   STEP6_APPEAL_STATUS_INLINE_ERROR_MSG,
+  APPEAL_COMMITTEE_DECISION_OPTIONS,
+  isAppealStepperAndTimelineLocked,
   computeStep6AppealReceivedMinDateISO,
   isStep6AppealReceivedDateBeforeMin,
   getStep6AppealReceivedDateTooEarlyMsg,
@@ -215,6 +220,16 @@ import {
   type Step5Checklist,
   type Step5ChecklistKey,
   type Step7ContractNotice,
+  STEP7_NOTICE_OUTCOME_OPTIONS,
+  STEP7_PERFORMANCE_BOND_TYPE_OPTIONS,
+  STEP7_PERFORMANCE_BOND_BELOW_MINIMUM_MSG,
+  STEP7_SIGNING_DEADLINE_EXTENSION_REQUIRED_MSG,
+  STEP7_PERFORMANCE_BOND_COLLECTION_REQUIRED_MSG,
+  STEP7_NOTICE_OUTCOME_REQUIRED_MSG,
+  isStep7PerformanceBondBelowMinimum,
+  type Step7NoticeOutcome,
+  type Step7PerformanceBondCollection,
+  type Step7EgpSyncStatus,
   type Step8ContractExecution,
   type Step8GuaranteeType,
   STEP8_GUARANTEE_TYPE_UI_OPTIONS,
@@ -333,8 +348,13 @@ import {
   computeContractEarliestFromAppealDeadlineISO,
   computeContractNotificationDeadlineISO,
   computeStep7ContractSigningDeadlineISO,
+  computeStep7SigningDeadlineCalendarCapISO,
+  computeStep7NoticeLetterMinDateISO,
   CONTRACT_NOTIFICATION_WORKDAYS,
   STEP7_CONTRACT_SIGNING_DEADLINE_WORKDAYS,
+  STEP7_CONTRACT_SIGNING_DEADLINE_CALENDAR_DAYS,
+  STEP7_NOTICE_MIN_DATE_ISO,
+  isStep7SigningDeadlineBeyondStandard,
 } from "@/lib/workdays";
 import type { DocItem } from "@/lib/procurement";
 import { StepInlineDocList } from "@/components/steps/StepInlineDocList";
@@ -343,8 +363,11 @@ import { FieldLabelTooltip } from "@/components/FieldLabelTooltip";
 import { getFieldTooltip, type FieldTooltipKey } from "@/constants/tooltips";
 import {
   STEP6_APPEAL_ACTIVE_BANNER_MSG,
-  computeStep6AppealPendingTimeline,
-  getStep6AppealPendingTimelineDisplayLines,
+  computeStep6HeadSignedMinDateISO,
+  getStep6HeadOpinionDisplayLine,
+  getStep6CgdReportDisplayLine,
+  isStep6CgdSubmissionBeyondHeadDeadline,
+  STEP6_CGD_LATE_SUBMISSION_MSG,
 } from "@/lib/step6-guideline";
 import {
   STEP8_GUARANTEE_BELOW_MINIMUM_MSG,
@@ -3806,11 +3829,13 @@ type Step6AppealFormProps = {
 const CLEAR_PENDING_APPEAL_FIELDS: Partial<Step6AppealState> = {
   appeal_bidder_name: "",
   appeal_received_date: "",
+  appeal_head_signed_date: "",
   appeal_report_letter_no: "",
   appeal_head_opinion: "",
   cgd_submission_letter_no: "",
   cgd_submission_date: "",
   appeal_committee_decision: "",
+  appeal_resolved_date: "",
   appeal_report_approval_date: "",
   appeal_consideration_status: "",
 };
@@ -3859,12 +3884,20 @@ export function Step6AppealForm({
   const appealReceivedDateErrorMsg = getStep6AppealReceivedDateTooEarlyMsg(
     step5NotificationDate,
   );
-  const step6PendingTimelineLines = useMemo(() => {
-    if (!receivedDate || receivedBeforeMin || receivedBeforeStep5) return null;
-    return getStep6AppealPendingTimelineDisplayLines(
-      computeStep6AppealPendingTimeline(receivedDate),
-    );
-  }, [receivedDate, receivedBeforeMin, receivedBeforeStep5]);
+  const headSignedDate = appeal.appeal_head_signed_date?.trim() ?? "";
+  const headSignedMinDate = receivedDate
+    ? computeStep6HeadSignedMinDateISO(receivedDate)
+    : "";
+  const headOpinionLine =
+    receivedDate && !receivedBeforeMin && !receivedBeforeStep5
+      ? getStep6HeadOpinionDisplayLine(receivedDate)
+      : null;
+  const cgdReportLine = headSignedDate ? getStep6CgdReportDisplayLine(headSignedDate) : null;
+  const cgdSubmissionDate = appeal.cgd_submission_date?.trim() ?? "";
+  const cgdSubmissionLate =
+    !!headSignedDate &&
+    !!cgdSubmissionDate &&
+    isStep6CgdSubmissionBeyondHeadDeadline(headSignedDate, cgdSubmissionDate);
   const bidderSuggestions = normalizeStep4Bidders(step4Bidders)
     .map((b) => b.company_name.trim())
     .filter(Boolean);
@@ -3934,7 +3967,13 @@ export function Step6AppealForm({
                 type="radio"
                 name="step6_appeal"
                 checked={appeal.appeal_status === "pending"}
-                onChange={() => onAppealChange({ appeal_status: "pending" })}
+                onChange={() =>
+                  onAppealChange({
+                    appeal_status: "pending",
+                    appeal_committee_decision: "",
+                    appeal_resolved_date: "",
+                  })
+                }
                 className="mt-0.5 h-4 w-4"
               />
               มีผู้ยื่นอุทธรณ์ผลการจัดซื้อจัดจ้าง
@@ -3986,7 +4025,7 @@ export function Step6AppealForm({
         {appeal.appeal_status === "pending" && (
           <div className="space-y-4 rounded-md border border-amber-300/50 bg-amber-50/50 p-4 animate-in fade-in slide-in-from-top-2 duration-300">
             <p className="text-sm font-medium text-amber-900">
-              มีผู้ยื่นอุทธรณ์ — กรุณากรอกข้อมูลบังคับและแนบรายงานความเห็นของคณะกรรมการ
+              มีผู้ยื่นอุทธรณ์ — กรอกข้อมูลบังคับ 9 รายการตามลำดับนิติสัมพันธ์ (ระเบียบฯ ข้อ 118–119)
             </p>
 
             <FieldRow
@@ -4065,14 +4104,12 @@ export function Step6AppealForm({
                     {STEP6_APPEAL_RECEIVED_BEFORE_STEP5_MSG}
                   </p>
                 )}
-                {step6PendingTimelineLines && (
+                {headOpinionLine && (
                   <div
-                    key={receivedDate}
-                    className="rounded-md border border-blue-200/80 bg-blue-50/50 px-3 py-3 space-y-1.5 text-sm text-foreground/90 leading-relaxed mt-2"
+                    className="rounded-md border border-blue-200/80 bg-blue-50/50 px-3 py-2.5 text-sm text-foreground/90 leading-relaxed mt-2"
                     aria-live="polite"
                   >
-                    <p className="font-medium">{step6PendingTimelineLines.headOpinionLine}</p>
-                    <p className="text-foreground/90">{step6PendingTimelineLines.cgdReportLine}</p>
+                    <p className="font-medium">{headOpinionLine}</p>
                   </div>
                 )}
                 <ComplianceFieldError
@@ -4089,24 +4126,22 @@ export function Step6AppealForm({
             <FieldRow
               label={
                 <>
-                  เลขที่หนังสือรายงานความเห็นเสนอหัวหน้าหน่วยงาน{" "}
+                  หนังสืออุทธรณ์จากผู้ประกอบการ (PDF){" "}
                   <span className="text-destructive">*</span>
                 </>
               }
-              tooltipKey="step6.appeal_report_letter_no"
-              complianceTarget="appeal_report_letter_no"
+              complianceTarget="bidder_appeal_letter_doc"
             >
-              <input
-                value={appeal.appeal_report_letter_no ?? ""}
-                onChange={(e) => onAppealChange({ appeal_report_letter_no: e.target.value })}
-                placeholder="เช่น กษ ๐๖๐๒ / ๔๕๖"
-                className={complianceHighlightInputCls(
-                  inputCls,
-                  fieldHighlighted("appeal_report_letter_no"),
-                )}
-                disabled={readOnly}
+              <InlineDocUpload
+                project={docBinder.project}
+                stepNumber={docBinder.stepNumber}
+                documentType={STEP6_DOC.BIDDER_APPEAL_LETTER}
+                label="📎 แนบหนังสืออุทธรณ์จากผู้ประกอบการ (PDF)"
+                existing={docBinder.docs}
+                onChange={docBinder.onDocsChange}
+                readOnly={readOnly}
               />
-              <ComplianceFieldError show={fieldHighlighted("appeal_report_letter_no")} />
+              <ComplianceFieldError show={fieldHighlighted("bidder_appeal_letter_doc")} />
             </FieldRow>
 
             <FieldRow
@@ -4118,9 +4153,6 @@ export function Step6AppealForm({
               }
               complianceTarget="committee_opinion_report_doc"
             >
-              <p className="text-xs text-muted-foreground mb-2">
-                แนบไฟล์ PDF รายงานความเห็นของคณะกรรมการพิจารณาอุทธรณ์
-              </p>
               <InlineDocUpload
                 project={docBinder.project}
                 stepNumber={docBinder.stepNumber}
@@ -4132,9 +4164,241 @@ export function Step6AppealForm({
               />
               <ComplianceFieldError show={fieldHighlighted("committee_opinion_report_doc")} />
             </FieldRow>
+
+            <FieldRow
+              label={
+                <>
+                  วันที่หัวหน้าหน่วยงานลงนามวินิจฉัยผลอุทธรณ์{" "}
+                  <span className="text-destructive">*</span>
+                </>
+              }
+              complianceTarget="appeal_head_signed_date"
+            >
+              <div className="space-y-1">
+                <ThaiDatePicker
+                  minDate={headSignedMinDate || undefined}
+                  value={headSignedDate}
+                  onChange={(v) => onAppealChange({ appeal_head_signed_date: v })}
+                  disabled={readOnly || !receivedDate}
+                  workdaysOnly
+                  className={complianceHighlightInputCls(
+                    inputCls,
+                    fieldHighlighted("appeal_head_signed_date") ||
+                      fieldHighlighted("appeal_head_signed_date_min"),
+                  )}
+                />
+                {headSignedMinDate && receivedDate && (
+                  <p className="text-xs text-muted-foreground">
+                    เลือกได้ตั้งแต่วันถัดจากวันรับหนังสืออุทธรณ์ (
+                    {formatThaiDateSlash(headSignedMinDate)}) เป็นต้นไป
+                  </p>
+                )}
+                {cgdReportLine && (
+                  <div
+                    className="rounded-md border border-blue-200/80 bg-blue-50/50 px-3 py-2.5 text-sm text-foreground/90 leading-relaxed mt-2"
+                    aria-live="polite"
+                  >
+                    <p className="font-medium">{cgdReportLine}</p>
+                  </div>
+                )}
+                <ComplianceFieldError
+                  show={
+                    fieldHighlighted("appeal_head_signed_date") ||
+                    fieldHighlighted("appeal_head_signed_date_min")
+                  }
+                />
+              </div>
+            </FieldRow>
+
+            <FieldRow
+              label={
+                <>
+                  เอกสารคำวินิจฉัยผลอุทธรณ์ของหัวหน้าหน่วยงาน (PDF){" "}
+                  <span className="text-destructive">*</span>
+                </>
+              }
+              complianceTarget="head_appeal_decision_doc"
+            >
+              <InlineDocUpload
+                project={docBinder.project}
+                stepNumber={docBinder.stepNumber}
+                documentType={STEP6_DOC.HEAD_APPEAL_DECISION_LETTER}
+                label="📎 แนบคำวินิจฉัยผลอุทธรณ์ของหัวหน้าหน่วยงาน (PDF)"
+                existing={docBinder.docs}
+                onChange={docBinder.onDocsChange}
+                readOnly={readOnly}
+              />
+              <ComplianceFieldError show={fieldHighlighted("head_appeal_decision_doc")} />
+            </FieldRow>
+
+            <FieldRow
+              label={
+                <>
+                  เลขที่หนังสือรายงานส่งกรมบัญชีกลาง{" "}
+                  <span className="text-destructive">*</span>
+                </>
+              }
+              complianceTarget="cgd_submission_letter_no"
+            >
+              <input
+                value={appeal.cgd_submission_letter_no ?? ""}
+                onChange={(e) => onAppealChange({ cgd_submission_letter_no: e.target.value })}
+                placeholder="เช่น กษ ๐๖๐๓ / ๑๒๓"
+                className={complianceHighlightInputCls(
+                  inputCls,
+                  fieldHighlighted("cgd_submission_letter_no"),
+                )}
+                disabled={readOnly}
+              />
+              <ComplianceFieldError show={fieldHighlighted("cgd_submission_letter_no")} />
+            </FieldRow>
+
+            <FieldRow
+              label={
+                <>
+                  วันที่ส่งรายงานให้กรมบัญชีกลาง <span className="text-destructive">*</span>
+                </>
+              }
+              complianceTarget="cgd_submission_date"
+            >
+              <div className="space-y-1">
+                <ThaiDatePicker
+                  minDate={headSignedMinDate || undefined}
+                  value={cgdSubmissionDate}
+                  onChange={(v) => onAppealChange({ cgd_submission_date: v })}
+                  disabled={readOnly || !headSignedDate}
+                  workdaysOnly
+                  className={complianceHighlightInputCls(
+                    inputCls,
+                    fieldHighlighted("cgd_submission_date"),
+                  )}
+                />
+                {cgdSubmissionLate && (
+                  <div
+                    className="rounded-md border border-orange-200 bg-orange-50/80 px-3 py-2.5 text-sm text-orange-900 leading-relaxed mt-2"
+                    role="status"
+                  >
+                    {STEP6_CGD_LATE_SUBMISSION_MSG}
+                  </div>
+                )}
+                <ComplianceFieldError show={fieldHighlighted("cgd_submission_date")} />
+              </div>
+            </FieldRow>
+
+            <FieldRow
+              label={
+                <>
+                  หนังสือรายงานส่งกรมบัญชีกลาง (PDF){" "}
+                  <span className="text-destructive">*</span>
+                </>
+              }
+              complianceTarget="cgd_submission_report_doc"
+            >
+              <InlineDocUpload
+                project={docBinder.project}
+                stepNumber={docBinder.stepNumber}
+                documentType={STEP6_DOC.CGD_SUBMISSION_REPORT_LETTER}
+                label="📎 แนบหนังสือรายงานส่งกรมบัญชีกลาง (PDF)"
+                existing={docBinder.docs}
+                onChange={docBinder.onDocsChange}
+                readOnly={readOnly}
+              />
+              <ComplianceFieldError show={fieldHighlighted("cgd_submission_report_doc")} />
+            </FieldRow>
           </div>
         )}
       </div>
+
+      {appeal.appeal_status === "pending" && (
+        <div className="rounded-lg border border-orange-300/60 bg-orange-50/40 p-4 space-y-4 animate-in fade-in slide-in-from-top-2 duration-300">
+          <SectionTitle tooltipKey="step6.appeal_resolved_date">
+            กลุ่มที่ 3: ผลการวินิจฉัยอุทธรณ์จากกรมบัญชีกลาง (Verdict &amp; Workflow Routing)
+          </SectionTitle>
+          <FieldRow
+            label={
+              <>
+                วันที่หน่วยงานได้รับหนังสือผลวินิจฉัยอุทธรณ์จากกรมบัญชีกลาง{" "}
+                <span className="text-destructive">*</span>
+              </>
+            }
+            tooltipKey="step6.appeal_resolved_date"
+            complianceTarget="appeal_resolved_date"
+          >
+            <div className="space-y-1">
+              <ThaiDatePicker
+                minDate={receivedDate || appealReceivedMinDate || undefined}
+                value={appeal.appeal_resolved_date?.trim() ?? ""}
+                onChange={(v) => onAppealChange({ appeal_resolved_date: v })}
+                disabled={readOnly}
+                className={complianceHighlightInputCls(
+                  inputCls,
+                  fieldHighlighted("appeal_resolved_date"),
+                )}
+              />
+              {appeal.appeal_resolved_date?.trim() && (
+                <p className="text-xs text-muted-foreground">
+                  📅 {formatThaiDate(appeal.appeal_resolved_date.trim())}
+                </p>
+              )}
+              {isAppealStepperAndTimelineLocked(appeal) && (
+                <p className="text-xs font-medium text-orange-800" role="status">
+                  ⚠️ ปฏิทินขั้นตอนที่ 7–10 ถูกระงับชั่วคราว (HOLD) จนกว่าจะบันทึกวันที่และเลือกผลวินิจฉัย «ฟังไม่ขึ้น»
+                </p>
+              )}
+              {appeal.appeal_resolved_date?.trim() &&
+                appeal.appeal_committee_decision === "not_upheld" && (
+                  <p className="text-xs font-medium text-emerald-800" role="status">
+                    ✓ ปลดล็อกไทม์ไลน์แล้ว — พร้อมดำเนินการขั้นตอนที่ 7
+                  </p>
+                )}
+              <ComplianceFieldError show={fieldHighlighted("appeal_resolved_date")} />
+            </div>
+          </FieldRow>
+
+          <FieldRow
+            label={
+              <>
+                ผลการวินิจฉัยอุทธรณ์จากกรมบัญชีกลาง{" "}
+                <span className="text-destructive">*</span>
+              </>
+            }
+            tooltipKey="step6.appeal_committee_decision"
+          >
+            <div
+              data-compliance-target="appeal_committee_decision"
+              className={
+                fieldHighlighted("appeal_committee_decision")
+                  ? "rounded-md border-2 border-red-500 bg-red-50 p-3 space-y-2"
+                  : "rounded-md border border-transparent p-1 space-y-2"
+              }
+            >
+              <fieldset disabled={readOnly} className="space-y-2 disabled:opacity-60">
+                {APPEAL_COMMITTEE_DECISION_OPTIONS.map((opt) => (
+                  <label key={opt.value} className="flex items-start gap-2 text-sm cursor-pointer">
+                    <input
+                      type="radio"
+                      name="step6_appeal_verdict"
+                      checked={appeal.appeal_committee_decision === opt.value}
+                      onChange={() => onAppealChange({ appeal_committee_decision: opt.value })}
+                      className="mt-0.5 h-4 w-4"
+                    />
+                    <span>
+                      {opt.value === "not_upheld" ? "ข้อ ก) " : "ข้อ ข) "}
+                      {opt.label}
+                    </span>
+                  </label>
+                ))}
+              </fieldset>
+              {appeal.appeal_committee_decision === "upheld" && (
+                <p className="text-xs font-medium text-destructive leading-relaxed" role="alert">
+                  ผลวินิจฉัยฟังขึ้น — ใช้ปุ่มคำสั่งด้านล่างเพื่อยกเลิกโครงการหรือถอยกลับไปแก้ไขขั้นตอนที่ 5
+                </p>
+              )}
+              <ComplianceFieldError show={fieldHighlighted("appeal_committee_decision")} />
+            </div>
+          </FieldRow>
+        </div>
+      )}
     </div>
     </MissingDocHighlightContext.Provider>
   );
@@ -5073,7 +5337,22 @@ type Step7ContractNoticeFormProps = {
   step1ResponsibleDefault?: string;
   note: string;
   onNoteChange: (value: string) => void;
+  highlightedComplianceIssues?: string[];
+  complianceSubmitTriggered?: boolean;
 } & ChronologicalFormProps;
+
+const CLEAR_STEP7_BOND_FIELDS: Partial<Step7ContractNotice> = {
+  performance_bond_type: "",
+  performance_bond_bank_name: "",
+  performance_bond_document_no: "",
+  performance_bond_amount: null,
+  performance_bond_lg_expiry_date: "",
+};
+
+const CLEAR_STEP7_BREACH_FIELDS: Partial<Step7ContractNotice> = {
+  breach_report_letter_no: "",
+  breach_missed_deadline_date: "",
+};
 
 /** ขั้นตอนที่ 7 — แจ้งให้ผู้ชนะมาลงนามในสัญญา (ข้อ 161) */
 export function Step7ContractNoticeForm({
@@ -5093,8 +5372,17 @@ export function Step7ContractNoticeForm({
   step1ResponsibleDefault = "",
   note,
   onNoteChange,
+  highlightedComplianceIssues = [],
+  complianceSubmitTriggered = false,
   chronologicalCtx,
 }: Step7ContractNoticeFormProps) {
+  const complianceHi = highlightedComplianceIssues;
+  const fieldHighlighted = (target: string) =>
+    complianceSubmitTriggered && complianceHi.includes(target);
+  const highlightedDocTypes = complianceSubmitTriggered
+    ? (docBinder.highlightedMissingDocs ?? [])
+    : [];
+
   console.log(
     "🛠️ [STEP 7 MASTER SEED]: Checklist removed. Infographic UI rendered. Chrono Validation Active.",
   );
@@ -5104,9 +5392,29 @@ export function Step7ContractNoticeForm({
   const contractNoticeLetterDate = contractNotice?.contract_notice_letter_date ?? "";
   const contractorReceivedDate = contractNotice?.contractor_received_date ?? "";
   const signingDeadline = contractNotice?.contract_signing_deadline ?? "";
-  const minLetterDateISO = appealDeadlineISO
-    ? computeContractEarliestFromAppealDeadlineISO(appealDeadlineISO)
+  const noticeOutcome = contractNotice?.notice_outcome ?? "";
+  const bondCollection = contractNotice?.performance_bond_collection ?? "";
+  const bondType = contractNotice?.performance_bond_type ?? "";
+  const bondAmount = contractNotice?.performance_bond_amount ?? null;
+  const minLetterDateISO = computeStep7NoticeLetterMinDateISO(appealDeadlineISO);
+  const recommendedBond = computeRecommendedGuaranteeAmount(winningProjectAmount);
+  const bondBelowMin =
+    bondAmount != null &&
+    isStep7PerformanceBondBelowMinimum(bondAmount, winningProjectAmount);
+  const showBondBankFields = bondType && bondType !== "cash";
+  const showLgExpiryField = bondType === "bank_guarantee";
+  const egpSyncStatus: Step7EgpSyncStatus =
+    contractNotice?.egp_sync_status === "synced" ? "synced" : "pending";
+  const letterAnchoredDeadline = contractNoticeLetterDate
+    ? computeStep7ContractSigningDeadlineISO(contractNoticeLetterDate)
     : "";
+  const calendarCapDeadline = contractNoticeLetterDate
+    ? computeStep7SigningDeadlineCalendarCapISO(contractNoticeLetterDate)
+    : "";
+  const signingBeyondStandard =
+    !!contractNoticeLetterDate &&
+    !!signingDeadline &&
+    isStep7SigningDeadlineBeyondStandard(contractNoticeLetterDate, signingDeadline);
 
   const isChronoValid = isStep7ContractorReceivedDateChronoValid(
     contractNoticeLetterDate,
@@ -5125,13 +5433,19 @@ export function Step7ContractNoticeForm({
   });
 
   const handleLetterDateChange = (v: string) => {
-    onContractNoticeChange({ contract_notice_letter_date: v });
+    const autoDeadline = v ? computeStep7ContractSigningDeadlineISO(v) : "";
+    const patch: Partial<Step7ContractNotice> = {
+      contract_notice_letter_date: v,
+      ...(v ? { contract_signing_deadline: autoDeadline } : { contract_signing_deadline: "" }),
+    };
     if (v && contractorReceivedDate && contractorReceivedDate < v) {
       setReceivedDateRejected(true);
       toast.error(STEP7_RECEIVED_BEFORE_LETTER_MSG);
     } else {
       setReceivedDateRejected(false);
     }
+    patch.signing_deadline_extension_reason = "";
+    onContractNoticeChange(patch);
   };
 
   const handleContractorReceivedDateChange = (v: string) => {
@@ -5140,27 +5454,70 @@ export function Step7ContractNoticeForm({
       onContractNoticeChange({ contractor_received_date: "" });
       return;
     }
-    const chronoValid = isStep7ContractorReceivedDateChronoValid(contractNoticeLetterDate, v);
-    console.log("⏳ [STEP 7 CHRONO VALIDATION]:", {
-      letterDate: contractNoticeLetterDate,
-      receivedDate: v,
-      isValid: chronoValid,
-    });
     if (contractNoticeLetterDate && v < contractNoticeLetterDate) {
       setReceivedDateRejected(true);
       toast.error(STEP7_RECEIVED_BEFORE_LETTER_MSG);
       return;
     }
     setReceivedDateRejected(false);
-    const autoDeadline = computeStep7ContractSigningDeadlineISO(v);
+    onContractNoticeChange({ contractor_received_date: v });
+  };
+
+  const handleSigningDeadlineChange = (v: string) => {
+    const beyond =
+      !!contractNoticeLetterDate &&
+      !!v &&
+      isStep7SigningDeadlineBeyondStandard(contractNoticeLetterDate, v);
     onContractNoticeChange({
-      contractor_received_date: v,
-      contract_signing_deadline: autoDeadline,
+      contract_signing_deadline: v,
+      ...(!beyond ? { signing_deadline_extension_reason: "" } : {}),
     });
   };
 
   return (
+    <MissingDocHighlightContext.Provider value={highlightedDocTypes}>
     <div className="space-y-4 max-w-2xl">
+      <div className="rounded-lg border border-border bg-muted/10 p-3 space-y-2 text-right">
+        <p className="text-sm font-medium text-foreground">
+          สถานะการคีย์ข้อมูลลงระบบ e-GP
+        </p>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {egpSyncStatus === "synced" ? (
+            <span
+              className="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300"
+              role="status"
+            >
+              🟢 คีย์ใน e-GP เรียบร้อยแล้ว
+            </span>
+          ) : (
+            <>
+              <span
+                className="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold bg-muted text-muted-foreground border border-border"
+                role="status"
+              >
+                ⚪ ยังไม่ได้คีย์ใน e-GP
+              </span>
+              {!readOnly && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onContractNoticeChange({ egp_sync_status: "synced" })
+                  }
+                  className="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold bg-primary text-primary-foreground border border-primary hover:bg-primary/90 transition-colors"
+                >
+                  ✅ ยืนยันว่าคีย์ใน e-GP แล้ว
+                </button>
+              )}
+            </>
+          )}
+        </div>
+        <p
+          className="text-xs text-muted-foreground leading-relaxed"
+          title="สถานะนี้มีไว้สำหรับบันทึกเพื่อตรวจสอบความถูกต้องและป้องกันการลืมคีย์ข้อมูลในระบบกรมบัญชีกลางเท่านั้น"
+        >
+          สถานะนี้มีไว้สำหรับบันทึกเพื่อตรวจสอบความถูกต้องและป้องกันการลืมคีย์ข้อมูลในระบบกรมบัญชีกลางเท่านั้น
+        </p>
+      </div>
       <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
         <p className="text-sm font-medium text-foreground">
           สรุปผู้ชนะจากขั้นตอนก่อนหน้า (อ่านอย่างเดียว)
@@ -5209,12 +5566,67 @@ export function Step7ContractNoticeForm({
             aria-readonly
           />
         </FieldRow>
+        {recommendedBond != null && (
+          <div
+            className="rounded-md border border-blue-200/80 bg-blue-50/50 px-3 py-2.5 text-sm text-foreground/90"
+            role="status"
+          >
+            💡 มูลค่าหลักประกันสัญญาขั้นต่ำตามระเบียบฯ (5%):{" "}
+            <span className="font-semibold tabular-nums">
+              {formatCurrencyDisplay(recommendedBond)} บาท
+            </span>
+          </div>
+        )}
         <p className="text-xs text-muted-foreground leading-relaxed">
           ข้อมูลดึงจากขั้นตอนที่ 4–5 โดยอัตโนมัติ — หากต้องการแก้ไข ให้ย้อนกลับไปแก้ที่ขั้นตอนก่อนหน้า
         </p>
       </div>
 
-      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-5">
+      <div className="rounded-lg border border-orange-300/60 bg-orange-50/40 p-4 space-y-4">
+        <p className="text-sm font-medium text-orange-900">
+          ทางแยกกรณีปลายทาง (Breach of Notice Routing)
+        </p>
+        <div
+          data-compliance-target="notice_outcome"
+          className={
+            fieldHighlighted("notice_outcome")
+              ? "rounded-md border-2 border-red-500 bg-red-50 p-3 space-y-2"
+              : "rounded-md border border-transparent p-1 space-y-2"
+          }
+        >
+          <fieldset disabled={readOnly} className="space-y-2 disabled:opacity-60">
+            {STEP7_NOTICE_OUTCOME_OPTIONS.map((opt) => (
+              <label key={opt.value} className="flex items-start gap-2 text-sm cursor-pointer">
+                <input
+                  type="radio"
+                  name="step7_notice_outcome"
+                  checked={noticeOutcome === opt.value}
+                  onChange={() =>
+                    onContractNoticeChange({
+                      notice_outcome: opt.value as Step7NoticeOutcome,
+                      ...(opt.value === "proceed_to_sign"
+                        ? CLEAR_STEP7_BREACH_FIELDS
+                        : CLEAR_STEP7_BOND_FIELDS),
+                    })
+                  }
+                  className="mt-0.5 h-4 w-4"
+                />
+                <span>
+                  {opt.value === "proceed_to_sign" ? "ข้อ ก) " : "ข้อ ข) "}
+                  {opt.label}
+                </span>
+              </label>
+            ))}
+          </fieldset>
+          <ComplianceFieldError
+            show={fieldHighlighted("notice_outcome")}
+            message={STEP7_NOTICE_OUTCOME_REQUIRED_MSG}
+          />
+        </div>
+      </div>
+
+      {noticeOutcome === "proceed_to_sign" && (
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-5 animate-in fade-in slide-in-from-top-2 duration-300">
         <p className="text-sm font-medium text-foreground">
           ข้อมูลหนังสือเชิญลงนามในสัญญา — ขั้นตอนที่ 7
         </p>
@@ -5235,6 +5647,47 @@ export function Step7ContractNoticeForm({
               className={inputCls}
               placeholder="เช่น อว 1234.5/ว 1234"
             />
+          </FieldRow>
+          <FieldRow
+            label={
+              <>
+                เลขที่สัญญาที่ตกลงกัน <span className="text-destructive">*</span>
+              </>
+            }
+            complianceTarget="agreed_contract_no"
+          >
+            <input
+              type="text"
+              value={contractNotice?.agreed_contract_no ?? ""}
+              onChange={(e) =>
+                onContractNoticeChange({ agreed_contract_no: e.target.value })
+              }
+              disabled={readOnly}
+              className={complianceHighlightInputCls(
+                inputCls,
+                fieldHighlighted("agreed_contract_no"),
+              )}
+              placeholder="เช่น สข.68/001"
+            />
+            <ComplianceFieldError show={fieldHighlighted("agreed_contract_no")} />
+          </FieldRow>
+          <FieldRow
+            label={
+              <>
+                วันที่ลงนามในสัญญาจริง <span className="text-destructive">*</span>
+              </>
+            }
+            complianceTarget="actual_contract_signed_date"
+          >
+            <ChronologicalDatePicker
+              stepNumber={7}
+              chronologicalCtx={chronologicalCtx}
+              value={contractNotice?.actual_contract_signed_date ?? ""}
+              onChange={(v) => onContractNoticeChange({ actual_contract_signed_date: v })}
+              disabled={readOnly}
+              showChronologicalHint={false}
+            />
+            <ComplianceFieldError show={fieldHighlighted("actual_contract_signed_date")} />
           </FieldRow>
           <FieldRow
             label="วันที่ในหนังสือเชิญลงนาม *"
@@ -5265,13 +5718,82 @@ export function Step7ContractNoticeForm({
               )}
               {minLetterDateISO && (
                 <p className="text-xs text-muted-foreground">
-                  เลือกได้ตั้งแต่ {formatThaiDateSlash(minLetterDateISO)} (หลังพ้นกำหนดอุทธรณ์)
+                  เลือกได้ตั้งแต่ {formatThaiDateSlash(minLetterDateISO)} (หลังพ้นกำหนดอุทธรณ์ — ไม่ก่อน{" "}
+                  {formatThaiDateSlash(STEP7_NOTICE_MIN_DATE_ISO)})
                 </p>
               )}
               {letterDateTooLate && notificationDeadlineISO && (
                 <p className="text-xs text-destructive font-medium mt-1">
                   {STEP7_NOTIFICATION_DEADLINE_EXCEEDED_MSG(notificationDeadlineISO)}
                 </p>
+              )}
+            </div>
+          </FieldRow>
+          <FieldRow
+            label="กำหนดวันสุดท้ายที่ต้องมาลงนาม *"
+            complianceTarget="contract_signing_deadline"
+          >
+            <div className="space-y-1">
+              <ChronologicalDatePicker
+                stepNumber={7}
+                chronologicalCtx={chronologicalCtx}
+                minDate={contractNoticeLetterDate || undefined}
+                value={signingDeadline}
+                onChange={handleSigningDeadlineChange}
+                disabled={readOnly || !contractNoticeLetterDate}
+                showChronologicalHint={false}
+              />
+              {!contractNoticeLetterDate && (
+                <p className="text-xs text-muted-foreground">
+                  กรุณาระบุวันที่ในหนังสือเชิญลงนามก่อน — ระบบจะคำนวณกำหนดลงนามอัตโนมัติ
+                </p>
+              )}
+              {signingDeadline && (
+                <p className="text-xs text-muted-foreground">
+                  📅 {formatThaiDate(signingDeadline)}
+                </p>
+              )}
+              {contractNoticeLetterDate && letterAnchoredDeadline && (
+                <p className="text-xs text-muted-foreground">
+                  ค่าเริ่มต้น +{STEP7_CONTRACT_SIGNING_DEADLINE_WORKDAYS} วันทำการจากวันที่ในหนังสือเชิญ (
+                  {formatThaiDateSlash(letterAnchoredDeadline)})
+                </p>
+              )}
+              {contractNoticeLetterDate && calendarCapDeadline && (
+                <p className="text-xs text-muted-foreground">
+                  เกณฑ์ขยายเวลา: ห้ามเกิน +{STEP7_CONTRACT_SIGNING_DEADLINE_CALENDAR_DAYS} วันปฏิทินจากวันที่ในหนังสือเชิญ (
+                  {formatThaiDateSlash(calendarCapDeadline)}) โดยไม่บันทึกเหตุผล
+                </p>
+              )}
+              {signingBeyondStandard && (
+                <div
+                  className="mt-3 space-y-2 animate-in fade-in slide-in-from-top-2 duration-300"
+                  data-compliance-target="signing_deadline_extension_reason"
+                >
+                  <label className="block text-sm font-medium">
+                    เหตุผลความจำเป็นในการขยายเวลาเกิน 15 วัน{" "}
+                    <span className="text-destructive">*</span>
+                  </label>
+                  <textarea
+                    value={contractNotice?.signing_deadline_extension_reason ?? ""}
+                    onChange={(e) =>
+                      onContractNoticeChange({
+                        signing_deadline_extension_reason: e.target.value,
+                      })
+                    }
+                    rows={3}
+                    disabled={readOnly}
+                    className={complianceHighlightInputCls(
+                      "w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60",
+                      fieldHighlighted("signing_deadline_extension_reason"),
+                    )}
+                    placeholder="เช่น อนุมัติขยายเวลาลงนามตามบันทึกหัวหน้าหน่วยงานเลขที่..."
+                  />
+                  <ComplianceFieldError
+                    show={fieldHighlighted("signing_deadline_extension_reason")}
+                    message={STEP7_SIGNING_DEADLINE_EXTENSION_REQUIRED_MSG}
+                  />
+                </div>
               )}
             </div>
           </FieldRow>
@@ -5321,32 +5843,6 @@ export function Step7ContractNoticeForm({
               )}
             </div>
           </FieldRow>
-          <FieldRow
-            label="กำหนดวันสุดท้ายที่ต้องมาลงนาม *"
-            complianceTarget="contract_signing_deadline"
-          >
-            <div className="space-y-1">
-              <ChronologicalDatePicker
-                stepNumber={7}
-                chronologicalCtx={chronologicalCtx}
-                value={signingDeadline}
-                onChange={(v) => onContractNoticeChange({ contract_signing_deadline: v })}
-                disabled={readOnly}
-                showChronologicalHint={false}
-              />
-              {signingDeadline && (
-                <p className="text-xs text-muted-foreground">
-                  📅 {formatThaiDate(signingDeadline)}
-                </p>
-              )}
-              {contractorReceivedDate && (
-                <p className="text-xs text-muted-foreground">
-                  ระบบคำนวณอัตโนมัติ +{STEP7_CONTRACT_SIGNING_DEADLINE_WORKDAYS} วันทำการจากวันที่ได้รับหนังสือเชิญ
-                  — แก้ไขได้ด้วยตนเองในกรณีโครงการเร่งด่วน
-                </p>
-              )}
-            </div>
-          </FieldRow>
         </div>
 
         <div className="space-y-4 pt-1 border-t border-border/60">
@@ -5363,7 +5859,14 @@ export function Step7ContractNoticeForm({
               onChange={docBinder.onDocsChange}
             />
           </FieldRow>
-          <FieldRow label="หลักฐานการส่ง/ใบตอบรับไปรษณีย์">
+          <FieldRow
+            label={
+              <>
+                หลักฐานการส่ง/ใบตอบรับไปรษณีย์ <span className="text-destructive">*</span>
+              </>
+            }
+            complianceTarget="contract_notice_delivery_proof_doc"
+          >
             <InlineDocUpload
               project={docBinder.project}
               stepNumber={docBinder.stepNumber}
@@ -5372,10 +5875,372 @@ export function Step7ContractNoticeForm({
               existing={docBinder.docs}
               onChange={docBinder.onDocsChange}
             />
+            <ComplianceFieldError show={fieldHighlighted("contract_notice_delivery_proof_doc")} />
           </FieldRow>
         </div>
 
-        <div className="space-y-4 pt-1 border-t border-border/60">
+        <div className="rounded-lg border border-indigo-300/50 bg-indigo-50/40 p-4 space-y-4">
+          <p className="text-sm font-medium text-indigo-900">
+            เอกสารอนุมัติร่างสัญญา — Audit Trail สำหรับ สตง.
+          </p>
+          <FieldRow
+            label={
+              <>
+                บันทึกขออนุมัติร่างสัญญาและผลการพิจารณา (PDF){" "}
+                <span className="text-destructive">*</span>
+              </>
+            }
+            complianceTarget="contract_draft_approval_memo_doc"
+          >
+            <p className="text-xs text-muted-foreground mb-2">
+              {STEP7_CONTRACT_DRAFT_APPROVAL_MEMO_DESCRIPTION}
+            </p>
+            <InlineDocUpload
+              project={docBinder.project}
+              stepNumber={docBinder.stepNumber}
+              documentType={STEP7_DOC.CONTRACT_DRAFT_APPROVAL_MEMO}
+              label={STEP7_CONTRACT_DRAFT_APPROVAL_MEMO_UPLOAD_LABEL}
+              existing={docBinder.docs}
+              onChange={docBinder.onDocsChange}
+            />
+            <ComplianceFieldError show={fieldHighlighted("contract_draft_approval_memo_doc")} />
+          </FieldRow>
+        </div>
+
+        <div className="rounded-lg border border-emerald-300/50 bg-emerald-50/40 p-4 space-y-4">
+          <p className="text-sm font-medium text-emerald-900">
+            หลักประกันสัญญา (Performance Bond) — บังคับก่อนไปขั้นตอนที่ 8
+          </p>
+          <div
+            data-compliance-target="performance_bond_collection"
+            className={
+              fieldHighlighted("performance_bond_collection")
+                ? "rounded-md border-2 border-red-500 bg-red-50 p-3 space-y-3"
+                : "space-y-3"
+            }
+          >
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={readOnly}
+                onClick={() =>
+                  onContractNoticeChange({
+                    performance_bond_collection: "collect" as Step7PerformanceBondCollection,
+                  })
+                }
+                className={`h-9 px-3 rounded-md text-sm font-medium border transition-colors ${
+                  bondCollection === "collect"
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-background border-input hover:bg-accent"
+                }`}
+              >
+                วางหลักประกันสัญญาตามปกติ
+              </button>
+              <button
+                type="button"
+                disabled={readOnly}
+                onClick={() =>
+                  onContractNoticeChange({
+                    performance_bond_collection: "exempt" as Step7PerformanceBondCollection,
+                    ...CLEAR_STEP7_BOND_FIELDS,
+                  })
+                }
+                className={`h-9 px-3 rounded-md text-sm font-medium border transition-colors ${
+                  bondCollection === "exempt"
+                    ? "bg-amber-600 text-white border-amber-600"
+                    : "bg-background border-input hover:bg-accent"
+                }`}
+              >
+                ไม่เรียกหลักประกันสัญญา (กรณีได้รับยกเว้นตามระเบียบฯ)
+              </button>
+            </div>
+            <ComplianceFieldError
+              show={fieldHighlighted("performance_bond_collection")}
+              message={STEP7_PERFORMANCE_BOND_COLLECTION_REQUIRED_MSG}
+            />
+          </div>
+
+          {bondCollection === "exempt" && (
+            <FieldRow
+              label={
+                <>
+                  บันทึกขออนุมัติยกเว้นหลักประกันสัญญา <span className="text-destructive">*</span>
+                </>
+              }
+              complianceTarget="performance_bond_exemption_doc"
+            >
+              <InlineDocUpload
+                project={docBinder.project}
+                stepNumber={docBinder.stepNumber}
+                documentType={STEP7_DOC.PERFORMANCE_BOND_EXEMPTION_MEMO}
+                label={STEP7_PERFORMANCE_BOND_EXEMPTION_MEMO_UPLOAD_LABEL}
+                existing={docBinder.docs}
+                onChange={docBinder.onDocsChange}
+                readOnly={readOnly}
+              />
+              <ComplianceFieldError show={fieldHighlighted("performance_bond_exemption_doc")} />
+            </FieldRow>
+          )}
+
+          {bondCollection === "collect" && (
+            <>
+            <FieldRow
+              label={
+                <>
+                  ประเภทหลักประกันสัญญา <span className="text-destructive">*</span>
+                </>
+              }
+              complianceTarget="performance_bond_type"
+            >
+              <select
+                value={bondType}
+                onChange={(e) =>
+                  onContractNoticeChange({
+                    performance_bond_type: e.target.value as Step7ContractNotice["performance_bond_type"],
+                    ...(e.target.value === "cash"
+                      ? {
+                          performance_bond_bank_name: "",
+                          performance_bond_document_no: "",
+                          performance_bond_lg_expiry_date: "",
+                        }
+                      : e.target.value !== "bank_guarantee"
+                        ? { performance_bond_lg_expiry_date: "" }
+                        : {}),
+                  })
+                }
+                disabled={readOnly}
+                className={complianceHighlightInputCls(inputCls, fieldHighlighted("performance_bond_type"))}
+              >
+                <option value="">— เลือกประเภทหลักประกัน —</option>
+                {STEP7_PERFORMANCE_BOND_TYPE_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+              <ComplianceFieldError show={fieldHighlighted("performance_bond_type")} />
+            </FieldRow>
+            {showBondBankFields && (
+              <>
+                <FieldRow
+                  label={
+                    <>
+                      ชื่อธนาคารผู้ออกหลักประกัน <span className="text-destructive">*</span>
+                    </>
+                  }
+                  complianceTarget="performance_bond_bank_name"
+                >
+                  <input
+                    type="text"
+                    value={contractNotice?.performance_bond_bank_name ?? ""}
+                    onChange={(e) =>
+                      onContractNoticeChange({ performance_bond_bank_name: e.target.value })
+                    }
+                    disabled={readOnly}
+                    className={complianceHighlightInputCls(
+                      inputCls,
+                      fieldHighlighted("performance_bond_bank_name"),
+                    )}
+                  />
+                  <ComplianceFieldError show={fieldHighlighted("performance_bond_bank_name")} />
+                </FieldRow>
+                <FieldRow
+                  label={
+                    <>
+                      เลขที่หนังสือค้ำประกัน/เลขที่เช็ค{" "}
+                      <span className="text-destructive">*</span>
+                    </>
+                  }
+                  complianceTarget="performance_bond_document_no"
+                >
+                  <input
+                    type="text"
+                    value={contractNotice?.performance_bond_document_no ?? ""}
+                    onChange={(e) =>
+                      onContractNoticeChange({ performance_bond_document_no: e.target.value })
+                    }
+                    disabled={readOnly}
+                    className={complianceHighlightInputCls(
+                      inputCls,
+                      fieldHighlighted("performance_bond_document_no"),
+                    )}
+                  />
+                  <ComplianceFieldError show={fieldHighlighted("performance_bond_document_no")} />
+                </FieldRow>
+              </>
+            )}
+            {showLgExpiryField && (
+              <FieldRow
+                label={
+                  <>
+                    วันสิ้นสุดความคุ้มครองของหนังสือค้ำประกัน{" "}
+                    <span className="text-destructive">*</span>
+                  </>
+                }
+                complianceTarget="performance_bond_lg_expiry_date"
+              >
+                <ChronologicalDatePicker
+                  stepNumber={7}
+                  chronologicalCtx={chronologicalCtx}
+                  minDate={contractNotice?.actual_contract_signed_date || undefined}
+                  value={contractNotice?.performance_bond_lg_expiry_date ?? ""}
+                  onChange={(v) =>
+                    onContractNoticeChange({ performance_bond_lg_expiry_date: v })
+                  }
+                  disabled={readOnly}
+                  showChronologicalHint={false}
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  ใช้แจ้งเตือนก่อนหมดอายุ LG เพื่อขอขยายอายุหรือยึดหลักประกัน
+                </p>
+                <ComplianceFieldError show={fieldHighlighted("performance_bond_lg_expiry_date")} />
+              </FieldRow>
+            )}
+            <FieldRow
+              label={
+                <>
+                  จำนวนเงินหลักประกันสัญญาที่วางจริง (บาท){" "}
+                  <span className="text-destructive">*</span>
+                </>
+              }
+              complianceTarget="performance_bond_amount"
+            >
+              <input
+                type="number"
+                min={0}
+                step="0.01"
+                value={bondAmount ?? ""}
+                onChange={(e) => {
+                  const raw = e.target.value.trim();
+                  onContractNoticeChange({
+                    performance_bond_amount: raw ? Number(raw) : null,
+                  });
+                }}
+                disabled={readOnly}
+                className={complianceHighlightInputCls(
+                  inputCls,
+                  fieldHighlighted("performance_bond_amount") ||
+                    fieldHighlighted("performance_bond_amount_min") ||
+                    bondBelowMin,
+                )}
+              />
+              {bondBelowMin && (
+                <p className="text-xs text-destructive font-semibold mt-1" role="alert">
+                  {STEP7_PERFORMANCE_BOND_BELOW_MINIMUM_MSG}
+                </p>
+              )}
+              <ComplianceFieldError
+                show={
+                  fieldHighlighted("performance_bond_amount_min") && !bondBelowMin
+                }
+                message={STEP7_PERFORMANCE_BOND_BELOW_MINIMUM_MSG}
+              />
+              <ComplianceFieldError
+                show={
+                  fieldHighlighted("performance_bond_amount") &&
+                  !fieldHighlighted("performance_bond_amount_min") &&
+                  !bondBelowMin
+                }
+              />
+            </FieldRow>
+            <FieldRow
+              label={
+                <>
+                  ไฟล์เอกสารหลักประกันสัญญา (PDF){" "}
+                  <span className="text-destructive">*</span>
+                </>
+              }
+              complianceTarget="performance_bond_doc"
+            >
+              <InlineDocUpload
+                project={docBinder.project}
+                stepNumber={docBinder.stepNumber}
+                documentType={STEP7_DOC.PERFORMANCE_BOND_LETTER}
+                label="📎 แนบเอกสารหลักประกันสัญญา (PDF)"
+                existing={docBinder.docs}
+                onChange={docBinder.onDocsChange}
+                readOnly={readOnly}
+              />
+              <ComplianceFieldError show={fieldHighlighted("performance_bond_doc")} />
+            </FieldRow>
+            </>
+          )}
+        </div>
+      </div>
+      )}
+
+      {noticeOutcome === "breach_no_show" && (
+          <div className="rounded-lg border border-red-300/50 bg-red-50/40 p-4 space-y-4 animate-in fade-in slide-in-from-top-2 duration-300">
+            <p className="text-sm font-medium text-red-900">
+              แบบฟอร์มรายงานการผิดนัดสัญญาและเสนอผู้ทิ้งงานตามมาตรา 109
+            </p>
+            <FieldRow
+              label={
+                <>
+                  เลขที่หนังสือรายงานหัวหน้าหน่วยงานเรื่องเอกชนไม่มาลงนาม{" "}
+                  <span className="text-destructive">*</span>
+                </>
+              }
+              complianceTarget="breach_report_letter_no"
+            >
+              <input
+                type="text"
+                value={contractNotice?.breach_report_letter_no ?? ""}
+                onChange={(e) =>
+                  onContractNoticeChange({ breach_report_letter_no: e.target.value })
+                }
+                disabled={readOnly}
+                className={complianceHighlightInputCls(
+                  inputCls,
+                  fieldHighlighted("breach_report_letter_no"),
+                )}
+                placeholder="เช่น อว 5678.1/ว 9012"
+              />
+              <ComplianceFieldError show={fieldHighlighted("breach_report_letter_no")} />
+            </FieldRow>
+            <FieldRow
+              label={
+                <>
+                  วันที่พ้นกำหนดนัดหมายจริง <span className="text-destructive">*</span>
+                </>
+              }
+              complianceTarget="breach_missed_deadline_date"
+            >
+              <ChronologicalDatePicker
+                stepNumber={7}
+                chronologicalCtx={chronologicalCtx}
+                value={contractNotice?.breach_missed_deadline_date ?? ""}
+                onChange={(v) => onContractNoticeChange({ breach_missed_deadline_date: v })}
+                disabled={readOnly}
+                showChronologicalHint={false}
+              />
+              <ComplianceFieldError show={fieldHighlighted("breach_missed_deadline_date")} />
+            </FieldRow>
+            <FieldRow
+              label={
+                <>
+                  ไฟล์หนังสือรายงานเสนอผู้ทิ้งงานส่งกรมบัญชีกลาง (PDF){" "}
+                  <span className="text-destructive">*</span>
+                </>
+              }
+              complianceTarget="abandonment_report_doc"
+            >
+              <InlineDocUpload
+                project={docBinder.project}
+                stepNumber={docBinder.stepNumber}
+                documentType={STEP7_DOC.ABANDONMENT_REPORT_MEMO}
+                label="📎 แนบหนังสือรายงานเสนอผู้ทิ้งงานส่งกรมบัญชีกลาง (PDF)"
+                existing={docBinder.docs}
+                onChange={docBinder.onDocsChange}
+                readOnly={readOnly}
+              />
+              <ComplianceFieldError show={fieldHighlighted("abandonment_report_doc")} />
+            </FieldRow>
+          </div>
+        )}
+
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4 max-w-2xl">
+        <div className="space-y-4">
           <ResponsibleOfficerField
             stepNumber={7}
             value={responsibleName}
@@ -5394,6 +6259,7 @@ export function Step7ContractNoticeForm({
         </div>
       </div>
     </div>
+    </MissingDocHighlightContext.Provider>
   );
 }
 

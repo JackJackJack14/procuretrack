@@ -38,6 +38,12 @@ export const CASCADE_INTERVAL = {
   STEP7_TO_8: 15,
 } as const;
 
+/** ป้าย HOLD เมื่อติดอุทธรณ์และยังไม่มีวันที่ผลวินิจฉัย — Step 7–10 */
+export const TIMELINE_HOLD_LABEL = "⚠️ ระงับชั่วคราว (ติดอุทธรณ์)" as const;
+export const TIMELINE_HOLD_LABEL_ALT = "HOLD (รอผลวินิจฉัย)" as const;
+
+const TIMELINE_HOLD_STEP_NUMBERS = new Set([7, 8, 9, 10]);
+
 /** @deprecated ใช้ CASCADE_INTERVAL.STEP7_TO_8 */
 export const CASCADE_DEFAULT_STEP7_TO_8_WORKDAYS = CASCADE_INTERVAL.STEP7_TO_8;
 
@@ -84,6 +90,12 @@ export type CascadingTimelineProjectData = {
   contractDurationDays?: number | null;
   contractEndDate?: string | null;
   egpEssentialPublicationDate?: string | null;
+  /** สถานะอุทธรณ์จาก Step 6 — none | pending */
+  appealStatus?: "none" | "pending" | "" | null;
+  /** วันที่รับผลวินิจฉัยจาก กค. — ปลดล็อกไทม์ไลน์ Step 7–10 */
+  appealResolvedDate?: string | null;
+  /** ผลวินิจฉัยอุทธรณ์ — not_upheld ปลดล็อกไทม์ไลน์ */
+  appealCommitteeDecision?: "upheld" | "not_upheld" | "" | null;
 };
 
 export type CascadingTimelineStep = {
@@ -95,6 +107,9 @@ export type CascadingTimelineStep = {
   isDone: boolean;
   isCurrent: boolean;
   internalBadge?: string;
+  /** true = แช่แข็งปฏิทิน (ติดอุทธรณ์) — แสดงป้าย HOLD แทนวันที่ประมาณการ */
+  isOnHold?: boolean;
+  holdLabel?: string;
 };
 
 export type CascadingTimelineConnector = {
@@ -157,6 +172,71 @@ function stepRecord(
   stepNumber: number,
 ): CascadingTimelineStepRecord | undefined {
   return steps.find((s) => s.step_number === stepNumber);
+}
+
+/** แนวทางที่ 2 — แช่แข็ง Step 7–10 จนกว่าจะได้ผลวินิจฉัย «ฟังไม่ขึ้น» + วันที่รับผล */
+export function isTimelineHeldByPendingAppeal(
+  data: Pick<
+    CascadingTimelineProjectData,
+    "appealStatus" | "appealResolvedDate" | "appealCommitteeDecision"
+  >,
+): boolean {
+  if (data.appealStatus !== "pending") return false;
+  const resolved = data.appealResolvedDate?.trim() ?? "";
+  const decision = data.appealCommitteeDecision ?? "";
+  return decision !== "not_upheld" || !resolved;
+}
+
+function cascadeSteps7Through10(
+  anchorISO: string,
+  contractDays: number,
+  steps: CascadingTimelineStepRecord[],
+  projectData: CascadingTimelineProjectData,
+): {
+  step7Est: string;
+  step8Est: string;
+  step9Est: string;
+  step10Est: string;
+  step7Actual: string;
+  step8Actual: string;
+  step9Actual: string;
+  step10Actual: string;
+} {
+  const step7Actual = isoDatePart(stepRecord(steps, 7)?.completed_at);
+  let step7Est = anchorISO
+    ? addWorkdaysISO(anchorISO, CASCADE_INTERVAL.STEP6_TO_7)
+    : "";
+  let cursor = pickAnchor(step7Actual, step7Est);
+
+  const step8Actual =
+    isoDatePart(projectData.contractSignedDate) ||
+    isoDatePart(stepRecord(steps, 8)?.completed_at);
+  const step8Est = cursor ? addWorkdaysISO(cursor, CASCADE_INTERVAL.STEP7_TO_8) : "";
+  cursor = pickAnchor(step8Actual, step8Est);
+
+  const step9Actual =
+    isoDatePart(projectData.egpEssentialPublicationDate) ||
+    isoDatePart(stepRecord(steps, 9)?.completed_at) ||
+    isoDatePart(stepRecord(steps, 9)?.due_date);
+  const step9Est = cursor ? addWorkdaysISO(cursor, CASCADE_INTERVAL.STEP8_TO_9) : "";
+  cursor = pickAnchor(step9Actual, step9Est);
+
+  const step10Actual =
+    isoDatePart(projectData.contractEndDate) ||
+    isoDatePart(stepRecord(steps, 10)?.completed_at) ||
+    isoDatePart(stepRecord(steps, 10)?.due_date);
+  const step10Est = cursor ? addCalendarDaysISO(cursor, contractDays) : "";
+
+  return {
+    step7Est,
+    step8Est,
+    step9Est,
+    step10Est,
+    step7Actual,
+    step8Actual,
+    step9Actual,
+    step10Actual,
+  };
 }
 
 function buildConnectorSpecs(
@@ -287,31 +367,73 @@ export function computeCascadingTimeline(
   const step6Est = appealEndActual;
   cursor = pickAnchor(step6Actual, step6Est);
 
-  const step7Est = cursor
-    ? computeContractEarliestFromAppealDeadlineISO(cursor) ||
-      addWorkdaysISO(cursor, CASCADE_INTERVAL.STEP6_TO_7)
-    : "";
-  const step7Actual = isoDatePart(stepRecord(steps, 7)?.completed_at);
-  cursor = pickAnchor(step7Actual, step7Est);
+  const timelineHeld = isTimelineHeldByPendingAppeal(projectData);
+  const appealResolved = projectData.appealResolvedDate?.trim() ?? "";
 
-  const step8Actual =
-    isoDatePart(projectData.contractSignedDate) ||
-    isoDatePart(stepRecord(steps, 8)?.completed_at);
-  const step8Est = cursor ? addWorkdaysISO(cursor, CASCADE_INTERVAL.STEP7_TO_8) : "";
-  cursor = pickAnchor(step8Actual, step8Est);
+  let step7Est = "";
+  let step8Est = "";
+  let step9Est = "";
+  let step10Est = "";
+  let step7Actual = "";
+  let step8Actual = "";
+  let step9Actual = "";
+  let step10Actual = "";
 
-  const step9Actual =
-    isoDatePart(projectData.egpEssentialPublicationDate) ||
-    isoDatePart(stepRecord(steps, 9)?.completed_at) ||
-    isoDatePart(stepRecord(steps, 9)?.due_date);
-  const step9Est = cursor ? addWorkdaysISO(cursor, CASCADE_INTERVAL.STEP8_TO_9) : "";
-  cursor = pickAnchor(step9Actual, step9Est);
+  if (timelineHeld) {
+    step7Actual = isoDatePart(stepRecord(steps, 7)?.completed_at);
+    step8Actual =
+      isoDatePart(projectData.contractSignedDate) ||
+      isoDatePart(stepRecord(steps, 8)?.completed_at);
+    step9Actual =
+      isoDatePart(projectData.egpEssentialPublicationDate) ||
+      isoDatePart(stepRecord(steps, 9)?.completed_at) ||
+      isoDatePart(stepRecord(steps, 9)?.due_date);
+    step10Actual =
+      isoDatePart(projectData.contractEndDate) ||
+      isoDatePart(stepRecord(steps, 10)?.completed_at) ||
+      isoDatePart(stepRecord(steps, 10)?.due_date);
+  } else if (projectData.appealStatus === "pending" && appealResolved) {
+    const cascaded = cascadeSteps7Through10(
+      appealResolved,
+      contractDays,
+      steps,
+      projectData,
+    );
+    step7Est = cascaded.step7Est;
+    step8Est = cascaded.step8Est;
+    step9Est = cascaded.step9Est;
+    step10Est = cascaded.step10Est;
+    step7Actual = cascaded.step7Actual;
+    step8Actual = cascaded.step8Actual;
+    step9Actual = cascaded.step9Actual;
+    step10Actual = cascaded.step10Actual;
+  } else {
+    step7Est = cursor
+      ? computeContractEarliestFromAppealDeadlineISO(cursor) ||
+        addWorkdaysISO(cursor, CASCADE_INTERVAL.STEP6_TO_7)
+      : "";
+    step7Actual = isoDatePart(stepRecord(steps, 7)?.completed_at);
+    cursor = pickAnchor(step7Actual, step7Est);
 
-  const step10Actual =
-    isoDatePart(projectData.contractEndDate) ||
-    isoDatePart(stepRecord(steps, 10)?.completed_at) ||
-    isoDatePart(stepRecord(steps, 10)?.due_date);
-  const step10Est = cursor ? addCalendarDaysISO(cursor, contractDays) : "";
+    step8Actual =
+      isoDatePart(projectData.contractSignedDate) ||
+      isoDatePart(stepRecord(steps, 8)?.completed_at);
+    step8Est = cursor ? addWorkdaysISO(cursor, CASCADE_INTERVAL.STEP7_TO_8) : "";
+    cursor = pickAnchor(step8Actual, step8Est);
+
+    step9Actual =
+      isoDatePart(projectData.egpEssentialPublicationDate) ||
+      isoDatePart(stepRecord(steps, 9)?.completed_at) ||
+      isoDatePart(stepRecord(steps, 9)?.due_date);
+    step9Est = cursor ? addWorkdaysISO(cursor, CASCADE_INTERVAL.STEP8_TO_9) : "";
+    cursor = pickAnchor(step9Actual, step9Est);
+
+    step10Actual =
+      isoDatePart(projectData.contractEndDate) ||
+      isoDatePart(stepRecord(steps, 10)?.completed_at) ||
+      isoDatePart(stepRecord(steps, 10)?.due_date);
+    step10Est = cursor ? addCalendarDaysISO(cursor, contractDays) : "";
+  }
 
   const stepDefs: Array<{
     stepNumber: number;
@@ -335,15 +457,19 @@ export function computeCascadingTimeline(
     const isDone = !!rec?.completed_at;
     const isCurrent = def.stepNumber === currentStep && !isDone;
     const hasActual = !!def.actual;
-    const displayDateISO = hasActual ? def.actual : def.estimated;
+    const onHold =
+      timelineHeld && TIMELINE_HOLD_STEP_NUMBERS.has(def.stepNumber) && !hasActual;
+    const displayDateISO = onHold ? "" : hasActual ? def.actual : def.estimated;
     return {
       stepNumber: def.stepNumber,
       actualDateISO: def.actual,
-      estimatedDateISO: def.estimated,
+      estimatedDateISO: onHold ? "" : def.estimated,
       displayDateISO,
-      isEstimated: !hasActual && !!def.estimated,
+      isEstimated: !onHold && !hasActual && !!def.estimated,
       isDone,
       isCurrent,
+      isOnHold: onHold,
+      holdLabel: onHold ? TIMELINE_HOLD_LABEL : undefined,
     };
   });
 
@@ -373,6 +499,9 @@ export function buildCascadingTimelineProjectData(input: {
   contractDurationDays?: number | null;
   contractEndDate?: string | null;
   egpEssentialPublicationDate?: string | null;
+  appealStatus?: "none" | "pending" | "" | null;
+  appealResolvedDate?: string | null;
+  appealCommitteeDecision?: "upheld" | "not_upheld" | "" | null;
 }): CascadingTimelineProjectData {
   const ann = resolveStep3AnnouncementFields(
     input.step3Note ?? null,
@@ -423,5 +552,8 @@ export function buildCascadingTimelineProjectData(input: {
     contractDurationDays: input.contractDurationDays,
     contractEndDate: input.contractEndDate,
     egpEssentialPublicationDate: input.egpEssentialPublicationDate,
+    appealStatus: input.appealStatus ?? "",
+    appealResolvedDate: input.appealResolvedDate ?? "",
+    appealCommitteeDecision: input.appealCommitteeDecision ?? "",
   };
 }

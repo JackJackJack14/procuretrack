@@ -8,6 +8,7 @@ import {
   CASCADE_INTERVAL,
   type CascadingTimelineConnector,
 } from "@/lib/cascading-timeline";
+import { mergeStep6AppealFromSources } from "@/lib/step-form";
 import {
   isoDatePart,
   resolveStep1PlanPublicationDateISO,
@@ -23,6 +24,9 @@ export {
   CASCADE_INTERVAL,
   CASCADE_CONNECTOR_LABELS,
   CASCADE_DEFAULT_STEP7_TO_8_WORKDAYS,
+  TIMELINE_HOLD_LABEL,
+  TIMELINE_HOLD_LABEL_ALT,
+  isTimelineHeldByPendingAppeal,
   type CascadingTimelineProjectData,
   type CascadingTimelineResult,
 } from "@/lib/cascading-timeline";
@@ -58,6 +62,9 @@ export type ProjectTimelineItem = {
   isCurrent: boolean;
   /** ป้ายระยะเวลาภายในขั้น (เช่น เผยแพร่ +3 วันทำการ) */
   internalBadge?: string;
+  /** true = แช่แข็งปฏิทิน (ติดอุทธรณ์) */
+  isOnHold?: boolean;
+  holdLabel?: string;
 };
 
 export type ProjectTimelineConnector = CascadingTimelineConnector;
@@ -91,6 +98,13 @@ export type ProjectTimelineInput = {
     contract_end_date?: string;
     egp_essential_publication_date?: string;
   } | null;
+  step6Note?: string | null;
+  step6Live?: {
+    appeal_status?: string;
+    appeal_resolved_date?: string;
+    appeal_committee_decision?: string;
+  } | null;
+  projectAppealStatus?: string | null;
 };
 
 export function snapshotTimelineProject(
@@ -137,6 +151,9 @@ export function buildProjectTimelineInput(
     step2Live?: ProjectTimelineInput["step2Live"];
     step8Live?: ProjectTimelineInput["step8Live"];
     step9Live?: ProjectTimelineInput["step9Live"];
+    step6Note?: string | null;
+    step6Live?: ProjectTimelineInput["step6Live"];
+    projectAppealStatus?: string | null;
   },
 ): ProjectTimelineInput {
   return {
@@ -153,6 +170,9 @@ export function buildProjectTimelineInput(
     step2Live: extras?.step2Live ?? null,
     step8Live: extras?.step8Live ?? null,
     step9Live: extras?.step9Live ?? null,
+    step6Note: extras?.step6Note ?? null,
+    step6Live: extras?.step6Live ?? null,
+    projectAppealStatus: extras?.projectAppealStatus ?? null,
   };
 }
 
@@ -196,11 +216,48 @@ export function getProjectTimelineInputKey(input: ProjectTimelineInput): string 
     input.step9Live?.contract_duration_days ?? "",
     input.step9Live?.contract_end_date ?? "",
     input.step9Live?.egp_essential_publication_date ?? "",
+    input.step6Note ?? "",
+    input.step6Live?.appeal_status ?? "",
+    input.step6Live?.appeal_resolved_date ?? "",
+    input.step6Live?.appeal_committee_decision ?? "",
+    input.projectAppealStatus ?? "",
     stepSig,
   ].join("::");
 }
 
+function resolveTimelineAppealForInput(input: ProjectTimelineInput): {
+  appealStatus: "none" | "pending" | "";
+  appealResolvedDate: string;
+  appealCommitteeDecision: "upheld" | "not_upheld" | "";
+} {
+  const merged = mergeStep6AppealFromSources(input.step6Note ?? null, {
+    appeal_status: input.projectAppealStatus ?? null,
+  });
+  const liveStatus = input.step6Live?.appeal_status;
+  const appealStatus =
+    liveStatus === "none" || liveStatus === "pending"
+      ? liveStatus
+      : merged.appeal_status === "none" || merged.appeal_status === "pending"
+        ? merged.appeal_status
+        : "";
+  const appealResolvedDate =
+    input.step6Live?.appeal_resolved_date?.trim() ||
+    merged.appeal_resolved_date?.trim() ||
+    "";
+  const liveDecision = input.step6Live?.appeal_committee_decision;
+  const mergedDecision = merged.appeal_committee_decision ?? "";
+  const appealCommitteeDecision =
+    liveDecision === "upheld" || liveDecision === "not_upheld"
+      ? liveDecision
+      : mergedDecision === "upheld" || mergedDecision === "not_upheld"
+        ? mergedDecision
+        : "";
+  return { appealStatus, appealResolvedDate, appealCommitteeDecision };
+}
+
 function buildItemsFromCascading(input: ProjectTimelineInput): ProjectTimelineResult {
+  const { appealStatus, appealResolvedDate, appealCommitteeDecision } =
+    resolveTimelineAppealForInput(input);
   const projectData = buildCascadingTimelineProjectData({
     project: {
       ...input.project,
@@ -225,17 +282,22 @@ function buildItemsFromCascading(input: ProjectTimelineInput): ProjectTimelineRe
     contractEndDate: input.contractEndDate ?? input.step9Live?.contract_end_date,
     egpEssentialPublicationDate:
       input.egpEssentialPublicationDate ?? input.step9Live?.egp_essential_publication_date,
+    appealStatus,
+    appealResolvedDate,
+    appealCommitteeDecision,
   });
 
   const cascading = computeCascadingTimeline(projectData);
 
   const items: ProjectTimelineItem[] = cascading.steps.map((step) => ({
     stepNumber: step.stepNumber,
-    date: step.displayDateISO ? parseISODateLocal(step.displayDateISO) : null,
+    date: step.isOnHold ? null : step.displayDateISO ? parseISODateLocal(step.displayDateISO) : null,
     estimated: step.isEstimated,
     isDone: step.isDone,
     isCurrent: step.isCurrent,
     internalBadge: step.internalBadge,
+    isOnHold: step.isOnHold,
+    holdLabel: step.holdLabel,
   }));
 
   return { items, connectors: cascading.connectors };

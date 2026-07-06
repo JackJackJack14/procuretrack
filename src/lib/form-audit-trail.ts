@@ -28,8 +28,15 @@ import {
   isStep6AppealEvidenceDocType,
   isStep6BidderAppealLetterDocType,
   isStep6CgdReportDocType,
+  isStep6CgdSubmissionReportDocType,
   isStep6CommitteeDecisionDocType,
+  isStep6HeadAppealDecisionDocType,
   isStep6NoAppealEgpDocType,
+  isStep7AbandonmentReportDocType,
+  isStep7ContractNoticeDeliveryProofDocType,
+  isStep7ContractDraftApprovalMemoDocType,
+  isStep7PerformanceBondExemptionMemoDocType,
+  isStep7PerformanceBondDocType,
 } from "@/lib/step-doc-types";
 import { isEgpConstructionProjectType } from "@/lib/egp-project-type";
 
@@ -257,7 +264,7 @@ export const CHECKLIST_EVIDENCE_RULES: ChecklistEvidenceRule[] = [
     stepNumber: 6,
     checklistKey: "appeal_period_passed_no_objection",
     checklistIndex: 2,
-    enforce: "always",
+    enforce: "when_checked",
     binding: {
       kind: "document",
       documentTypes: [
@@ -272,7 +279,7 @@ export const CHECKLIST_EVIDENCE_RULES: ChecklistEvidenceRule[] = [
     stepNumber: 6,
     checklistKey: "appeal_agency_report_done",
     checklistIndex: 2,
-    enforce: "always",
+    enforce: "when_checked",
     binding: {
       kind: "document",
       documentTypes: [STEP6_DOC.AGENCY_APPEAL_REPORT],
@@ -284,7 +291,7 @@ export const CHECKLIST_EVIDENCE_RULES: ChecklistEvidenceRule[] = [
     stepNumber: 6,
     checklistKey: "appeal_sent_to_cgd",
     checklistIndex: 3,
-    enforce: "always",
+    enforce: "when_checked",
     binding: {
       kind: "document",
       documentTypes: [STEP6_DOC.CGD_APPEAL_REPORT],
@@ -487,6 +494,34 @@ export function hasStep6AgencyOpinionCgdDoc(uploadedDocTypes: string[]): boolean
 
 export function hasStep6CommitteeDecisionDoc(uploadedDocTypes: string[]): boolean {
   return uploadedDocTypes.some((t) => isStep6CommitteeDecisionDocType(t));
+}
+
+export function hasStep6HeadAppealDecisionDoc(uploadedDocTypes: string[]): boolean {
+  return uploadedDocTypes.some((t) => isStep6HeadAppealDecisionDocType(t));
+}
+
+export function hasStep6CgdSubmissionReportDoc(uploadedDocTypes: string[]): boolean {
+  return uploadedDocTypes.some((t) => isStep6CgdSubmissionReportDocType(t));
+}
+
+export function hasStep7PerformanceBondDoc(uploadedDocTypes: string[]): boolean {
+  return uploadedDocTypes.some((t) => isStep7PerformanceBondDocType(t));
+}
+
+export function hasStep7ContractNoticeDeliveryProofDoc(uploadedDocTypes: string[]): boolean {
+  return uploadedDocTypes.some((t) => isStep7ContractNoticeDeliveryProofDocType(t));
+}
+
+export function hasStep7ContractDraftApprovalMemoDoc(uploadedDocTypes: string[]): boolean {
+  return uploadedDocTypes.some((t) => isStep7ContractDraftApprovalMemoDocType(t));
+}
+
+export function hasStep7PerformanceBondExemptionDoc(uploadedDocTypes: string[]): boolean {
+  return uploadedDocTypes.some((t) => isStep7PerformanceBondExemptionMemoDocType(t));
+}
+
+export function hasStep7AbandonmentReportDoc(uploadedDocTypes: string[]): boolean {
+  return uploadedDocTypes.some((t) => isStep7AbandonmentReportDocType(t));
 }
 
 export function hasStep6AgencyReportDoc(uploadedDocTypes: string[]): boolean {

@@ -1,10 +1,12 @@
-import { Eye, Pencil } from "lucide-react";
+import { Eye, Pencil, Calculator } from "lucide-react";
 import type { StepWorkflowMode } from "@/lib/step-workflow";
 
 type Props = {
   mode: StepWorkflowMode;
   stepNumber: number;
   currentWorkflowStep: number;
+  /** โหมดกระดาษทด — ดูขั้น 7–10 ล่วงหน้าขณะยังอยู่ขั้น 6 */
+  scratchpadPreview?: boolean;
   /** ห้ามปลดล็อกแก้ไขย้อนหลัง — ใช้กับขั้นตอนที่ 1 เมื่อต้องถอยกลับก่อนแก้ไขสาระสำคัญ */
   disableUnlockEdit?: boolean;
   unlockBlockedHint?: string;
@@ -14,9 +16,28 @@ export function StepWorkflowBanner({
   mode,
   stepNumber,
   currentWorkflowStep,
+  scratchpadPreview = false,
   disableUnlockEdit = false,
   unlockBlockedHint,
 }: Props) {
+  if (scratchpadPreview) {
+    return (
+      <div
+        className="rounded-lg border border-violet-300/70 bg-violet-50/80 px-4 py-3 mb-4 flex items-start gap-2 text-sm text-violet-950"
+        role="status"
+      >
+        <Calculator className="h-4 w-4 mt-0.5 shrink-0 text-violet-700" />
+        <div>
+          <p className="font-semibold">โหมดกระดาษทด (Task Calculator) — ขั้นตอนที่ {stepNumber}</p>
+          <p className="text-xs mt-0.5 leading-relaxed text-violet-900/90">
+            ดูแผนงานและเอกสารล่วงหน้าแบบอ่านอย่างเดียว — บันทึกข้อมูลจริงได้เมื่อดำเนินการขั้นตอนที่ 6
+            ให้ครบและกด «บันทึกและไปขั้นตอนถัดไป» เท่านั้น
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   if (mode === "current") return null;
 
   if (mode === "historical_readonly") {

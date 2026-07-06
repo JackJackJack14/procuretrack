@@ -25,6 +25,7 @@ import {
   parseBudgetInput as parseBudgetInputFromCurrency,
   stripCurrencyToNumber,
 } from "@/lib/currency-format";
+import { computeStep6HeadSignedMinDateISO } from "@/lib/step6-guideline";
 import {
   STEP2_DOC,
   STEP3_DOC,
@@ -70,6 +71,9 @@ import {
   CONTRACT_NOTIFICATION_WORKDAYS,
   isContractActionBeforeAppealPeriodEnds,
   computeContractEarliestFromAppealDeadlineISO,
+  computeStep7NoticeLetterMinDateISO,
+  STEP7_NOTICE_MIN_DATE_ISO,
+  isStep7SigningDeadlineBeyondStandard,
   STEP4_COMMITTEE_REVIEW_WORKDAYS_AFTER_BID_END,
 } from "@/lib/workdays";
 import {
@@ -1174,9 +1178,20 @@ export const APPEAL_HEAD_OPINION_OPTIONS: Array<{
 export const APPEAL_COMMITTEE_DECISION_OPTIONS: Array<{
   value: Exclude<AppealCommitteeDecision, "">;
   label: string;
+  shortLabel: string;
 }> = [
-  { value: "upheld", label: "อุทธรณ์ฟังขึ้น" },
-  { value: "not_upheld", label: "อุทธรณ์ฟังไม่ขึ้น" },
+  {
+    value: "not_upheld",
+    shortLabel: "อุทธรณ์ฟังไม่ขึ้น",
+    label:
+      "อุทธรณ์ฟังไม่ขึ้น (ให้หน่วยงานดำเนินการจัดซื้อจัดจ้างต่อไป)",
+  },
+  {
+    value: "upheld",
+    shortLabel: "อุทธรณ์ฟังขึ้น",
+    label:
+      "อุทธรณ์ฟังขึ้น (มีผลต่อการจัดซื้อจัดจ้างอย่างมีนัยสำคัญ/สั่งยกเลิกโครงการ)",
+  },
 ];
 
 /** @deprecated ใช้ StepAppealStatus */
@@ -1194,7 +1209,9 @@ export type Step6AppealState = {
   appeal_bidder_name?: string;
   /** วันที่หน่วยงานได้รับหนังสืออุทธรณ์ */
   appeal_received_date?: string;
-  /** เลขที่หนังสือรายงานความเห็นเสนอหัวหน้าหน่วยงาน */
+  /** วันที่หัวหน้าหน่วยงานลงนามวินิจฉัยผลอุทธรณ์ — ฐานนับ 3 วันทำการส่ง กค. (ข้อ 119) */
+  appeal_head_signed_date?: string;
+  /** @deprecated ย้ายไป cgd_submission_letter_no — เลขที่หนังสือรายงานส่งกรมบัญชีกลาง */
   appeal_report_letter_no?: string;
   /** ผลการพิจารณาของหัวหน้าหน่วยงาน */
   appeal_head_opinion?: AppealHeadOpinion;
@@ -1204,6 +1221,8 @@ export type Step6AppealState = {
   cgd_submission_date?: string;
   /** ผลการวินิจฉัยจากคณะกรรมการพิจารณาอุทธรณ์ */
   appeal_committee_decision?: AppealCommitteeDecision;
+  /** วันที่หน่วยงานได้รับหนังสือผลวินิจฉัยอุทธรณ์จากกรมบัญชีกลาง — ปลดล็อกไทม์ไลน์ Step 7–10 */
+  appeal_resolved_date?: string;
   /** @deprecated ใช้ appeal_received_date */
   appeal_report_approval_date?: string;
   /** @deprecated */
@@ -1214,11 +1233,13 @@ export const EMPTY_STEP6_APPEAL: Required<Omit<Step6AppealState, never>> = {
   appeal_status: "",
   appeal_bidder_name: "",
   appeal_received_date: "",
+  appeal_head_signed_date: "",
   appeal_report_letter_no: "",
   appeal_head_opinion: "",
   cgd_submission_letter_no: "",
   cgd_submission_date: "",
   appeal_committee_decision: "",
+  appeal_resolved_date: "",
   appeal_report_approval_date: "",
   appeal_consideration_status: "",
 };
@@ -1799,12 +1820,60 @@ export type Step6FormData = {
   step6_notes?: Step6AppealState;
 };
 
+/** สถานการณ์ปลายทางขั้นตอนที่ 7 */
+export type Step7NoticeOutcome = "proceed_to_sign" | "breach_no_show" | "";
+
+/** ประเภทหลักประกันสัญญา — ขั้นตอนที่ 7 */
+export type Step7PerformanceBondType = "cash" | "bank_guarantee" | "cashier_check" | "";
+
+export const STEP7_NOTICE_OUTCOME_OPTIONS: Array<{
+  value: Exclude<Step7NoticeOutcome, "">;
+  label: string;
+}> = [
+  {
+    value: "proceed_to_sign",
+    label: "ผู้ชนะมาดำเนินการวางหลักประกันและเซ็นสัญญาตามกำหนด",
+  },
+  {
+    value: "breach_no_show",
+    label: "ผู้ชนะไม่มาลงนามในสัญญาภายในเวลาที่กำหนด",
+  },
+];
+
+export const STEP7_PERFORMANCE_BOND_TYPE_OPTIONS: Array<{
+  value: Exclude<Step7PerformanceBondType, "">;
+  label: string;
+}> = [
+  { value: "bank_guarantee", label: "หนังสือค้ำประกันธนาคาร (LG)" },
+  { value: "cash", label: "เงินสด" },
+  { value: "cashier_check", label: "เช็คที่ธนาคารเซ็นสั่งจ่าย" },
+];
+
+/** การวางหลักประกันสัญญา — ขั้นตอนที่ 7 */
+export type Step7PerformanceBondCollection = "collect" | "exempt" | "";
+
+/** สถานะซิงค์ข้อมูลกับ e-GP — ขั้นตอนที่ 7 */
+export type Step7EgpSyncStatus = "pending" | "synced";
+
 /** ข้อมูลหนังสือแจ้งทำสัญญา — ขั้นตอนที่ 7 */
 export type Step7ContractNotice = {
   contract_notice_letter_no: string;
   contract_notice_letter_date: string;
+  agreed_contract_no: string;
+  actual_contract_signed_date: string;
   contractor_received_date: string;
   contract_signing_deadline: string;
+  signing_deadline_extension_reason: string;
+  notice_outcome: Step7NoticeOutcome;
+  performance_bond_collection: Step7PerformanceBondCollection;
+  performance_bond_type: Step7PerformanceBondType;
+  performance_bond_bank_name: string;
+  performance_bond_document_no: string;
+  performance_bond_amount: number | null;
+  performance_bond_lg_expiry_date: string;
+  egp_sync_status: Step7EgpSyncStatus;
+  breach_report_letter_no: string;
+  breach_missed_deadline_date: string;
 };
 
 export type Step7FormData = {
@@ -1815,8 +1884,21 @@ export type Step7FormData = {
 export const EMPTY_STEP7_CONTRACT_NOTICE: Step7ContractNotice = {
   contract_notice_letter_no: "",
   contract_notice_letter_date: "",
+  agreed_contract_no: "",
+  actual_contract_signed_date: "",
   contractor_received_date: "",
   contract_signing_deadline: "",
+  signing_deadline_extension_reason: "",
+  notice_outcome: "",
+  performance_bond_collection: "",
+  performance_bond_type: "",
+  performance_bond_bank_name: "",
+  performance_bond_document_no: "",
+  performance_bond_amount: null,
+  performance_bond_lg_expiry_date: "",
+  egp_sync_status: "pending",
+  breach_report_letter_no: "",
+  breach_missed_deadline_date: "",
 };
 
 /** ประเภทหลักประกันสัญญา — ขั้นตอนที่ 8 */
@@ -2530,17 +2612,28 @@ function step4BidResultHasData(b: Step4BidResult | undefined): boolean {
 }
 
 export function isAppealWorkflowLocked(
-  appeal: Pick<Step6AppealState, "appeal_status" | "appeal_committee_decision">,
+  appeal: Pick<Step6AppealState, "appeal_status" | "appeal_committee_decision" | "appeal_resolved_date">,
+): boolean {
+  return isAppealStepperAndTimelineLocked(appeal);
+}
+
+/** ล็อก Stepper 7–10 และ HOLD ไทม์ไลน์ — จนกว่าจะได้ผลวินิจฉัย «ฟังไม่ขึ้น» + วันที่รับผล */
+export function isAppealStepperAndTimelineLocked(
+  appeal: Pick<Step6AppealState, "appeal_status" | "appeal_committee_decision" | "appeal_resolved_date">,
 ): boolean {
   if (appeal.appeal_status !== "pending") return false;
+  const resolved = appeal.appeal_resolved_date?.trim() ?? "";
   const decision = appeal.appeal_committee_decision ?? "";
-  return !decision || decision === "upheld";
+  return decision !== "not_upheld" || !resolved;
 }
 
 export function isAppealBlocking(
-  appeal: Pick<Step6AppealState, "appeal_status" | "appeal_committee_decision">,
+  appeal: Pick<
+    Step6AppealState,
+    "appeal_status" | "appeal_committee_decision" | "appeal_resolved_date"
+  >,
 ): boolean {
-  return isAppealWorkflowLocked(appeal);
+  return isAppealStepperAndTimelineLocked(appeal);
 }
 
 /** @deprecated ใช้ isAppealBlocking */
@@ -4222,28 +4315,43 @@ export type Step6ComplianceIssue = { id: string; message: string };
 export function isStep6CoreDocumentsReady(
   appealStatus: string,
   opts: {
+    hasBidderAppealLetterDoc: boolean;
     hasCommitteeOpinionReportDoc: boolean;
+    hasHeadAppealDecisionDoc: boolean;
+    hasCgdSubmissionReportDoc: boolean;
   },
 ): boolean {
   if (!appealStatus) return false;
   if (appealStatus === "none") return true;
-  if (appealStatus === "pending") return opts.hasCommitteeOpinionReportDoc;
+  if (appealStatus === "pending") {
+    return (
+      opts.hasBidderAppealLetterDoc &&
+      opts.hasCommitteeOpinionReportDoc &&
+      opts.hasHeadAppealDecisionDoc &&
+      opts.hasCgdSubmissionReportDoc
+    );
+  }
   return false;
 }
 
 export function countStep6CoreDocumentsReady(
   appealStatus: string,
   opts: {
+    hasBidderAppealLetterDoc: boolean;
     hasCommitteeOpinionReportDoc: boolean;
+    hasHeadAppealDecisionDoc: boolean;
+    hasCgdSubmissionReportDoc: boolean;
   },
 ): { done: number; total: number } {
   if (!appealStatus) return { done: 0, total: 1 };
   if (appealStatus === "none") return { done: 1, total: 1 };
   if (appealStatus === "pending") {
-    return {
-      done: opts.hasCommitteeOpinionReportDoc ? 1 : 0,
-      total: 1,
-    };
+    const done =
+      (opts.hasBidderAppealLetterDoc ? 1 : 0) +
+      (opts.hasCommitteeOpinionReportDoc ? 1 : 0) +
+      (opts.hasHeadAppealDecisionDoc ? 1 : 0) +
+      (opts.hasCgdSubmissionReportDoc ? 1 : 0);
+    return { done, total: 4 };
   }
   return { done: 0, total: 1 };
 }
@@ -4271,6 +4379,12 @@ export const STEP6_APPEAL_STATUS_REQUIRED_MSG =
 export const STEP6_APPEAL_STATUS_INLINE_ERROR_MSG =
   "❌ กรุณาเลือกสถานะการอุทธรณ์ก่อนดำเนินการไปขั้นตอนถัดไป";
 
+export const STEP6_APPEAL_RESOLVED_DATE_REQUIRED_MSG =
+  "กรุณาระบุวันที่หน่วยงานได้รับหนังสือผลวินิจฉัยอุทธรณ์จากกรมบัญชีกลาง (เพื่อปลดล็อกไทม์ไลน์ขั้นตอนที่ 7–10)";
+
+export const STEP6_APPEAL_VERDICT_REQUIRED_MSG =
+  "กรุณาเลือกผลการวินิจฉัยอุทธรณ์จากกรมบัญชีกลาง";
+
 export function computeStep6AppealReceivedMinDateISO(
   step5NotificationISO?: string,
 ): string {
@@ -4297,7 +4411,7 @@ export function getStep6AppealReceivedDateTooEarlyMsg(
   return `❌ วันที่รับหนังสืออุทธรณ์ต้องไม่ก่อนวันที่ ${formatThaiDateSlash(minDate)}`;
 }
 
-/** ฟิลด์บังคับเคสมีผู้ยื่นอุทธรณ์ — 4 รายการหลัก */
+/** ฟิลด์บังคับเคสมีผู้ยื่นอุทธรณ์ — กลุ่ม 2 (5 ช่อง) + กลุ่ม 3 (2 ช่อง) */
 export function getStep6PendingMandatoryFormFieldIssues(
   appeal: Step6AppealState,
   opts: {
@@ -4337,10 +4451,44 @@ export function getStep6PendingMandatoryFormFieldIssues(
       message: STEP6_APPEAL_RECEIVED_BEFORE_STEP5_MSG,
     });
   }
-  if (!appeal.appeal_report_letter_no?.trim()) {
+  const headSigned = appeal.appeal_head_signed_date?.trim() ?? "";
+  if (!headSigned) {
     issues.push({
-      id: "appeal_report_letter_no",
-      message: "กรุณาระบุเลขที่หนังสือรายงานความเห็นเสนอหัวหน้าหน่วยงาน",
+      id: "appeal_head_signed_date",
+      message: "กรุณาระบุวันที่หัวหน้าหน่วยงานลงนามวินิจฉัยผลอุทธรณ์",
+    });
+  } else if (receivedDate) {
+    const minHead = computeStep6HeadSignedMinDateISO(receivedDate);
+    if (minHead && headSigned < minHead) {
+      issues.push({
+        id: "appeal_head_signed_date_min",
+        message: `❌ วันที่ลงนามต้องไม่ก่อนวันที่ ${formatThaiDateSlash(minHead)}`,
+      });
+    }
+  }
+  if (!appeal.cgd_submission_letter_no?.trim()) {
+    issues.push({
+      id: "cgd_submission_letter_no",
+      message: "กรุณาระบุเลขที่หนังสือรายงานส่งกรมบัญชีกลาง",
+    });
+  }
+  if (!appeal.cgd_submission_date?.trim()) {
+    issues.push({
+      id: "cgd_submission_date",
+      message: "กรุณาระบุวันที่ส่งรายงานให้กรมบัญชีกลาง",
+    });
+  }
+  if (!appeal.appeal_resolved_date?.trim()) {
+    issues.push({
+      id: "appeal_resolved_date",
+      message: STEP6_APPEAL_RESOLVED_DATE_REQUIRED_MSG,
+    });
+  }
+  const verdict = appeal.appeal_committee_decision ?? "";
+  if (verdict !== "not_upheld" && verdict !== "upheld") {
+    issues.push({
+      id: "appeal_committee_decision",
+      message: STEP6_APPEAL_VERDICT_REQUIRED_MSG,
     });
   }
   return issues;
@@ -4363,17 +4511,20 @@ export function getStep6RequiredFormFieldIssues(
     });
     return issues;
   }
+  if (status === "none") {
+    return issues;
+  }
   if (status === "pending") {
     issues.push(...getStep6PendingMandatoryFormFieldIssues(appeal, opts));
-  }
-  if (opts.timelineCtx) {
-    issues.push(
-      ...getCrossStepTimelineConflictIssues(
-        6,
-        getStep6TimelineDateFields(appeal),
-        opts.timelineCtx,
-      ),
-    );
+    if (opts.timelineCtx) {
+      issues.push(
+        ...getCrossStepTimelineConflictIssues(
+          6,
+          getStep6TimelineDateFields(appeal),
+          opts.timelineCtx,
+        ),
+      );
+    }
   }
   return issues;
 }
@@ -4389,7 +4540,7 @@ export function countStep6FormRequiredProgress(
   if (!status) return { done: 0, total: 1 };
   if (status === "none") return { done: 1, total: 1 };
   if (status === "pending") {
-    const total = 4;
+    const total = 7;
     const formIssues = getStep6PendingMandatoryFormFieldIssues(appeal, opts);
     return { done: Math.max(0, total - formIssues.length), total };
   }
@@ -4401,20 +4552,48 @@ export function getStep6ComplianceIssues(
   appeal: Step6AppealState,
   _checklist: Step6Checklist,
   opts: {
+    hasBidderAppealLetterDoc: boolean;
     hasCommitteeOpinionReportDoc: boolean;
+    hasHeadAppealDecisionDoc: boolean;
+    hasCgdSubmissionReportDoc: boolean;
     step5NotificationDate?: string;
     stepDocs?: Array<{ document_type: string }>;
     timelineCtx?: TimelineValidationContext;
   },
   _autoStates?: Record<string, boolean>,
 ): Step6ComplianceIssue[] {
-  const issues: Step6ComplianceIssue[] = [];
   const status = appeal.appeal_status ?? "";
+  if (status === "none") {
+    return [];
+  }
+
+  const issues: Step6ComplianceIssue[] = [];
+
+  if (status === "pending" && !opts.hasBidderAppealLetterDoc) {
+    issues.push({
+      id: "bidder_appeal_letter_doc",
+      message: `กรุณาแนบเอกสาร "${STEP6_DOC.BIDDER_APPEAL_LETTER}"`,
+    });
+  }
 
   if (status === "pending" && !opts.hasCommitteeOpinionReportDoc) {
     issues.push({
       id: "committee_opinion_report_doc",
       message: `กรุณาแนบเอกสาร "${STEP6_DOC.COMMITTEE_DECISION_LETTER}"`,
+    });
+  }
+
+  if (status === "pending" && !opts.hasHeadAppealDecisionDoc) {
+    issues.push({
+      id: "head_appeal_decision_doc",
+      message: `กรุณาแนบเอกสาร "${STEP6_DOC.HEAD_APPEAL_DECISION_LETTER}"`,
+    });
+  }
+
+  if (status === "pending" && !opts.hasCgdSubmissionReportDoc) {
+    issues.push({
+      id: "cgd_submission_report_doc",
+      message: `กรุณาแนบเอกสาร "${STEP6_DOC.CGD_SUBMISSION_REPORT_LETTER}"`,
     });
   }
 
@@ -4436,7 +4615,10 @@ export function getStep6AppealComplianceIssues(
     appeal,
     { ...EMPTY_STEP6_CHECKLIST },
     {
+      hasBidderAppealLetterDoc: false,
       hasCommitteeOpinionReportDoc: false,
+      hasHeadAppealDecisionDoc: false,
+      hasCgdSubmissionReportDoc: false,
     },
   );
 }
@@ -4447,6 +4629,7 @@ export function isStep6ReadyForNext(
   opts: Parameters<typeof getStep6ComplianceIssues>[2],
   autoStates?: Record<string, boolean>,
 ): boolean {
+  if (appeal.appeal_status === "none") return true;
   return getStep6ComplianceIssues(appeal, checklist, opts, autoStates).length === 0;
 }
 
@@ -4460,7 +4643,10 @@ export function isStep6AppealReadyForNext(
     appeal,
     checklist ?? { ...EMPTY_STEP6_CHECKLIST },
     opts ?? {
+      hasBidderAppealLetterDoc: false,
       hasCommitteeOpinionReportDoc: false,
+      hasHeadAppealDecisionDoc: false,
+      hasCgdSubmissionReportDoc: false,
     },
     autoStates,
   );
@@ -4866,9 +5052,22 @@ function step7ContractNoticeHasData(notice?: Step7ContractNotice): boolean {
   if (!notice) return false;
   return !!(
     notice.contract_notice_letter_no?.trim() ||
+    notice.agreed_contract_no?.trim() ||
+    notice.actual_contract_signed_date?.trim() ||
     notice.contract_notice_letter_date?.trim() ||
     notice.contractor_received_date?.trim() ||
-    notice.contract_signing_deadline?.trim()
+    notice.contract_signing_deadline?.trim() ||
+    notice.signing_deadline_extension_reason?.trim() ||
+    notice.notice_outcome ||
+    notice.performance_bond_collection ||
+    notice.performance_bond_type ||
+    notice.performance_bond_bank_name?.trim() ||
+    notice.performance_bond_document_no?.trim() ||
+    (notice.performance_bond_amount != null && notice.performance_bond_amount > 0) ||
+    notice.performance_bond_lg_expiry_date?.trim() ||
+    notice.egp_sync_status === "synced" ||
+    notice.breach_report_letter_no?.trim() ||
+    notice.breach_missed_deadline_date?.trim()
   );
 }
 
@@ -4903,12 +5102,20 @@ export function step6AppealHasData(appeal?: Step6AppealState | null): boolean {
     appeal.cgd_submission_letter_no?.trim() ||
     appeal.cgd_submission_date?.trim() ||
     appeal.appeal_committee_decision?.trim() ||
+    appeal.appeal_resolved_date?.trim() ||
     appeal.appeal_report_approval_date?.trim() ||
     appeal.appeal_consideration_status?.trim()
   );
 }
 
 function normalizeStep6AppealState(raw: Partial<Step6AppealState>): Step6AppealState {
+  const status =
+    raw.appeal_status === "none" || raw.appeal_status === "pending"
+      ? raw.appeal_status
+      : "";
+  if (status === "none") {
+    return { ...EMPTY_STEP6_APPEAL, appeal_status: "none" };
+  }
   const received =
     raw.appeal_received_date?.trim() || raw.appeal_report_approval_date?.trim() || "";
   const headOpinion =
@@ -4923,10 +5130,7 @@ function normalizeStep6AppealState(raw: Partial<Step6AppealState>): Step6AppealS
   return {
     ...EMPTY_STEP6_APPEAL,
     ...raw,
-    appeal_status:
-      raw.appeal_status === "none" || raw.appeal_status === "pending"
-        ? raw.appeal_status
-        : "",
+    appeal_status: status,
     appeal_received_date: received,
     appeal_head_opinion: headOpinion,
     appeal_committee_decision: committeeDecision,
@@ -5236,6 +5440,57 @@ export const STEP7_NOTIFICATION_DEADLINE_EXCEEDED_MSG = (deadlineISO: string) =>
 export const STEP7_RECEIVED_BEFORE_LETTER_MSG =
   "❌ วันที่ได้รับหนังสือเชิญ ห้ามเกิดก่อนวันที่ออกหนังสือเชิญชวน";
 
+export const STEP7_NOTICE_OUTCOME_REQUIRED_MSG =
+  "กรุณาเลือกสถานการณ์การดำเนินการ (ผู้ชนะมาลงนาม หรือ ไม่มาลงนาม)";
+
+export const STEP7_PERFORMANCE_BOND_BELOW_MINIMUM_MSG =
+  "❌ ยอดเงินหลักประกันสัญญาไม่ครบถ้วนตามร้อยละ 5 ของมูลค่าสัญญา";
+
+export const STEP7_SIGNING_DEADLINE_EXTENSION_REQUIRED_MSG =
+  "กรุณาระบุเหตุผลความจำเป็นในการขยายเวลาเกิน 15 วัน";
+
+export const STEP7_PERFORMANCE_BOND_COLLECTION_REQUIRED_MSG =
+  "กรุณาเลือกวิธีการวางหลักประกันสัญญา (วางตามปกติ หรือ ยกเว้นตามระเบียบ)";
+
+export function isStep7PerformanceBondBelowMinimum(
+  bondAmount: number | null | undefined,
+  contractAmount: number | null | undefined,
+): boolean {
+  return isStep8GuaranteeBelowMinimum(bondAmount, contractAmount);
+}
+
+export function mapStep7BondTypeToStep8(
+  bondType: Step7PerformanceBondType,
+): Step8GuaranteeType {
+  if (bondType === "cash" || bondType === "bank_guarantee" || bondType === "cashier_check") {
+    return bondType;
+  }
+  return "";
+}
+
+export function buildStep8ExecutionFromStep7Bond(
+  notice: Step7ContractNotice,
+): Partial<Step8ContractExecution> {
+  const registration: Partial<Step8ContractExecution> = {
+    contract_no: notice.agreed_contract_no?.trim() ?? "",
+    contract_signed_date: notice.actual_contract_signed_date?.trim() ?? "",
+  };
+  if (notice.performance_bond_collection === "exempt") {
+    return {
+      ...registration,
+      guarantee_type: "",
+      guarantee_amount: null,
+      guarantee_document_no: "",
+    };
+  }
+  return {
+    ...registration,
+    guarantee_type: mapStep7BondTypeToStep8(notice.performance_bond_type ?? ""),
+    guarantee_amount: notice.performance_bond_amount,
+    guarantee_document_no: notice.performance_bond_document_no?.trim() ?? "",
+  };
+}
+
 /** วันที่ได้รับหนังสือเชิญอยู่ก่อนวันที่ในหนังสือเชิญลงนามหรือไม่ */
 export function isStep7ContractorReceivedBeforeLetterDate(
   letterDateISO: string,
@@ -5264,77 +5519,221 @@ export function getStep7ComplianceIssues(
     appealDeadlineISO: string;
     notificationDeadlineISO: string;
     hasContractNoticeLetterDoc: boolean;
+    hasContractNoticeDeliveryProofDoc: boolean;
+    hasContractDraftApprovalMemoDoc: boolean;
+    hasPerformanceBondDoc: boolean;
+    hasPerformanceBondExemptionDoc: boolean;
+    hasAbandonmentReportDoc: boolean;
+    winningProjectAmount?: number | null;
     stepDocs?: Array<{ document_type: string }>;
     timelineCtx?: TimelineValidationContext;
   },
   _autoStates?: Record<string, boolean>,
 ): Step7ComplianceIssue[] {
   const issues: Step7ComplianceIssue[] = [];
+  const outcome = contractNotice?.notice_outcome ?? "";
 
-  if (!contractNotice?.contract_notice_letter_no?.trim()) {
+  if (!outcome) {
     issues.push({
-      id: "contract_notice_letter_no",
-      message: "กรุณาระบุเลขที่หนังสือเชิญลงนามในสัญญา",
+      id: "notice_outcome",
+      message: STEP7_NOTICE_OUTCOME_REQUIRED_MSG,
     });
   }
-  const letterDate = contractNotice?.contract_notice_letter_date?.trim() ?? "";
-  if (!letterDate) {
-    issues.push({
-      id: "contract_notice_letter_date",
-      message: "กรุณาระบุวันที่ในหนังสือเชิญลงนาม",
-    });
+
+  if (outcome === "proceed_to_sign") {
+    if (!contractNotice?.contract_notice_letter_no?.trim()) {
+      issues.push({
+        id: "contract_notice_letter_no",
+        message: "กรุณาระบุเลขที่หนังสือเชิญลงนามในสัญญา",
+      });
+    }
+    if (!contractNotice?.agreed_contract_no?.trim()) {
+      issues.push({
+        id: "agreed_contract_no",
+        message: "กรุณาระบุเลขที่สัญญาที่ตกลงกัน",
+      });
+    }
+    if (!contractNotice?.actual_contract_signed_date?.trim()) {
+      issues.push({
+        id: "actual_contract_signed_date",
+        message: "กรุณาระบุวันที่ลงนามในสัญญาจริง",
+      });
+    }
+    const letterDate = contractNotice?.contract_notice_letter_date?.trim() ?? "";
+    if (!letterDate) {
+      issues.push({
+        id: "contract_notice_letter_date",
+        message: "กรุณาระบุวันที่ในหนังสือเชิญลงนาม",
+      });
+    }
+    const minLetterDate = computeStep7NoticeLetterMinDateISO(opts.appealDeadlineISO);
+    if (letterDate && minLetterDate && letterDate < minLetterDate) {
+      issues.push({
+        id: "contract_notice_letter_date_min",
+        message: `วันที่ในหนังสือเชิญลงนามต้องไม่ก่อน ${formatThaiDateSlash(minLetterDate)} (หลังพ้นกำหนดอุทธรณ์)`,
+      });
+    }
+    const appealEnd = opts.appealDeadlineISO?.trim() ?? "";
+    if (
+      letterDate &&
+      appealEnd &&
+      isContractActionBeforeAppealPeriodEnds(letterDate, appealEnd)
+    ) {
+      issues.push({
+        id: "contract_notice_letter_date_min",
+        message: `วันที่ในหนังสือเชิญลงนามต้องไม่ก่อนวันพ้นกำหนดอุทธรณ์ (ลงนามได้ตั้งแต่ ${formatThaiDateSlash(
+          computeContractEarliestFromAppealDeadlineISO(appealEnd),
+        )})`,
+      });
+    }
+    const notificationDeadline = opts.notificationDeadlineISO?.trim() ?? "";
+    if (
+      letterDate &&
+      notificationDeadline &&
+      isStep7NotificationLetterTooLate(letterDate, notificationDeadline)
+    ) {
+      issues.push({
+        id: "contract_notice_letter_date_deadline",
+        message: STEP7_NOTIFICATION_DEADLINE_EXCEEDED_MSG(notificationDeadline),
+      });
+    }
+    const receivedDate = contractNotice?.contractor_received_date?.trim() ?? "";
+    if (!receivedDate) {
+      issues.push({
+        id: "contractor_received_date",
+        message: "กรุณาระบุวันที่ผู้ประกอบการได้รับหนังสือเชิญ",
+      });
+    } else if (
+      letterDate &&
+      isStep7ContractorReceivedBeforeLetterDate(letterDate, receivedDate)
+    ) {
+      issues.push({
+        id: "contractor_received_date_before_letter",
+        message: STEP7_RECEIVED_BEFORE_LETTER_MSG,
+      });
+    }
+    const signingDeadline = contractNotice?.contract_signing_deadline?.trim() ?? "";
+    if (!signingDeadline) {
+      issues.push({
+        id: "contract_signing_deadline",
+        message: "กรุณาระบุกำหนดวันสุดท้ายที่ต้องมาลงนาม",
+      });
+    } else if (
+      letterDate &&
+      isStep7SigningDeadlineBeyondStandard(letterDate, signingDeadline) &&
+      !contractNotice?.signing_deadline_extension_reason?.trim()
+    ) {
+      issues.push({
+        id: "signing_deadline_extension_reason",
+        message: STEP7_SIGNING_DEADLINE_EXTENSION_REQUIRED_MSG,
+      });
+    }
+    if (!opts.hasContractNoticeLetterDoc) {
+      issues.push({
+        id: "contract_notice_letter_doc",
+        message: `กรุณาแนบเอกสาร "${STEP7_DOC.CONTRACT_NOTICE_LETTER}"`,
+      });
+    }
+    if (!opts.hasContractNoticeDeliveryProofDoc) {
+      issues.push({
+        id: "contract_notice_delivery_proof_doc",
+        message: `กรุณาแนบเอกสาร "${STEP7_DOC.CONTRACT_NOTICE_DELIVERY_PROOF}" (หลักฐานการส่ง/ใบตอบรับไปรษณีย์ — บังคับตามมาตรา 109)`,
+      });
+    }
+    if (!opts.hasContractDraftApprovalMemoDoc) {
+      issues.push({
+        id: "contract_draft_approval_memo_doc",
+        message: `กรุณาแนบเอกสาร "${STEP7_DOC.CONTRACT_DRAFT_APPROVAL_MEMO}"`,
+      });
+    }
+
+    const bondCollection = contractNotice?.performance_bond_collection ?? "";
+    if (!bondCollection) {
+      issues.push({
+        id: "performance_bond_collection",
+        message: STEP7_PERFORMANCE_BOND_COLLECTION_REQUIRED_MSG,
+      });
+    }
+    if (bondCollection === "exempt") {
+      if (!opts.hasPerformanceBondExemptionDoc) {
+        issues.push({
+          id: "performance_bond_exemption_doc",
+          message: `กรุณาแนบเอกสาร "${STEP7_DOC.PERFORMANCE_BOND_EXEMPTION_MEMO}"`,
+        });
+      }
+    }
+    if (bondCollection === "collect") {
+    const bondType = contractNotice?.performance_bond_type ?? "";
+    if (!bondType) {
+      issues.push({
+        id: "performance_bond_type",
+        message: "กรุณาเลือกประเภทหลักประกันสัญญา",
+      });
+    }
+    if (bondType && bondType !== "cash") {
+      if (!contractNotice?.performance_bond_bank_name?.trim()) {
+        issues.push({
+          id: "performance_bond_bank_name",
+          message: "กรุณาระบุชื่อธนาคารผู้ออกหลักประกัน",
+        });
+      }
+      if (!contractNotice?.performance_bond_document_no?.trim()) {
+        issues.push({
+          id: "performance_bond_document_no",
+          message: "กรุณาระบุเลขที่หนังสือค้ำประกัน/เลขที่เช็ค",
+        });
+      }
+    }
+    if (bondType === "bank_guarantee") {
+      if (!contractNotice?.performance_bond_lg_expiry_date?.trim()) {
+        issues.push({
+          id: "performance_bond_lg_expiry_date",
+          message: "กรุณาระบุวันสิ้นสุดความคุ้มครองของหนังสือค้ำประกัน",
+        });
+      }
+    }
+    const bondAmount = contractNotice?.performance_bond_amount;
+    if (bondAmount == null || !Number.isFinite(bondAmount) || bondAmount <= 0) {
+      issues.push({
+        id: "performance_bond_amount",
+        message: "กรุณาระบุจำนวนเงินหลักประกันสัญญาที่วางจริง",
+      });
+    } else if (
+      isStep7PerformanceBondBelowMinimum(bondAmount, opts.winningProjectAmount)
+    ) {
+      issues.push({
+        id: "performance_bond_amount_min",
+        message: STEP7_PERFORMANCE_BOND_BELOW_MINIMUM_MSG,
+      });
+    }
+    if (!opts.hasPerformanceBondDoc) {
+      issues.push({
+        id: "performance_bond_doc",
+        message: `กรุณาแนบเอกสาร "${STEP7_DOC.PERFORMANCE_BOND_LETTER}"`,
+      });
+    }
+    }
   }
-  const appealEnd = opts.appealDeadlineISO?.trim() ?? "";
-  if (
-    letterDate &&
-    appealEnd &&
-    isContractActionBeforeAppealPeriodEnds(letterDate, appealEnd)
-  ) {
-    issues.push({
-      id: "contract_notice_letter_date_min",
-      message: `วันที่ในหนังสือเชิญลงนามต้องไม่ก่อนวันพ้นกำหนดอุทธรณ์ (ลงนามได้ตั้งแต่ ${formatThaiDateSlash(
-        computeContractEarliestFromAppealDeadlineISO(appealEnd),
-      )})`,
-    });
-  }
-  const notificationDeadline = opts.notificationDeadlineISO?.trim() ?? "";
-  if (
-    letterDate &&
-    notificationDeadline &&
-    isStep7NotificationLetterTooLate(letterDate, notificationDeadline)
-  ) {
-    issues.push({
-      id: "contract_notice_letter_date_deadline",
-      message: STEP7_NOTIFICATION_DEADLINE_EXCEEDED_MSG(notificationDeadline),
-    });
-  }
-  const receivedDate = contractNotice?.contractor_received_date?.trim() ?? "";
-  if (!receivedDate) {
-    issues.push({
-      id: "contractor_received_date",
-      message: "กรุณาระบุวันที่ผู้ประกอบการได้รับหนังสือเชิญ",
-    });
-  } else if (
-    letterDate &&
-    isStep7ContractorReceivedBeforeLetterDate(letterDate, receivedDate)
-  ) {
-    issues.push({
-      id: "contractor_received_date_before_letter",
-      message: STEP7_RECEIVED_BEFORE_LETTER_MSG,
-    });
-  }
-  const signingDeadline = contractNotice?.contract_signing_deadline?.trim() ?? "";
-  if (!signingDeadline) {
-    issues.push({
-      id: "contract_signing_deadline",
-      message: "กรุณาระบุกำหนดวันสุดท้ายที่ต้องมาลงนาม",
-    });
-  }
-  if (!opts.hasContractNoticeLetterDoc) {
-    issues.push({
-      id: "contract_notice_letter_doc",
-      message: `กรุณาแนบเอกสาร "${STEP7_DOC.CONTRACT_NOTICE_LETTER}"`,
-    });
+
+  if (outcome === "breach_no_show") {
+    if (!contractNotice?.breach_report_letter_no?.trim()) {
+      issues.push({
+        id: "breach_report_letter_no",
+        message: "กรุณาระบุเลขที่หนังสือรายงานหัวหน้าหน่วยงานเรื่องเอกชนไม่มาลงนาม",
+      });
+    }
+    if (!contractNotice?.breach_missed_deadline_date?.trim()) {
+      issues.push({
+        id: "breach_missed_deadline_date",
+        message: "กรุณาระบุวันที่พ้นกำหนดนัดหมายจริง",
+      });
+    }
+    if (!opts.hasAbandonmentReportDoc) {
+      issues.push({
+        id: "abandonment_report_doc",
+        message: `กรุณาแนบเอกสาร "${STEP7_DOC.ABANDONMENT_REPORT_MEMO}"`,
+      });
+    }
   }
 
   if (!opts.responsibleName.trim()) {
@@ -5345,13 +5744,23 @@ export function getStep7ComplianceIssues(
   }
 
   if (opts.timelineCtx) {
-    issues.push(
-      ...getCrossStepTimelineConflictIssues(
-        7,
-        getStep7TimelineDateFields(contractNotice),
-        opts.timelineCtx,
-      ),
-    );
+    const timelineFields =
+      outcome === "breach_no_show"
+        ? [
+            {
+              id: "breach_missed_deadline_date",
+              iso: contractNotice?.breach_missed_deadline_date ?? "",
+              label: "วันที่พ้นกำหนดนัดหมายจริง",
+            },
+          ]
+        : outcome === "proceed_to_sign"
+          ? getStep7TimelineDateFields(contractNotice)
+          : [];
+    if (timelineFields.length > 0) {
+      issues.push(
+        ...getCrossStepTimelineConflictIssues(7, timelineFields, opts.timelineCtx),
+      );
+    }
   }
 
   return issues;
@@ -5374,10 +5783,51 @@ export function loadStep7FormFromNote(note: string | null): Step7FormData {
   const f = form as Step7FormData;
   return {
     checklist: f.checklist,
-    contractNotice: {
-      ...EMPTY_STEP7_CONTRACT_NOTICE,
-      ...f.contractNotice,
-    },
+    contractNotice: normalizeStep7ContractNotice(f.contractNotice),
+  };
+}
+
+function normalizeStep7ContractNotice(
+  raw?: Partial<Step7ContractNotice> | null,
+): Step7ContractNotice {
+  if (!raw) return { ...EMPTY_STEP7_CONTRACT_NOTICE };
+  const bondType =
+    raw.performance_bond_type === "cash" ||
+    raw.performance_bond_type === "bank_guarantee" ||
+    raw.performance_bond_type === "cashier_check"
+      ? raw.performance_bond_type
+      : "";
+  const outcome =
+    raw.notice_outcome === "proceed_to_sign" || raw.notice_outcome === "breach_no_show"
+      ? raw.notice_outcome
+      : "";
+  const amountRaw = raw.performance_bond_amount;
+  const bondAmount =
+    amountRaw != null && Number.isFinite(Number(amountRaw)) && Number(amountRaw) > 0
+      ? Number(amountRaw)
+      : null;
+  const bondCollection =
+    raw.performance_bond_collection === "collect" || raw.performance_bond_collection === "exempt"
+      ? raw.performance_bond_collection
+      : "";
+  const egpSyncStatus =
+    raw.egp_sync_status === "synced" || raw.egp_sync_status === "pending"
+      ? raw.egp_sync_status
+      : "pending";
+  return {
+    ...EMPTY_STEP7_CONTRACT_NOTICE,
+    ...raw,
+    notice_outcome: outcome,
+    performance_bond_collection: bondCollection,
+    performance_bond_type: bondType,
+    performance_bond_amount: bondAmount,
+    performance_bond_lg_expiry_date: raw.performance_bond_lg_expiry_date?.trim() ?? "",
+    egp_sync_status: egpSyncStatus,
+    agreed_contract_no: raw.agreed_contract_no?.trim() ?? "",
+    actual_contract_signed_date: raw.actual_contract_signed_date?.trim() ?? "",
+    signing_deadline_extension_reason: raw.signing_deadline_extension_reason?.trim() ?? "",
+    breach_report_letter_no: raw.breach_report_letter_no?.trim() ?? "",
+    breach_missed_deadline_date: raw.breach_missed_deadline_date?.trim() ?? "",
   };
 }
 
