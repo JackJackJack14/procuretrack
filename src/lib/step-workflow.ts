@@ -112,10 +112,38 @@ export function canCompleteWorkflowStep(
   viewedStep: number,
   currentWorkflowStep: number,
   stepStatus: string,
-  procurementPath?: string | null,
+  _procurementPath?: string | null,
 ): boolean {
   if (stepStatus === "completed") return false;
   return isActiveWorkflowStep(viewedStep, currentWorkflowStep);
+}
+
+/** ย้อนกลับแก้ไขขั้นตอนเก่าแล้วบันทึกไปขั้นถัดไป (นำทาง UI ไม่เลื่อน workflow ใน DB) */
+export function canSubmitHistoricalSaveAndNext(
+  viewedStep: number,
+  currentWorkflowStep: number,
+): boolean {
+  return viewedStep < currentWorkflowStep;
+}
+
+export function getWorkflowUiStepAfterHistoricalSave(
+  viewedUiStep: number,
+  maxUiStep: number,
+): number {
+  return Math.min(viewedUiStep + 1, maxUiStep);
+}
+
+export function canSubmitWorkflowStepAdvance(opts: {
+  mode: StepWorkflowMode;
+  viewedStep: number;
+  currentWorkflowStep: number;
+  stepStatus: string;
+}): boolean {
+  const { mode, viewedStep, currentWorkflowStep, stepStatus } = opts;
+  if (canSaveHistoricalEdit(mode)) {
+    return canSubmitHistoricalSaveAndNext(viewedStep, currentWorkflowStep);
+  }
+  return canCompleteWorkflowStep(viewedStep, currentWorkflowStep, stepStatus);
 }
 
 export function canSaveHistoricalEdit(mode: StepWorkflowMode): boolean {

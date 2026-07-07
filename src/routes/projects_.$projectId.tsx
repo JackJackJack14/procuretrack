@@ -312,9 +312,11 @@ import {
   updateProjectWithSchemaFallback,
 } from "@/lib/step-rollback";
 import {
-  canCompleteWorkflowStep,
   canRollbackWorkflowStep,
   canSaveHistoricalEdit,
+  canSubmitHistoricalSaveAndNext,
+  canSubmitWorkflowStepAdvance,
+  getWorkflowUiStepAfterHistoricalSave,
   isHistoricalWorkflowMode,
   getStepWorkflowMode,
   isWorkflowReadOnly,
@@ -1724,6 +1726,12 @@ function ProjectDetailPage() {
       return false;
     }
 
+    const failSaveDraft = (message: string): false => {
+      setError(message);
+      toast.error(message);
+      return false;
+    };
+
     const draftSavedToast = (stepLabel: string) => {
       if (canSaveHistoricalEdit(workflowMode)) {
         setHistoricalEditUnlocked(false);
@@ -1910,8 +1918,7 @@ function ProjectDetailPage() {
         { note: formNote || null, step2_checklist: step2Checklist },
       );
       if (e?.error) {
-        setError(e.error.message);
-        return false;
+        return failSaveDraft(e.error.message);
       }
 
       const projectFields = buildProjectStep2Fields(
@@ -2033,8 +2040,7 @@ function ProjectDetailPage() {
         { note: formNote || null, step3_checklist: step3Checklist },
       );
       if (e?.error) {
-        setError(e.error.message);
-        return;
+        return failSaveDraft(e.error.message);
       }
       const { error: projErr } = await supabase
         .from("projects")
@@ -2043,7 +2049,7 @@ function ProjectDetailPage() {
       if (projErr) {
         console.warn("[Step3] project procurement fields sync failed", projErr);
       }
-      draftSavedToast("ขั้นตอนที่ 3 ");
+      if (!opts?.silent) draftSavedToast("ขั้นตอนที่ 3 ");
       await propagateResponsibleToStep1(effectiveResponsibleName);
       await invalidateAll();
       return true;
@@ -2092,8 +2098,7 @@ function ProjectDetailPage() {
         { note: formNote || null },
       );
       if (e?.error) {
-        setError(e.error.message);
-        return;
+        return failSaveDraft(e.error.message);
       }
       const { error: projErr } = await supabase
         .from("projects")
@@ -2105,11 +2110,9 @@ function ProjectDetailPage() {
         })
         .eq("id", project.id);
       if (projErr) {
-        setError(projErr.message);
-        toast.error(projErr.message);
-        return false;
+        return failSaveDraft(projErr.message);
       }
-      draftSavedToast("ขั้นตอนที่ 4 ");
+      if (!opts?.silent) draftSavedToast("ขั้นตอนที่ 4 ");
       await propagateResponsibleToStep1(effectiveResponsibleName);
       await invalidateAll();
       return true;
@@ -2140,7 +2143,7 @@ function ProjectDetailPage() {
         const msg = getStep5WinnerAnnouncementDateInvalidMsg(step5EvaluationApprovalDate);
         toast.error(msg);
         setError(msg);
-        return;
+        return false;
       }
       const formNote = serializeStepNote(note, {
         checklist: step5Checklist,
@@ -2152,8 +2155,7 @@ function ProjectDetailPage() {
         { note: formNote || null },
       );
       if (e?.error) {
-        setError(e.error.message);
-        return;
+        return failSaveDraft(e.error.message);
       }
       if (step4Record) {
         const step4FormNote = serializeStepNote(note, {
@@ -2190,10 +2192,10 @@ function ProjectDetailPage() {
       if (projErr) {
         console.warn("[Step5] winner announcement sync failed", projErr);
       }
-      draftSavedToast("ขั้นตอนที่ 5 ");
+      if (!opts?.silent) draftSavedToast("ขั้นตอนที่ 5 ");
       await propagateResponsibleToStep1(effectiveResponsibleName);
       await invalidateAll();
-      return;
+      return true;
     }
 
     if (current.step_number === 6) {
@@ -2219,8 +2221,7 @@ function ProjectDetailPage() {
         { note: formNote || null },
       );
       if (e?.error) {
-        setError(e.error.message);
-        return;
+        return failSaveDraft(e.error.message);
       }
       const { error: projErr } = await supabase
         .from("projects")
@@ -2229,10 +2230,10 @@ function ProjectDetailPage() {
       if (projErr) {
         console.warn("[Step6] appeal_status sync failed (non-blocking)", projErr);
       }
-      draftSavedToast("ขั้นตอนที่ 6 ");
+      if (!opts?.silent) draftSavedToast("ขั้นตอนที่ 6 ");
       await propagateResponsibleToStep1(effectiveResponsibleName);
       await invalidateAll();
-      return;
+      return true;
     }
 
     if (current.step_number === 9) {
@@ -2255,8 +2256,7 @@ function ProjectDetailPage() {
         { note: formNote || null },
       );
       if (e?.error) {
-        setError(e.error.message);
-        return;
+        return failSaveDraft(e.error.message);
       }
       if (endISO) {
         const { data: contractRow } = await supabase
@@ -2287,10 +2287,10 @@ function ProjectDetailPage() {
           console.warn("[Step9] external capture sync failed", projErr);
         }
       }
-      draftSavedToast("ขั้นตอนที่ 9 ");
+      if (!opts?.silent) draftSavedToast("ขั้นตอนที่ 9 ");
       await propagateResponsibleToStep1(effectiveResponsibleName);
       await invalidateAll();
-      return;
+      return true;
     }
 
     if (current.step_number === 7 || current.step_number === 8 || current.step_number === 10) {
@@ -2329,8 +2329,7 @@ function ProjectDetailPage() {
       formNote ? { note: formNote || null } : undefined,
     );
     if (e?.error) {
-      setError(e.error.message);
-      return;
+      return failSaveDraft(e.error.message);
     }
     if (current.step_number === 8) {
       const { error: projErr } = await supabase
@@ -2341,8 +2340,12 @@ function ProjectDetailPage() {
         console.warn("[Step8] contract fields sync failed", projErr);
       }
     }
+    if (!opts?.silent) {
+      draftSavedToast(`ขั้นตอนที่ ${current.step_number} `);
+    }
     await propagateResponsibleToStep1(effectiveResponsibleName);
     await invalidateAll();
+    return true;
   };
 
   const advanceToNextStep = async (): Promise<boolean> => {
@@ -2601,14 +2604,27 @@ function ProjectDetailPage() {
   };
 
   const completeStep = async (opts?: { skipDocValidation?: boolean }) => {
-    if (!current || !project) return;
-    if (!canCompleteWorkflowStep(
-      activeStep,
-      isSpecificMethodShortWorkflow(project.method) ? workflowUiStep : project.current_step,
-      current.status,
-      project.procurement_path,
-    )) {
-      toast.error("ดำเนินการไปขั้นถัดไปได้เฉพาะขั้นตอนปัจจุบันเท่านั้น");
+    if (!current || !project) {
+      toast.error("ไม่พบข้อมูลขั้นตอน — กรุณารีเฟรชหน้าแล้วลองใหม่");
+      return;
+    }
+    const currentWorkflowUiStep = isSpecificShortWorkflow
+      ? workflowUiStep
+      : workflowStep;
+    const isHistoricalSaveAndNext = canSaveHistoricalEdit(workflowMode);
+    if (
+      !canSubmitWorkflowStepAdvance({
+        mode: workflowMode,
+        viewedStep: activeStep,
+        currentWorkflowStep: currentWorkflowUiStep,
+        stepStatus: current.status,
+      })
+    ) {
+      toast.error(
+        isHistoricalSaveAndNext
+          ? "ไม่สามารถบันทึกและไปขั้นถัดไปได้ — ขั้นตอนนี้อยู่ที่หรือเกินความคืบหน้าปัจจุบันแล้ว"
+          : "ดำเนินการไปขั้นถัดไปได้เฉพาะขั้นตอนปัจจุบันเท่านั้น",
+      );
       return;
     }
     const bypassProcurementGates = isProcurementStepBypassed(
@@ -2948,8 +2964,24 @@ function ProjectDetailPage() {
         return;
       }
     }
+    const completedStepNumber = current.step_number;
     const saved = await saveDraft({ silent: true });
-    if (saved === false) return;
+    if (saved !== true) return;
+    if (isHistoricalSaveAndNext) {
+      const nextUiStep = getWorkflowUiStepAfterHistoricalSave(
+        activeStep,
+        currentWorkflowUiStep,
+      );
+      setHistoricalEditUnlocked(false);
+      setHighlightedMissingDocs([]);
+      setHighlightedComplianceIssues([]);
+      setComplianceSubmitTriggered(false);
+      setActiveStep(nextUiStep);
+      toast.success(
+        `บันทึกการแก้ไขขั้นตอนที่ ${completedStepNumber} เรียบร้อย — ไปขั้นตอนที่ ${nextUiStep} แล้ว`,
+      );
+      return;
+    }
     if (
       current.step_number === 7 &&
       step7ContractNotice.notice_outcome === "proceed_to_sign"
@@ -3033,7 +3065,6 @@ function ProjectDetailPage() {
         return;
       }
     }
-    const completedStepNumber = current.step_number;
     const ok = await advanceToNextStep();
     if (ok) {
       setHighlightedMissingDocs([]);
@@ -3046,6 +3077,8 @@ function ProjectDetailPage() {
             ? "บันทึกขั้นตอนที่ 1 เรียบร้อย — ไปขั้นตอนที่ 2 แล้ว"
             : "ยืนยันเสร็จสิ้นขั้นตอนแล้ว",
       );
+    } else {
+      toast.error("ไม่สามารถไปขั้นตอนถัดไปได้ — กรุณาตรวจสอบข้อมูลและลองใหม่");
     }
   };
 
@@ -4873,8 +4906,16 @@ function ProjectDetailPage() {
                     committeeDecision: step6Appeal.appeal_committee_decision ?? "",
                   });
                 }
+                const currentWorkflowUiStep = isSpecificShortWorkflow
+                  ? workflowUiStep
+                  : workflowStep;
+                const isViewingPastStep = activeStep < currentWorkflowUiStep;
+                const showHistoricalSaveAndNext =
+                  workflowMode === "historical_edit" &&
+                  canSubmitHistoricalSaveAndNext(activeStep, currentWorkflowUiStep);
                 const disabled =
-                  isCompleted ||
+                  !showHistoricalSaveAndNext &&
+                  (isCompleted ||
                   (bypassCurrentStep
                     ? false
                     : current.step_number === 1
@@ -4897,7 +4938,7 @@ function ProjectDetailPage() {
                                     ? !step9Ready
                                     : current.step_number === 10
                                       ? !step10Ready
-                                      : !allUploaded);
+                                      : !allUploaded));
                 if (
                   current.step_number === 2 &&
                   disabled &&
@@ -4911,23 +4952,19 @@ function ProjectDetailPage() {
                     blockingIssues: step2ComplianceIssues.map((i) => i.message),
                   });
                 }
-                const currentWorkflowUiStep = isSpecificShortWorkflow
-                  ? workflowUiStep
-                  : workflowStep;
-                const isViewingPastStep = activeStep < currentWorkflowUiStep;
                 const disableHistoricalUnlock =
                   current.step_number === 1 && workflowStep > 1;
                 const showUnlockHistoricalEdit =
                   workflowMode === "historical_readonly" &&
                   !disableHistoricalUnlock;
                 const showCancelHistoricalEdit = workflowMode === "historical_edit";
-                const showSaveHistoricalChanges = canSaveHistoricalEdit(workflowMode);
                 const showReturnToCurrentStep =
                   isViewingPastStep && workflowMode !== "historical_edit";
                 const showCompleteBtn =
-                  workflowMode === "current" &&
-                  !isCompleted &&
-                  project.status !== PROJECT_STATUS_WARRANTY &&
+                  ((workflowMode === "current" &&
+                    !isCompleted &&
+                    project.status !== PROJECT_STATUS_WARRANTY) ||
+                    showHistoricalSaveAndNext) &&
                   (isSpecificShortWorkflow || current.step_number !== 3 || showStep3DetailForm);
                 const showSaveDraft =
                   !isViewingPastStep &&
@@ -4989,7 +5026,7 @@ function ProjectDetailPage() {
                           </button>
                         )}
                         {shouldShowRollbackToEditProjectButton(project.current_step) &&
-                          !showSaveHistoricalChanges && (
+                          !showHistoricalSaveAndNext && (
                           <RollbackToEditProjectButton
                             onConfirm={handleRollbackToEditProject}
                             loading={rollingBackToEdit}
@@ -5007,16 +5044,6 @@ function ProjectDetailPage() {
                         )}
                       </div>
                       <div className="flex flex-wrap gap-3 ml-auto">
-                        {showSaveHistoricalChanges && (
-                          <button
-                            type="button"
-                            onClick={() => void saveDraft()}
-                            className="h-10 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 flex items-center gap-2"
-                          >
-                            <Check className="h-4 w-4" />
-                            บันทึกข้อมูล
-                          </button>
-                        )}
                         {showReturnToCurrentStep && (
                           <button
                             type="button"
