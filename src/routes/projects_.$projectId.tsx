@@ -14,7 +14,7 @@ import {
   EGP_STEP_LEGAL_HINTS,
   getMilestoneLabel,
 } from "@/lib/egp-milestones";
-import { formatThaiDate, formatThaiDateSlash } from "@/lib/utils";
+import { formatThaiDate, formatThaiDateHint } from "@/lib/utils";
 import { HELPER_BUTTON_MD, HELPER_BUTTON_SM_WIDE } from "@/lib/helper-button-styles";
 import {
   buildProjectTimelineInput,
@@ -6158,17 +6158,17 @@ function ProjectTimeline({
                     ) : it.date ? (
                       isStepCompleted && !it.estimated ? (
                         <span className="font-medium text-green-700/85">
-                          วันที่จริง: {formatThaiDateSlash(it.date)}
+                          วันที่จริง: {formatThaiDate(it.date)}
                           <span className="block text-[9px] text-green-700/70">(เสร็จสิ้น)</span>
                         </span>
                       ) : it.estimated ? (
                         <span className="font-medium text-blue-700">
-                          วันที่ประมาณการ: ~ {formatThaiDateSlash(it.date)}
+                          วันที่ประมาณการ: ~ {formatThaiDate(it.date)}
                           <span className="block text-[9px] text-blue-600/90">(ประมาณการ)</span>
                         </span>
                       ) : (
                         <span className="font-medium text-green-700/85">
-                          วันที่จริง: {formatThaiDateSlash(it.date)}
+                          วันที่จริง: {formatThaiDate(it.date)}
                         </span>
                       )
                     ) : (

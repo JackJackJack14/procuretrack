@@ -1,7 +1,7 @@
 /** ขั้นตอนที่ 6 — อุทธรณ์ (มาตรา 117) — อินโฟกราฟิก 3 การ์ด */
 
 import { addWorkdays, isWorkday, parseISODateLocal, toISODate } from "@/lib/workdays";
-import { formatThaiDateSlash } from "@/lib/utils";
+import { formatThaiDateHint } from "@/lib/utils";
 
 const THAI_MONTH_ABBR = [
   "ม.ค.",
@@ -114,13 +114,13 @@ export function isStep6CgdSubmissionBeyondHeadDeadline(
 export function getStep6HeadOpinionDisplayLine(appealReceivedISO: string): string | null {
   const deadline = computeStep6HeadOpinionDeadlineISO(appealReceivedISO);
   if (!deadline) return null;
-  return `⏱️ เดดไลน์ต้องทำความเห็นเสนอหัวหน้าหน่วยงาน (5 วันทำการ): ภายในวันที่ ${formatThaiDateSlash(deadline)}`;
+  return `⏱️ เดดไลน์ต้องทำความเห็นเสนอหัวหน้าหน่วยงาน (5 วันทำการ): ภายใน ${formatThaiDateHint(deadline)}`;
 }
 
 export function getStep6CgdReportDisplayLine(headSignedISO: string): string | null {
   const deadline = computeStep6CgdReportDeadlineFromHeadSignedISO(headSignedISO);
   if (!deadline) return null;
-  return `⏱️ เดดไลน์ต้องรายงานส่งกรมบัญชีกลาง (3 วันทำการนับจากวันหัวหน้าลงนาม): ภายในวันที่ ${formatThaiDateSlash(deadline)}`;
+  return `⏱️ เดดไลน์ต้องรายงานส่งกรมบัญชีกลาง (3 วันทำการนับจากวันหัวหน้าลงนาม): ภายใน ${formatThaiDateHint(deadline)}`;
 }
 
 export type Step6AppealPendingTimeline = {
@@ -148,9 +148,9 @@ export function getStep6AppealPendingTimelineDisplayLines(
 ): { headOpinionLine: string; cgdReportLine: string } | null {
   if (!timeline) return null;
   return {
-    headOpinionLine: `⏱️ เดดไลน์ต้องทำความเห็นเสนอหัวหน้าหน่วยงาน (5 วันทำการ): ภายในวันที่ ${formatThaiDateSlash(timeline.headOpinionDeadlineISO)}`,
+    headOpinionLine: `⏱️ เดดไลน์ต้องทำความเห็นเสนอหัวหน้าหน่วยงาน (5 วันทำการ): ภายใน ${formatThaiDateHint(timeline.headOpinionDeadlineISO)}`,
     cgdReportLine: timeline.cgdReportDeadlineISO
-      ? `⏱️ เดดไลน์ต้องรายงานส่งกรมบัญชีกลาง (3 วันทำการนับจากวันหัวหน้าลงนาม): ภายในวันที่ ${formatThaiDateSlash(timeline.cgdReportDeadlineISO)}`
+      ? `⏱️ เดดไลน์ต้องรายงานส่งกรมบัญชีกลาง (3 วันทำการนับจากวันหัวหน้าลงนาม): ภายใน ${formatThaiDateHint(timeline.cgdReportDeadlineISO)}`
       : "",
   };
 }

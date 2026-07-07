@@ -6,7 +6,7 @@ import {
   mergeStep9ScheduleFromSources,
   resolveStep9ContractEndDateISO,
 } from "@/lib/step-form";
-import { formatThaiDateSlash } from "@/lib/utils";
+import { formatThaiDateHint } from "@/lib/utils";
 
 export const STEP10_GUIDELINE_ACTION_TEXT =
   "ติดตามและบันทึกการส่งมอบงานของคู่สัญญาในแต่ละงวดงานให้ตรงตามกำหนดเวลา พร้อมตรวจสอบรายงานผลการตรวจรับพัสดุของคณะกรรมการให้ถูกต้องครบถ้วนก่อนส่งเบิกจ่าย";
@@ -106,7 +106,7 @@ export function computeStep10ContractStatus(
     const remaining = -diffDays;
     const statusText =
       diffDays === 0
-        ? `ครบกำหนดวันนี้ (${formatThaiDateSlash(contractEndISO)}) — ต้องส่งมอบงานภายในวันนี้`
+        ? `ครบกำหนดวันนี้ (${formatThaiDateHint(contractEndISO)}) — ต้องส่งมอบงานภายในวันนี้`
         : `อยู่ระหว่างดำเนินการ — เหลือ ${remaining} วันปฏิทิน ก่อนวันสิ้นสุดสัญญา`;
 
     return {

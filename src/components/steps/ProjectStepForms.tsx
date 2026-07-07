@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Plus, Trash2, Download, ChevronDown, FileText, Loader2, FolderOpen, CheckCircle2 } from "lucide-react";
 import { ChronologicalDatePicker } from "@/components/ChronologicalDatePicker";
 import { ThaiDatePicker } from "@/components/ThaiDatePicker";
-import { formatThaiDate, formatThaiDateSlash } from "@/lib/utils";
+import { formatThaiDate, formatThaiDateHint } from "@/lib/utils";
 import { HELPER_BUTTON_LG, HELPER_BUTTON_MD, HELPER_BUTTON_MD_WIDE, HELPER_BUTTON_SM, HELPER_BUTTON_SM_WIDE } from "@/lib/helper-button-styles";
 import {
   countWorkdaysAfterStartISO,
@@ -2872,7 +2872,7 @@ export function Step3DetailForm({
           {showProcApprovalDateError && hearingFormActive && publicationEnd && (
             <p className="text-xs text-destructive font-medium mt-1">
               ❌ วันที่อนุมัติรายงานผล ต้องไม่น้อยกว่าวันสิ้นสุดการเผยแพร่ร่างประกาศ (วันที่{" "}
-              {formatThaiDateSlash(publicationEnd)})
+              {formatThaiDateHint(publicationEnd)})
             </p>
           )}
         </FieldRow>
@@ -3575,13 +3575,13 @@ export function Step4DetailForm({
               {medianApprovalDate && (
                 <>
                   {" "}
-                  (อนุมัติราคากลางขั้นตอนที่ 2: {formatThaiDateSlash(medianApprovalDate)})
+                  (อนุมัติราคากลางขั้นตอนที่ 2: {formatThaiDateHint(medianApprovalDate)})
                 </>
               )}
               {requiresStep3PublicationEnd && publicationEnd && (
                 <>
                   {" "}
-                  (สิ้นสุดรับฟังความคิดเห็นขั้นตอนที่ 3: {formatThaiDateSlash(publicationEnd)})
+                  (สิ้นสุดรับฟังความคิดเห็นขั้นตอนที่ 3: {formatThaiDateHint(publicationEnd)})
                 </>
               )}
             </p>
@@ -4009,7 +4009,7 @@ export function Step6AppealForm({
                   readOnly
                   value={
                     appealDeadlineISO
-                      ? formatThaiDateSlash(appealDeadlineISO)
+                      ? formatThaiDateHint(appealDeadlineISO)
                       : "— กรุณาบันทึกวันที่แจ้งผลให้ผู้เสนอราคาทราบในขั้นตอนที่ 5 ก่อน —"
                   }
                   className={`${inputCls} bg-muted/50 cursor-not-allowed`}
@@ -4018,7 +4018,7 @@ export function Step6AppealForm({
                 {appealDeadlineISO && (
                   <p className="text-xs text-muted-foreground">
                     คำนวณจากวันที่แจ้งผลให้ผู้เสนอราคาทราบ (
-                    {formatThaiDateSlash(winnerAnnouncementDate)}) + 7 วันทำการ
+                    {formatThaiDateHint(winnerAnnouncementDate)}) + 7 วันทำการ
                     ไม่นับวันหยุดราชการ
                   </p>
                 )}
@@ -4106,7 +4106,7 @@ export function Step6AppealForm({
                 )}
                 {appealReceivedMinDate && (
                   <p className="text-xs text-muted-foreground">
-                    เลือกได้ตั้งแต่วันที่ {formatThaiDateSlash(appealReceivedMinDate)} เป็นต้นไป
+                    เลือกได้ตั้งแต่ {formatThaiDateHint(appealReceivedMinDate)} เป็นต้นไป
                   </p>
                 )}
                 {receivedBeforeMin && (
@@ -4205,7 +4205,7 @@ export function Step6AppealForm({
                 {headSignedMinDate && receivedDate && (
                   <p className="text-xs text-muted-foreground">
                     เลือกได้ตั้งแต่วันถัดจากวันรับหนังสืออุทธรณ์ (
-                    {formatThaiDateSlash(headSignedMinDate)}) เป็นต้นไป
+                    {formatThaiDateHint(headSignedMinDate)}) เป็นต้นไป
                   </p>
                 )}
                 {cgdReportLine && (
@@ -4994,7 +4994,7 @@ export function Step5DetailForm({
                 <>
                   {" "}
                   (วันสิ้นสุดรับฟังความคิดเห็นขั้นตอนที่ 3:{" "}
-                  {formatThaiDateSlash(publicationEnd)})
+                  {formatThaiDateHint(publicationEnd)})
                 </>
               )}
             </p>
@@ -5002,7 +5002,7 @@ export function Step5DetailForm({
           {showApprovalDateError && bidSubmissionEndDate && approvalBeforeBidEnd && (
             <p className="text-xs text-destructive font-medium mt-1">
               {STEP4_EVALUATION_APPROVAL_BEFORE_BID_END_MSG}
-              {" "}(วันที่ {formatThaiDateSlash(bidSubmissionEndDate)})
+              {" "}(วันที่ {formatThaiDateHint(bidSubmissionEndDate)})
             </p>
           )}
           {approvalOverdue && !showApprovalDateError && (
@@ -5144,7 +5144,7 @@ export function Step5DetailForm({
             )}
             {minAnnouncementDate ? (
               <p className="text-xs text-muted-foreground">
-                เลือกได้ตั้งแต่วันที่ {formatThaiDateSlash(minAnnouncementDate)} เป็นต้นไป
+                เลือกได้ตั้งแต่ {formatThaiDateHint(minAnnouncementDate)} เป็นต้นไป
                 (ห้ามประกาศผลก่อนหัวหน้าหน่วยงานอนุมัติผล)
               </p>
             ) : (
@@ -5201,7 +5201,7 @@ export function Step5DetailForm({
             )}
             {winnerDate && (
               <p className="text-xs text-muted-foreground">
-                เลือกได้ตั้งแต่ {formatThaiDateSlash(winnerDate)} เป็นต้นไป (วันที่ประกาศผล)
+                เลือกได้ตั้งแต่ {formatThaiDateHint(winnerDate)} เป็นต้นไป (วันที่ประกาศผล)
               </p>
             )}
             {notificationDate && !showNotificationDateError && (
@@ -5793,7 +5793,7 @@ export function Step7ContractNoticeForm({
                 onInvalidDate={() =>
                   toast.error(
                     minLetterDateISO
-                      ? `วันที่ในหนังสือเชิญลงนามต้องไม่ก่อนวันพ้นกำหนดอุทธรณ์ (${formatThaiDateSlash(minLetterDateISO)})`
+                      ? `วันที่ในหนังสือเชิญลงนามต้องไม่ก่อนวันพ้นกำหนดอุทธรณ์ (${formatThaiDateHint(minLetterDateISO)})`
                       : "วันที่ในหนังสือเชิญลงนามไม่ถูกต้อง",
                   )
                 }
@@ -5806,8 +5806,8 @@ export function Step7ContractNoticeForm({
               )}
               {minLetterDateISO && (
                 <p className="text-xs text-muted-foreground">
-                  เลือกได้ตั้งแต่ {formatThaiDateSlash(minLetterDateISO)} (หลังพ้นกำหนดอุทธรณ์ — ไม่ก่อน{" "}
-                  {formatThaiDateSlash(STEP7_NOTICE_MIN_DATE_ISO)})
+                  เลือกได้ตั้งแต่ {formatThaiDateHint(minLetterDateISO)} (หลังพ้นกำหนดอุทธรณ์ — ไม่ก่อน{" "}
+                  {formatThaiDateHint(STEP7_NOTICE_MIN_DATE_ISO)})
                 </p>
               )}
               {letterDateTooLate && notificationDeadlineISO && (
@@ -5845,7 +5845,7 @@ export function Step7ContractNoticeForm({
               {contractNoticeLetterDate && letterAnchoredDeadline && (
                 <p className="text-xs text-muted-foreground">
                   ค่าเริ่มต้น +{STEP7_CONTRACT_SIGNING_DEADLINE_WORKDAYS} วันทำการจากวันที่ในหนังสือเชิญ (
-                  {formatThaiDateSlash(letterAnchoredDeadline)}) — หากเลือกวันลงนามเกินกรอบนี้ต้องระบุเหตุผลขยายเวลา
+                  {formatThaiDateHint(letterAnchoredDeadline)}) — หากเลือกวันลงนามเกินกรอบนี้ต้องระบุเหตุผลขยายเวลา
                 </p>
               )}
               {signingBeyondStandard && (
@@ -5912,7 +5912,7 @@ export function Step7ContractNoticeForm({
               )}
               {contractNoticeLetterDate && (
                 <p className="text-xs text-muted-foreground">
-                  เลือกได้ตั้งแต่ {formatThaiDateSlash(contractNoticeLetterDate)} (วันที่ออกหนังสือเชิญชวน)
+                  เลือกได้ตั้งแต่ {formatThaiDateHint(contractNoticeLetterDate)} (วันที่ออกหนังสือเชิญชวน)
                 </p>
               )}
               {contractorReceivedDate && !showReceivedChronoError && (
@@ -5963,7 +5963,7 @@ export function Step7ContractNoticeForm({
               )}
               {contractorReceivedDate && (
                 <p className="text-xs text-muted-foreground">
-                  เลือกได้ตั้งแต่ {formatThaiDateSlash(contractorReceivedDate)} (วันที่ผู้ประกอบการได้รับหนังสือเชิญ)
+                  เลือกได้ตั้งแต่ {formatThaiDateHint(contractorReceivedDate)} (วันที่ผู้ประกอบการได้รับหนังสือเชิญ)
                 </p>
               )}
               {actualSignedDate && !showSignedChronoError && (
@@ -6246,7 +6246,7 @@ export function Step7ContractNoticeForm({
                 {!!contractEndDateISO?.trim() && (
                   <p className="text-xs text-muted-foreground">
                     วันครบกำหนดส่งมอบงานตามสัญญา (จากขั้นตอนที่ 9):{" "}
-                    {formatThaiDateSlash(contractEndDateISO)}
+                    {formatThaiDateHint(contractEndDateISO)}
                   </p>
                 )}
                 <FieldRow
@@ -6702,7 +6702,7 @@ export function Step8ContractGuaranteeForm({
                     step7SigningDeadlineISO
                   ) {
                     toast.error(
-                      `วันที่ลงนามสัญญาจริงต้องอยู่ระหว่าง ${formatThaiDateSlash(earliestSigningISO)} ถึง ${formatThaiDateSlash(step7SigningDeadlineISO)}`,
+                      `วันที่ลงนามสัญญาจริงต้องอยู่ระหว่าง ${formatThaiDateHint(earliestSigningISO)} ถึง ${formatThaiDateHint(step7SigningDeadlineISO)}`,
                     );
                   } else {
                     toast.error("วันที่ลงนามในสัญญาไม่ถูกต้อง");
@@ -6715,17 +6715,17 @@ export function Step8ContractGuaranteeForm({
               )}
               {earliestSigningISO && step7SigningDeadlineISO && (
                 <p className="text-xs text-muted-foreground">
-                  ล็อกช่วงวันที่: {formatThaiDateSlash(earliestSigningISO)} ถึง{" "}
-                  {formatThaiDateSlash(step7SigningDeadlineISO)}
+                  ล็อกช่วงวันที่: {formatThaiDateHint(earliestSigningISO)} ถึง{" "}
+                  {formatThaiDateHint(step7SigningDeadlineISO)}
                 </p>
               )}
               {earliestSigningISO && !step7SigningDeadlineISO && (
                 <p className="text-xs text-muted-foreground">
-                  เลือกได้ตั้งแต่ {formatThaiDateSlash(earliestSigningISO)} เป็นต้นไป
+                  เลือกได้ตั้งแต่ {formatThaiDateHint(earliestSigningISO)} เป็นต้นไป
                   {appealDeadlineISO && (
                     <span>
                       {" "}
-                      (หลังวันสิ้นสุดอุทธรณ์ {formatThaiDateSlash(appealDeadlineISO)})
+                      (หลังวันสิ้นสุดอุทธรณ์ {formatThaiDateHint(appealDeadlineISO)})
                     </span>
                   )}
                 </p>
@@ -7140,7 +7140,7 @@ export function Step9DetailForm({
               disabled
               value={
                 signedISO
-                  ? formatThaiDateSlash(signedISO)
+                  ? formatThaiDateHint(signedISO)
                   : "— บันทึกวันที่ลงนามในขั้นตอนที่ 8 ก่อน —"
               }
               className={`${inputCls} bg-muted/50 cursor-not-allowed`}
@@ -7181,7 +7181,7 @@ export function Step9DetailForm({
                   if (signedISO && v && isISODateBefore(v, signedISO)) {
                     setEgpPublicationRejected(true);
                     toast.error(
-                      `วันที่ประกาศสาระสำคัญต้องไม่ก่อนวันลงนามสัญญา — เลือกได้ตั้งแต่ ${formatThaiDateSlash(signedISO)} เป็นต้นไป`,
+                      `วันที่ประกาศสาระสำคัญต้องไม่ก่อนวันลงนามสัญญา — เลือกได้ตั้งแต่ ${formatThaiDateHint(signedISO)} เป็นต้นไป`,
                     );
                     return;
                   }
@@ -7193,7 +7193,7 @@ export function Step9DetailForm({
                   setEgpPublicationRejected(true);
                   toast.error(
                     signedISO
-                      ? `วันที่ประกาศสาระสำคัญต้องไม่ก่อนวันลงนามสัญญา — เลือกได้ตั้งแต่ ${formatThaiDateSlash(signedISO)} เป็นต้นไป`
+                      ? `วันที่ประกาศสาระสำคัญต้องไม่ก่อนวันลงนามสัญญา — เลือกได้ตั้งแต่ ${formatThaiDateHint(signedISO)} เป็นต้นไป`
                       : "กรุณาบันทึกวันที่ลงนามสัญญาในขั้นตอนที่ 8 ก่อน",
                   );
                 }}
@@ -7206,8 +7206,8 @@ export function Step9DetailForm({
               )}
               {signedISO && egpDeadlineISO && (
                 <p className="text-xs text-muted-foreground">
-                  เลือกได้ตั้งแต่ {formatThaiDateSlash(signedISO)} เป็นต้นไป — เดดไลน์มาตรา 98:{" "}
-                  {formatThaiDateSlash(egpDeadlineISO)} ({STEP9_ARTICLE_98_DEADLINE_CALENDAR_DAYS}{" "}
+                  เลือกได้ตั้งแต่ {formatThaiDateHint(signedISO)} เป็นต้นไป — เดดไลน์มาตรา 98:{" "}
+                  {formatThaiDateHint(egpDeadlineISO)} ({STEP9_ARTICLE_98_DEADLINE_CALENDAR_DAYS}{" "}
                   วันปฏิทิน)
                 </p>
               )}
@@ -7242,7 +7242,7 @@ export function Step9DetailForm({
                 onInvalidDate={() =>
                   toast.error(
                     signedISO
-                      ? `วันเริ่มต้นสัญญาต้องไม่ก่อนวันลงนามสัญญา — เลือกได้ตั้งแต่ ${formatThaiDateSlash(signedISO)} เป็นต้นไป`
+                      ? `วันเริ่มต้นสัญญาต้องไม่ก่อนวันลงนามสัญญา — เลือกได้ตั้งแต่ ${formatThaiDateHint(signedISO)} เป็นต้นไป`
                       : "กรุณาบันทึกวันที่ลงนามสัญญาในขั้นตอนที่ 8 ก่อน",
                   )
                 }
@@ -7255,7 +7255,7 @@ export function Step9DetailForm({
               )}
               {signedISO && (
                 <p className="text-xs text-muted-foreground">
-                  เลือกได้ตั้งแต่ {formatThaiDateSlash(signedISO)} (วันลงนามสัญญา) เป็นต้นไป
+                  เลือกได้ตั้งแต่ {formatThaiDateHint(signedISO)} (วันลงนามสัญญา) เป็นต้นไป
                 </p>
               )}
               {contractStart && !startInvalid && (
@@ -7549,7 +7549,7 @@ export function Step10DetailForm({
               readOnly
               value={
                 contractStart
-                  ? formatThaiDateSlash(contractStart)
+                  ? formatThaiDateHint(contractStart)
                   : "— กรุณาบันทึกในขั้นตอนที่ 9 —"
               }
               className={`${inputCls} bg-muted/50 cursor-not-allowed tabular-nums`}
@@ -7561,7 +7561,7 @@ export function Step10DetailForm({
               readOnly
               value={
                 contractEnd
-                  ? formatThaiDateSlash(contractEnd)
+                  ? formatThaiDateHint(contractEnd)
                   : "— กรุณาบันทึกในขั้นตอนที่ 9 —"
               }
               className={`${inputCls} bg-muted/50 cursor-not-allowed tabular-nums`}
@@ -7715,7 +7715,7 @@ export function Step10DetailForm({
                     <span className="text-xs text-muted-foreground shrink-0">
                       ครบกำหนด{" "}
                       {row.planned_completion_date
-                        ? formatThaiDateSlash(row.planned_completion_date)
+                        ? formatThaiDateHint(row.planned_completion_date)
                         : "—"}
                     </span>
                     <span
@@ -8072,7 +8072,7 @@ export function Step10DetailForm({
                 readOnly
                 value={
                   previewWarrantyStart
-                    ? formatThaiDateSlash(previewWarrantyStart)
+                    ? formatThaiDateHint(previewWarrantyStart)
                     : "— บันทึกวันตรวจรับงวดสุดท้ายก่อน —"
                 }
                 className={`${inputCls} bg-muted/50 cursor-not-allowed`}
@@ -8085,7 +8085,7 @@ export function Step10DetailForm({
                 readOnly
                 value={
                   previewWarrantyEnd
-                    ? formatThaiDateSlash(previewWarrantyEnd)
+                    ? formatThaiDateHint(previewWarrantyEnd)
                     : "— คำนวณอัตโนมัติเมื่อมีวันตรวจรับงวดสุดท้าย —"
                 }
                 className={`${inputCls} bg-muted/50 cursor-not-allowed`}

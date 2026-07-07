@@ -13,7 +13,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { AppShell } from "@/components/AppShell";
 import { ThaiDatePicker } from "@/components/ThaiDatePicker";
 import { formatBaht } from "@/lib/procurement";
-import { formatThaiDateSlash } from "@/lib/utils";
+import { formatThaiDateHint } from "@/lib/utils";
 import { computeStep10InstallmentPlannedDates } from "@/lib/step10-contract";
 import { loadStep9FormFromNote } from "@/lib/step-form";
 import {
@@ -312,7 +312,7 @@ function ConstructionPage() {
                     <span className="font-semibold text-sm">งวดที่ {n}</span>
                     {row.planned_completion_date && (
                       <span className="text-xs text-muted-foreground">
-                        กำหนดเสร็จ {formatThaiDateSlash(row.planned_completion_date)}
+                        กำหนดเสร็จ {formatThaiDateHint(row.planned_completion_date)}
                       </span>
                     )}
                     <span className="text-xs text-muted-foreground ml-auto">

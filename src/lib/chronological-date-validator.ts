@@ -62,7 +62,7 @@ import {
   isStepDateBeforeReference,
   type TimelineValidationContext,
 } from "@/lib/timeline-validation";
-import { formatThaiDateSlash } from "@/lib/utils";
+import { formatThaiDateHint } from "@/lib/utils";
 
 export type ChronologicalDateIssue = {
   id: string;
@@ -194,7 +194,7 @@ const CROSS_STEP_DATE_CHAINS: CrossStepDateChainRule[] = [
     resolveBaseISO: (s) => s.step4Timeline?.bidSubmissionEndISO ?? "",
     baseLabel: "วันปิดรับซอง/ประมูล",
     message: (_d, _b, iso) =>
-      `❌ วันที่อนุมัติผลการพิจารณาต้องไม่ก่อนวันปิดรับซอง (${formatThaiDateSlash(iso)})`,
+      `❌ วันที่อนุมัติผลการพิจารณาต้องไม่ก่อนวันปิดรับซอง (${formatThaiDateHint(iso)})`,
   },
   {
     stepNumber: 5,
@@ -225,7 +225,7 @@ const CROSS_STEP_DATE_CHAINS: CrossStepDateChainRule[] = [
     resolveBaseISO: (s) => isoTrim(s.earliestSigningISO),
     baseLabel: "วันเริ่มลงนามในสัญญาได้",
     message: (_d, b, iso) =>
-      `วันที่ลงนามสัญญาจริงต้องไม่ก่อน${b} (${formatThaiDateSlash(iso)})`,
+      `วันที่ลงนามสัญญาจริงต้องไม่ก่อน${b} (${formatThaiDateHint(iso)})`,
   },
   {
     stepNumber: 9,
@@ -235,7 +235,7 @@ const CROSS_STEP_DATE_CHAINS: CrossStepDateChainRule[] = [
       isoTrim(s.contractSignedDate ?? s.step8ContractExecution?.contract_signed_date),
     baseLabel: "วันที่ลงนามสัญญา",
     message: (_d, _b, iso) =>
-      `วันเริ่มต้นสัญญาต้องไม่ก่อนวันที่ลงนามสัญญา — เลือกได้ตั้งแต่ ${formatThaiDateSlash(iso)} เป็นต้นไป`,
+      `วันเริ่มต้นสัญญาต้องไม่ก่อนวันที่ลงนามสัญญา — เลือกได้ตั้งแต่ ${formatThaiDateHint(iso)} เป็นต้นไป`,
   },
   {
     stepNumber: 9,
@@ -245,7 +245,7 @@ const CROSS_STEP_DATE_CHAINS: CrossStepDateChainRule[] = [
       isoTrim(s.contractSignedDate ?? s.step8ContractExecution?.contract_signed_date),
     baseLabel: "วันที่ลงนามสัญญา",
     message: (_d, _b, iso) =>
-      `วันที่ประกาศสาระสำคัญต้องไม่ก่อนวันที่ลงนามสัญญา — เลือกได้ตั้งแต่ ${formatThaiDateSlash(iso)} เป็นต้นไป`,
+      `วันที่ประกาศสาระสำคัญต้องไม่ก่อนวันที่ลงนามสัญญา — เลือกได้ตั้งแต่ ${formatThaiDateHint(iso)} เป็นต้นไป`,
   },
 ];
 
@@ -308,7 +308,7 @@ export function getIntraStepChronologicalIssues(
       issues.push({
         id: "evaluation_report_approval_date_before_bid_end",
         fieldKey: chronologicalFieldKey(4, "evaluation_report_approval_date"),
-        message: `❌ วันที่อนุมัติผลการพิจารณาต้องไม่ก่อนวันปิดรับซอง (${formatThaiDateSlash(bidEnd)})`,
+        message: `❌ วันที่อนุมัติผลการพิจารณาต้องไม่ก่อนวันปิดรับซอง (${formatThaiDateHint(bidEnd)})`,
       });
     }
   }
@@ -337,7 +337,7 @@ export function getIntraStepChronologicalIssues(
       issues.push({
         id: "appeal_head_signed_date_min",
         fieldKey: chronologicalFieldKey(6, "appeal_head_signed_date"),
-        message: `❌ วันที่ลงนามต้องไม่ก่อนวันที่ ${formatThaiDateSlash(minHead)}`,
+        message: `❌ วันที่ลงนามต้องไม่ก่อน ${formatThaiDateHint(minHead)}`,
       });
     }
   }
@@ -394,14 +394,14 @@ export function getIntraStepChronologicalIssues(
       issues.push({
         id: "work_start_date_before_signed",
         fieldKey: chronologicalFieldKey(9, "work_start_date"),
-        message: `วันเริ่มต้นสัญญาต้องไม่ก่อนวันที่ลงนามสัญญา — เลือกได้ตั้งแต่ ${formatThaiDateSlash(signed)} เป็นต้นไป`,
+        message: `วันเริ่มต้นสัญญาต้องไม่ก่อนวันที่ลงนามสัญญา — เลือกได้ตั้งแต่ ${formatThaiDateHint(signed)} เป็นต้นไป`,
       });
     }
     if (egpPub && signed && isISODateBefore(egpPub, signed)) {
       issues.push({
         id: "egp_publication_before_signed",
         fieldKey: chronologicalFieldKey(9, "egp_essential_publication_date"),
-        message: `วันที่ประกาศสาระสำคัญต้องไม่ก่อนวันที่ลงนามสัญญา — เลือกได้ตั้งแต่ ${formatThaiDateSlash(signed)} เป็นต้นไป`,
+        message: `วันที่ประกาศสาระสำคัญต้องไม่ก่อนวันที่ลงนามสัญญา — เลือกได้ตั้งแต่ ${formatThaiDateHint(signed)} เป็นต้นไป`,
       });
     }
     if (workStart && contractEnd && !isISODateBefore(workStart, contractEnd)) {
@@ -428,7 +428,7 @@ export function getIntraStepChronologicalIssues(
         issues.push({
           id: `installment-${n}-delivery_before_contract`,
           fieldKey: chronologicalFieldKey(10, `i${n}.delivery_date`),
-          message: `งวดที่ ${n}: วันที่ส่งมอบงานจริงต้องไม่ก่อนวันเริ่มต้นสัญญา (${formatThaiDateSlash(contractStart)})`,
+          message: `งวดที่ ${n}: วันที่ส่งมอบงานจริงต้องไม่ก่อนวันเริ่มต้นสัญญา (${formatThaiDateHint(contractStart)})`,
         });
       }
       if (isStep10InspectionBeforeDelivery(delivery, inspection)) {

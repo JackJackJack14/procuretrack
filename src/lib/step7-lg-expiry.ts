@@ -1,5 +1,5 @@
 import { isISODateBefore, type Step7ContractNotice } from "@/lib/step-form";
-import { formatThaiDateSlash } from "@/lib/utils";
+import { formatThaiDateHint } from "@/lib/utils";
 
 /** ระยะรับประกันความชำรุดบกพร่องมาตรฐาน (ปีปฏิทิน) — สอดคล้องขั้นตอนที่ 10 */
 export const STEP7_DEFECT_WARRANTY_YEARS_DEFAULT = 2;
@@ -72,10 +72,10 @@ export function computeStep7MinLgExpiryFromNotice(
 }
 
 export const STEP7_LG_EXPIRY_BEFORE_WARRANTY_END_MSG = (minISO: string) =>
-  `❌ วันสิ้นสุดความคุ้มครองต้องไม่น้อยกว่าวันสิ้นสุดการรับประกันผลงาน (${formatThaiDateSlash(minISO)})`;
+  `❌ วันสิ้นสุดความคุ้มครองต้องไม่น้อยกว่าวันสิ้นสุดการรับประกันผลงาน (${formatThaiDateHint(minISO)})`;
 
 export const STEP7_LG_MIN_EXPIRY_HELPER_MSG = (minISO: string) =>
-  `ℹ️ วันสิ้นสุดความคุ้มครองขั้นต่ำ: ${formatThaiDateSlash(minISO)}`;
+  `ℹ️ วันสิ้นสุดความคุ้มครองขั้นต่ำ: ${formatThaiDateHint(minISO)}`;
 
 export const STEP7_LG_REFERENCE_CONTRACT_END_REQUIRED_MSG =
   "กรุณาระบุวันครบกำหนดส่งมอบงานตามสัญญา เพื่อคำนวณวันสิ้นสุดความคุ้มครองขั้นต่ำ";

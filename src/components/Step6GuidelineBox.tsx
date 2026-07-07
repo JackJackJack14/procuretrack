@@ -10,7 +10,7 @@ import {
   computeAppealDeadlineISO,
   computeContractEarliestISO,
 } from "@/lib/workdays";
-import { formatThaiDateSlash } from "@/lib/utils";
+import { formatThaiDateHint } from "@/lib/utils";
 
 type Props = {
   /** วันที่ลงนามในประกาศผู้ชนะ — จากขั้นตอนที่ 5 (yyyy-mm-dd) */
@@ -55,7 +55,7 @@ function Step6TimelineTrack({
             วันที่แจ้งผลให้ผู้เสนอราคาทราบ (Step 5)
           </p>
           <p className="text-lg font-bold text-slate-700 tabular-nums mt-1">
-            {formatThaiDateSlash(announcementISO)}
+            {formatThaiDateHint(announcementISO)}
           </p>
         </div>
       </div>
@@ -80,7 +80,7 @@ function Step6TimelineTrack({
         <div className="pb-5">
           <p className="text-sm font-semibold text-slate-800 mt-0.5">📅 วันสิ้นสุดระยะอุทธรณ์</p>
           <p className="text-lg font-bold text-blue-700 tabular-nums mt-1">
-            {formatThaiDateSlash(appealDeadlineISO)}
+            {formatThaiDateHint(appealDeadlineISO)}
           </p>
         </div>
       </div>
@@ -107,7 +107,7 @@ function Step6TimelineTrack({
           </p>
           <p className="text-sm font-semibold text-slate-800 mt-0.5">วันที่เริ่มลงนามในสัญญาได้</p>
           <p className="text-lg font-bold text-emerald-700 tabular-nums mt-1">
-            {formatThaiDateSlash(contractEarliestISO)}
+            {formatThaiDateHint(contractEarliestISO)}
           </p>
         </div>
       </div>

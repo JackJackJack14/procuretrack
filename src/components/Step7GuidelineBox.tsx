@@ -9,7 +9,7 @@ import {
   computeContractNotificationDeadlineISO,
   CONTRACT_NOTIFICATION_WORKDAYS,
 } from "@/lib/workdays";
-import { formatThaiDateSlash } from "@/lib/utils";
+import { formatThaiDateHint } from "@/lib/utils";
 
 function GuidelineBulletList({ items }: { items: readonly string[] }) {
   return (
@@ -51,7 +51,7 @@ function Step7TimelineTrack({
             วันที่พ้นระยะอุทธรณ์
           </p>
           <p className="text-lg font-bold text-blue-700 tabular-nums mt-1">
-            {formatThaiDateSlash(appealDeadlineISO)}
+            {formatThaiDateHint(appealDeadlineISO)}
           </p>
         </div>
       </div>
@@ -83,7 +83,7 @@ function Step7TimelineTrack({
             ต้องออกหนังสือแจ้งทำสัญญา
           </p>
           <p className="text-lg font-bold text-amber-700 tabular-nums mt-1">
-            {formatThaiDateSlash(notificationDeadlineISO)}
+            {formatThaiDateHint(notificationDeadlineISO)}
           </p>
         </div>
       </div>

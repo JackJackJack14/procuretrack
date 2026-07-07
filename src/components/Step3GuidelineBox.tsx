@@ -48,7 +48,7 @@ import {
 
 } from "@/lib/workdays";
 
-import { formatThaiDateSlash } from "@/lib/utils";
+import { formatThaiDateHint } from "@/lib/utils";
 
 
 
@@ -146,7 +146,7 @@ function Step3TimelineTrack({
 
             <p className="text-lg font-bold text-slate-700 tabular-nums mt-1">
 
-              {formatThaiDateSlash(publicationStartISO)}
+              {formatThaiDateHint(publicationStartISO)}
 
             </p>
 
@@ -268,7 +268,7 @@ function Step3TimelineTrack({
 
             <p className="text-lg font-bold text-emerald-700 tabular-nums mt-1">
 
-              {formatThaiDateSlash(minPublicationEndISO)}
+              {formatThaiDateHint(minPublicationEndISO)}
 
             </p>
 

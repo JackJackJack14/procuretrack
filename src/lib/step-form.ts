@@ -163,7 +163,7 @@ import {
   getStep9EgpPublicationTooLateMsg,
   isStep9EgpPublicationTooLate,
 } from "@/lib/step9-guideline";
-import { formatThaiDateSlash } from "@/lib/utils";
+import { formatThaiDateHint } from "@/lib/utils";
 import {
   buildProjectStep1ProfileFields,
   isResultUnitComplete,
@@ -2573,7 +2573,7 @@ export function getStep5WinnerAnnouncementDateInvalidMsg(
   evaluationApprovalISO: string,
 ): string {
   const minDate = computeStep5RequiredAnnouncementDateISO(evaluationApprovalISO);
-  const dateLabel = formatThaiDateSlash(minDate || evaluationApprovalISO);
+  const dateLabel = formatThaiDateHint(minDate || evaluationApprovalISO);
   return `❌ วันที่ประกาศผลต้องไม่ก่อนวันที่ ${dateLabel} (ห้ามประกาศผลก่อนหัวหน้าหน่วยงานอนุมัติผล)`;
 }
 
@@ -4422,7 +4422,7 @@ export function getStep6AppealReceivedDateTooEarlyMsg(
   step5NotificationISO?: string,
 ): string {
   const minDate = computeStep6AppealReceivedMinDateISO(step5NotificationISO);
-  return `❌ วันที่รับหนังสืออุทธรณ์ต้องไม่ก่อนวันที่ ${formatThaiDateSlash(minDate)}`;
+  return `❌ วันที่รับหนังสืออุทธรณ์ต้องไม่ก่อน ${formatThaiDateHint(minDate)}`;
 }
 
 /** ฟิลด์บังคับเคสมีผู้ยื่นอุทธรณ์ — กลุ่ม 2 (5 ช่อง) + กลุ่ม 3 (2 ช่อง) */
@@ -4476,7 +4476,7 @@ export function getStep6PendingMandatoryFormFieldIssues(
     if (minHead && headSigned < minHead) {
       issues.push({
         id: "appeal_head_signed_date_min",
-        message: `❌ วันที่ลงนามต้องไม่ก่อนวันที่ ${formatThaiDateSlash(minHead)}`,
+        message: `❌ วันที่ลงนามต้องไม่ก่อน ${formatThaiDateHint(minHead)}`,
       });
     }
   }
@@ -4705,7 +4705,7 @@ export const STEP5_RESULT_NOTIFICATION_BEFORE_ANNOUNCEMENT_MSG =
   "❌ วันที่แจ้งผลให้ผู้เสนอราคาทราบ ต้องไม่ก่อนวันที่ประกาศผล";
 
 export const STEP5_CONTRACT_AFTER_APPEAL_MSG = (earliestISO: string) =>
-  `⚠️ การทำสัญญาควรดำเนินการหลังวันที่ ${formatThaiDateSlash(earliestISO)} (เมื่อพ้นระยะเวลาอุทธรณ์แล้ว)`;
+  `⚠️ การทำสัญญาควรดำเนินการหลัง ${formatThaiDateHint(earliestISO)} (เมื่อพ้นระยะเวลาอุทธรณ์แล้ว)`;
 
 export const STEP4_WINNER_DATA_LOCKED_MSG =
   "🔒 ข้อมูลผู้ชนะและราคาตกลงจ้างถูกล็อกแล้ว — หากต้องการแก้ไขต้องยกเลิกประกาศผลใน e-GP และย้อนกลับไปแก้ไขขั้นตอนที่ 4";
@@ -5451,7 +5451,7 @@ export function mergeStep5FromProject(
 export type Step7ComplianceIssue = { id: string; message: string };
 
 export const STEP7_NOTIFICATION_DEADLINE_EXCEEDED_MSG = (deadlineISO: string) =>
-  `❌ วันที่ออกหนังสือแจ้งเกิน ${CONTRACT_NOTIFICATION_WORKDAYS} วันทำการตามระเบียบข้อ 161 (เดดไลน์: ${formatThaiDateSlash(deadlineISO)})`;
+  `❌ วันที่ออกหนังสือแจ้งเกิน ${CONTRACT_NOTIFICATION_WORKDAYS} วันทำการตามระเบียบข้อ 161 (เดดไลน์: ${formatThaiDateHint(deadlineISO)})`;
 
 export const STEP7_RECEIVED_BEFORE_LETTER_MSG =
   "❌ วันที่ได้รับหนังสือเชิญ ห้ามเกิดก่อนวันที่ออกหนังสือเชิญชวน";
@@ -5614,7 +5614,7 @@ export function getStep7ComplianceIssues(
     if (letterDate && minLetterDate && letterDate < minLetterDate) {
       issues.push({
         id: "contract_notice_letter_date_min",
-        message: `วันที่ในหนังสือเชิญลงนามต้องไม่ก่อน ${formatThaiDateSlash(minLetterDate)} (หลังพ้นกำหนดอุทธรณ์)`,
+        message: `วันที่ในหนังสือเชิญลงนามต้องไม่ก่อน ${formatThaiDateHint(minLetterDate)} (หลังพ้นกำหนดอุทธรณ์)`,
       });
     }
     const appealEnd = opts.appealDeadlineISO?.trim() ?? "";
@@ -5625,7 +5625,7 @@ export function getStep7ComplianceIssues(
     ) {
       issues.push({
         id: "contract_notice_letter_date_min",
-        message: `วันที่ในหนังสือเชิญลงนามต้องไม่ก่อนวันพ้นกำหนดอุทธรณ์ (ลงนามได้ตั้งแต่ ${formatThaiDateSlash(
+        message: `วันที่ในหนังสือเชิญลงนามต้องไม่ก่อนวันพ้นกำหนดอุทธรณ์ (ลงนามได้ตั้งแต่ ${formatThaiDateHint(
           computeContractEarliestFromAppealDeadlineISO(appealEnd),
         )})`,
       });
@@ -6124,7 +6124,7 @@ export function getStep8ComplianceIssues(
   if (signedDate && appealEnd && isContractActionBeforeAppealPeriodEnds(signedDate, appealEnd)) {
     issues.push({
       id: "contract_signed_date_appeal",
-      message: `ห้ามเลือกวันที่ลงนามในสัญญาก่อนวันพ้นระยะอุทธรณ์ (7 วันทำการจากวันประกาศผล — ลงนามได้ตั้งแต่ ${formatThaiDateSlash(
+      message: `ห้ามเลือกวันที่ลงนามในสัญญาก่อนวันพ้นระยะอุทธรณ์ (7 วันทำการจากวันประกาศผล — ลงนามได้ตั้งแต่ ${formatThaiDateHint(
         computeContractEarliestFromAppealDeadlineISO(appealEnd),
       )})`,
     });
@@ -6134,13 +6134,13 @@ export function getStep8ComplianceIssues(
   if (signedDate && earliestSigning && isStep8SignedBeforeEarliest(signedDate, earliestSigning)) {
     issues.push({
       id: "contract_signed_date_earliest",
-      message: `วันที่ลงนามสัญญาจริงต้องไม่ก่อนวันที่เริ่มลงนามในสัญญาได้ (${formatThaiDateSlash(earliestSigning)})`,
+      message: `วันที่ลงนามสัญญาจริงต้องไม่ก่อนวันที่เริ่มลงนามในสัญญาได้ (${formatThaiDateHint(earliestSigning)})`,
     });
   }
   if (signedDate && step7Deadline && isStep8SignedPastDeadline(signedDate, step7Deadline)) {
     issues.push({
       id: "contract_signed_date_step7_deadline",
-      message: `วันที่ลงนามสัญญาจริงต้องไม่เกินกำหนดวันสุดท้ายที่ต้องมาลงนามจากขั้นตอนที่ 7 (${formatThaiDateSlash(step7Deadline)})`,
+      message: `วันที่ลงนามสัญญาจริงต้องไม่เกินกำหนดวันสุดท้ายที่ต้องมาลงนามจากขั้นตอนที่ 7 (${formatThaiDateHint(step7Deadline)})`,
     });
   }
   const contractAmount = contractExecution?.contract_amount;
@@ -6547,7 +6547,7 @@ export function getStep9ComplianceIssues(
   } else if (signedDate && isISODateBefore(egpPublication, signedDate)) {
     issues.push({
       id: "egp_publication_before_signed",
-      message: `วันที่ประกาศสาระสำคัญต้องไม่ก่อนวันที่ลงนามสัญญา — เลือกได้ตั้งแต่ ${formatThaiDateSlash(signedDate)} เป็นต้นไป`,
+      message: `วันที่ประกาศสาระสำคัญต้องไม่ก่อนวันที่ลงนามสัญญา — เลือกได้ตั้งแต่ ${formatThaiDateHint(signedDate)} เป็นต้นไป`,
     });
   } else if (signedDate && isStep9EgpPublicationTooLate(egpPublication, signedDate)) {
     const egpDeadline = computeStep9EgpDeadlineISO(signedDate);
@@ -6568,7 +6568,7 @@ export function getStep9ComplianceIssues(
   } else if (signedDate && isISODateBefore(workStart, signedDate)) {
     issues.push({
       id: "work_start_before_signed",
-      message: `วันเริ่มต้นสัญญาต้องไม่ก่อนวันที่ลงนามสัญญา — เลือกได้ตั้งแต่ ${formatThaiDateSlash(signedDate)} เป็นต้นไป`,
+      message: `วันเริ่มต้นสัญญาต้องไม่ก่อนวันที่ลงนามสัญญา — เลือกได้ตั้งแต่ ${formatThaiDateHint(signedDate)} เป็นต้นไป`,
     });
   }
 
@@ -6744,7 +6744,7 @@ export function getStep10ComplianceIssues(
     ) {
       issues.push({
         id: `installment-${n}-delivery_before_contract`,
-        message: `งวดที่ ${n}: วันที่ส่งมอบงานจริงต้องไม่ก่อนวันเริ่มต้นสัญญา (${formatThaiDateSlash(contractStart)})`,
+        message: `งวดที่ ${n}: วันที่ส่งมอบงานจริงต้องไม่ก่อนวันเริ่มต้นสัญญา (${formatThaiDateHint(contractStart)})`,
       });
     }
     if (!row.inspection_date?.trim()) {

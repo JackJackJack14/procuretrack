@@ -1,13 +1,22 @@
+import { forwardRef, useMemo } from "react";
 import DatePicker, { registerLocale } from "react-datepicker";
 import { th } from "date-fns/locale/th";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import "react-datepicker/dist/react-datepicker.css";
+import {
+  formatThaiDateSlash,
+  formatThaiMonthYear,
+  parseLocalISODate,
+  THAI_DATE_PICKER_PLACEHOLDER,
+  toGregorianISODate,
+} from "@/lib/thai-date";
 import { cn } from "@/lib/utils";
 import { isWorkday } from "@/lib/workdays";
 
 registerLocale("th", th);
 
 interface ThaiDatePickerProps {
-  value?: string; // yyyy-mm-dd
+  value?: string; // yyyy-mm-dd (Gregorian ISO — ค.ศ.)
   onChange: (value: string) => void;
   className?: string;
   placeholder?: string;
@@ -23,26 +32,40 @@ interface ThaiDatePickerProps {
   onInvalidDate?: () => void;
 }
 
-function toISODate(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
-function parseMinMax(iso?: string): Date | undefined {
-  if (!iso) return undefined;
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return undefined;
+function parseBoundary(iso?: string): Date | undefined {
+  const d = parseLocalISODate(iso);
+  if (!d) return undefined;
   d.setHours(0, 0, 0, 0);
   return d;
 }
+
+type ThaiDateInputProps = React.InputHTMLAttributes<HTMLInputElement> & {
+  displayValue: string;
+};
+
+const ThaiDateInput = forwardRef<HTMLInputElement, ThaiDateInputProps>(
+  function ThaiDateInput({ displayValue, className, onClick, onChange: _onChange, value: _value, ...props }, ref) {
+    return (
+      <input
+        {...props}
+        ref={ref}
+        readOnly
+        onClick={onClick}
+        value={displayValue}
+        className={cn(
+          "w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
+          className,
+        )}
+      />
+    );
+  },
+);
 
 export function ThaiDatePicker({
   value,
   onChange,
   className,
-  placeholder = "วว/ดด/ปปปป",
+  placeholder = THAI_DATE_PICKER_PLACEHOLDER,
   id,
   minDate,
   maxDate,
@@ -50,9 +73,15 @@ export function ThaiDatePicker({
   disabled,
   onInvalidDate,
 }: ThaiDatePickerProps) {
-  const selected = value ? new Date(value) : null;
-  const min = parseMinMax(minDate);
-  const max = parseMinMax(maxDate);
+  const selected = useMemo(() => parseLocalISODate(value), [value]);
+  const min = parseBoundary(minDate);
+  const max = parseBoundary(maxDate);
+  const displayValue = value ? formatThaiDateSlash(value) : "";
+
+  const customInput = useMemo(
+    () => <ThaiDateInput displayValue={displayValue} className={className} id={id} />,
+    [displayValue, className, id],
+  );
 
   const handleChange = (d: Date | null) => {
     if (!d) {
@@ -73,13 +102,12 @@ export function ThaiDatePicker({
       onInvalidDate?.();
       return;
     }
-    onChange(toISODate(normalized));
+    onChange(toGregorianISODate(normalized));
   };
 
   return (
     <DatePicker
-      id={id}
-      selected={selected && !isNaN(selected.getTime()) ? selected : null}
+      selected={selected}
       onChange={handleChange}
       minDate={min}
       maxDate={max}
@@ -92,18 +120,44 @@ export function ThaiDatePicker({
         if (workdaysOnly && !isWorkday(d)) return false;
         return true;
       }}
-      dateFormat="dd/MM/yyyy"
       locale="th"
       placeholderText={placeholder}
       showYearDropdown
       showMonthDropdown
       dropdownMode="select"
       autoComplete="off"
-      className={cn(
-        "w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
-        className,
-      )}
+      customInput={customInput}
       wrapperClassName="w-full"
+      renderYearContent={(year) => <span>{year + 543}</span>}
+      renderCustomHeader={({
+        date,
+        decreaseMonth,
+        increaseMonth,
+        prevMonthButtonDisabled,
+        nextMonthButtonDisabled,
+      }) => (
+        <div className="flex items-center justify-between gap-2 px-2 py-2">
+          <button
+            type="button"
+            onClick={decreaseMonth}
+            disabled={prevMonthButtonDisabled}
+            className="rounded p-1 hover:bg-muted disabled:opacity-40"
+            aria-label="เดือนก่อนหน้า"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          <span className="text-sm font-medium text-foreground">{formatThaiMonthYear(date)}</span>
+          <button
+            type="button"
+            onClick={increaseMonth}
+            disabled={nextMonthButtonDisabled}
+            className="rounded p-1 hover:bg-muted disabled:opacity-40"
+            aria-label="เดือนถัดไป"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </div>
+      )}
     />
   );
 }

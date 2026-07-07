@@ -19,7 +19,7 @@ import {
   type StepMilestoneProject,
   type StepMilestoneStep,
 } from "@/lib/step-milestone-dates";
-import { formatThaiDateSlash } from "@/lib/utils";
+import { formatThaiDateHint } from "@/lib/utils";
 
 export const STEP3_TOR_APPROVAL_BEFORE_STEP1_PLAN_MSG =
   "❌ วันที่หัวหน้าลงนามร่าง TOR ไม่สามารถเกิดขึ้นก่อนวันประกาศแผนจัดซื้อจัดจ้างประจำปีได้";
@@ -91,7 +91,7 @@ function crossStepConflictMessage(
   previousStepNumber: number,
   previousEndISO: string,
 ): string {
-  return `❌ ${label} ต้องไม่ก่อนวันสิ้นสุดของขั้นตอนที่ ${previousStepNumber} (วันที่ ${formatThaiDateSlash(previousEndISO)})`;
+  return `❌ ${label} ต้องไม่ก่อนวันสิ้นสุดของขั้นตอนที่ ${previousStepNumber} (${formatThaiDateHint(previousEndISO)})`;
 }
 
 export function getCrossStepTimelineConflictIssues(

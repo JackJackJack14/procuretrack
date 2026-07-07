@@ -1,5 +1,5 @@
 import { loadStep8FormFromNote } from "@/lib/step-form";
-import { formatThaiDateSlash } from "@/lib/utils";
+import { formatThaiDateHint } from "@/lib/utils";
 
 /** ระยะประกาศสาระสำคัญใน e-GP — มาตรา 98 (วันปฏิทิน รวมเสาร์-อาทิตย์และวันหยุดนักขัตฤกษ์) */
 export const STEP9_ARTICLE_98_DEADLINE_CALENDAR_DAYS = 30;
@@ -70,7 +70,7 @@ export function isStep9EgpPublicationTooLate(
 }
 
 export function getStep9EgpPublicationTooLateMsg(deadlineISO: string): string {
-  return `❌ วันที่ประกาศสาระสำคัญใน e-GP เกินกำหนดมาตรา 98 — ต้องไม่เกิน ${STEP9_ARTICLE_98_DEADLINE_CALENDAR_DAYS} วันปฏิทินนับจากวันลงนามในสัญญา (เดดไลน์: ${formatThaiDateSlash(deadlineISO)})`;
+  return `❌ วันที่ประกาศสาระสำคัญใน e-GP เกินกำหนดมาตรา 98 — ต้องไม่เกิน ${STEP9_ARTICLE_98_DEADLINE_CALENDAR_DAYS} วันปฏิทินนับจากวันลงนามในสัญญา (เดดไลน์: ${formatThaiDateHint(deadlineISO)})`;
 }
 
 export const STEP9_SCHEDULE_INCOMPLETE_MSG =
@@ -83,16 +83,16 @@ export const STEP9_GUIDELINE_TIMELINE_NOTE =
 
 export function formatStep9TimelineNode1Line(signedISO: string): string {
   if (!signedISO?.trim()) return "— บันทึกวันที่ลงนามในขั้นตอนที่ 8 ก่อน —";
-  return formatThaiDateSlash(signedISO);
+  return formatThaiDateHint(signedISO);
 }
 
 export function formatStep9TimelineNode2Line(publicationISO: string): string {
   if (!publicationISO?.trim()) return STEP9_TIMELINE_NODE2_PENDING;
-  return formatThaiDateSlash(publicationISO);
+  return formatThaiDateHint(publicationISO);
 }
 
 export function formatStep9TimelineNode3Line(deadlineISO: string): string {
-  return formatThaiDateSlash(deadlineISO);
+  return formatThaiDateHint(deadlineISO);
 }
 
 /** วันลงนามสัญญาจริง — จากคอลัมน์ projects หรือ note ขั้นตอนที่ 8 */

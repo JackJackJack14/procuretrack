@@ -15,7 +15,7 @@ import {
   STEP4_COMMITTEE_REVIEW_WORKDAYS_AFTER_BID_END,
   validateStep3PublicationDates,
 } from "@/lib/workdays";
-import { formatThaiDateSlash } from "@/lib/utils";
+import { formatThaiDateHint } from "@/lib/utils";
 
 export type ComplianceIssue = { id: string; message: string };
 
@@ -348,10 +348,10 @@ export function getStep4TimelineDisplayLines(timeline: Step4Timeline): {
 } | null {
   if (!isStep4TimelineComplete(timeline)) return null;
   return {
-    bidSubmissionEndLine: `📅 วันสิ้นสุดการรับซองราคา: ${formatThaiDateSlash(timeline.bidSubmissionEndISO)}`,
+    bidSubmissionEndLine: `📅 วันสิ้นสุดการรับซองราคา: ${formatThaiDateHint(timeline.bidSubmissionEndISO)}`,
     committeeDeadlineLine:
       `⏱ กำหนดเดดไลน์คณะกรรมการ: ต้องพิจารณาผลให้แล้วเสร็จภายในวันที่ ` +
-      `${formatThaiDateSlash(timeline.committeeReviewDeadlineISO)} ` +
+      `${formatThaiDateHint(timeline.committeeReviewDeadlineISO)} ` +
       `(ตามระเบียบกระทรวงการคลังฯ ข้อ 55)`,
   };
 }
@@ -510,8 +510,8 @@ export function getStep5AppealTimelineDisplayLines(
   if (!isStep5AppealTimelineComplete(timeline)) return null;
   return {
     appealPeriodLine:
-      `⏱️ วันสิ้นสุดระยะเวลาอุทธรณ์: ${formatThaiDateSlash(timeline.appealPeriodEndISO)}`,
+      `⏱️ วันสิ้นสุดระยะเวลาอุทธรณ์: ${formatThaiDateHint(timeline.appealPeriodEndISO)}`,
     contractEarliestLine:
-      `✅ ลงนามในสัญญาได้เร็วที่สุดวันที่: ${formatThaiDateSlash(timeline.contractEarliestISO)}`,
+      `✅ ลงนามในสัญญาได้เร็วที่สุด: ${formatThaiDateHint(timeline.contractEarliestISO)}`,
   };
 }

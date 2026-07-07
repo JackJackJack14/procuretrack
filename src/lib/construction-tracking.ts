@@ -17,7 +17,7 @@ import {
   isStep10InspectionBeforeDelivery,
   isStep10RowInspectionPassed,
 } from "@/lib/step10-contract";
-import { formatThaiDateSlash } from "@/lib/utils";
+import { formatThaiDateHint } from "@/lib/utils";
 
 export const CONSTRUCTION_TRACKING_MENU_LABEL = "ติดตามงานก่อสร้าง";
 
@@ -130,7 +130,7 @@ function parseLocalISODate(iso: string): Date | null {
 }
 
 export function formatConstructionDueWarning(w: ConstructionDueWarning): string {
-  const dateLabel = formatThaiDateSlash(w.planned_completion_date);
+  const dateLabel = formatThaiDateHint(w.planned_completion_date);
   if (w.days_until_due === 0) {
     return `งวดที่ ${w.installment_no}: ครบกำหนดส่งมอบวันนี้ (${dateLabel})`;
   }

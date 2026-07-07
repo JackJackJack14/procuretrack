@@ -3,7 +3,7 @@ import {
   STEP10_GUIDELINE_WARNING_AUDIT,
   STEP10_SCHEDULE_INCOMPLETE_MSG,
 } from "@/lib/step10-guideline";
-import { formatThaiDateSlash } from "@/lib/utils";
+import { formatThaiDateHint } from "@/lib/utils";
 
 type Props = {
   contractStartDate?: string | null;
@@ -30,13 +30,13 @@ export function Step10GuidelineBox({ contractStartDate, contractEndDate }: Props
             <li>
               <span className="text-muted-foreground">วันเริ่มต้นสัญญา (จากขั้นตอนที่ 9):</span>{" "}
               <span className="font-semibold text-blue-700 tabular-nums">
-                {formatThaiDateSlash(startISO)}
+                {formatThaiDateHint(startISO)}
               </span>
             </li>
             <li>
               <span className="text-muted-foreground">วันสิ้นสุดสัญญา (จากขั้นตอนที่ 9):</span>{" "}
               <span className="font-semibold text-blue-700 tabular-nums">
-                {formatThaiDateSlash(endISO)}
+                {formatThaiDateHint(endISO)}
               </span>
             </li>
           </ul>

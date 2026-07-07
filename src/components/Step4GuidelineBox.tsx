@@ -22,7 +22,7 @@ import {
 
 } from "@/lib/step4-guideline";
 
-import { formatThaiDateSlash } from "@/lib/utils";
+import { formatThaiDateHint } from "@/lib/utils";
 
 
 
@@ -52,7 +52,7 @@ function Step4TimelineTrack({
 
 }: Step4TimelineTrackProps) {
 
-  const committeeDeadlineLabel = formatThaiDateSlash(committeeReviewDeadlineISO);
+  const committeeDeadlineLabel = formatThaiDateHint(committeeReviewDeadlineISO);
 
 
 
@@ -92,7 +92,7 @@ function Step4TimelineTrack({
 
           <p className="text-lg font-bold text-blue-700 tabular-nums mt-1">
 
-            {formatThaiDateSlash(bidSubmissionEndISO)}
+            {formatThaiDateHint(bidSubmissionEndISO)}
 
           </p>
 

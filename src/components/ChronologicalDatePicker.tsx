@@ -11,7 +11,7 @@ import {
   resolveChronologicalMinDateISO,
 } from "@/lib/chronological-lock";
 import type { TimelineValidationContext } from "@/lib/timeline-validation";
-import { formatThaiDateSlash } from "@/lib/utils";
+import { formatThaiDateHint } from "@/lib/utils";
 
 type ThaiDatePickerProps = React.ComponentProps<typeof ThaiDatePicker>;
 
@@ -141,7 +141,7 @@ export function ChronologicalDatePicker({
         stepNumber > 1 &&
         prevStepLabel != null && (
           <p className="text-xs text-muted-foreground">
-            เลือกได้ตั้งแต่ {formatThaiDateSlash(effectiveMin)} เป็นต้นไป
+            เลือกได้ตั้งแต่ {formatThaiDateHint(effectiveMin)} เป็นต้นไป
             {minProfile === "default" && (
               <span> (หลังวันสิ้นสุดขั้นตอนที่ {prevStepLabel})</span>
             )}

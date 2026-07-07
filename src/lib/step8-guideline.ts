@@ -5,7 +5,7 @@ import {
   isWorkday,
   parseISODateLocal,
 } from "@/lib/workdays";
-import { formatThaiDateSlash } from "@/lib/utils";
+import { formatThaiDate, formatThaiDateHint } from "@/lib/utils";
 
 const THAI_MONTH_ABBR = [
   "ม.ค.",
@@ -77,14 +77,14 @@ export function formatStep8SigningHolidaySkipsNote(
 }
 
 export function formatStep8TimelineNode1Line(earliestISO: string): string {
-  return `เริ่มลงนามในสัญญาได้ตั้งแต่วันที่ ${formatThaiDateSlash(earliestISO)} เป็นต้นไป (หลังพ้นระยะอุทธรณ์และวันหยุดยาว)`;
+  return `เริ่มลงนามในสัญญาได้ตั้งแต่ ${formatThaiDateHint(earliestISO)} เป็นต้นไป (หลังพ้นระยะอุทธรณ์และวันหยุดยาว)`;
 }
 
 export function formatStep8TimelineNode2Line(signedISO: string): string {
   if (!signedISO?.trim()) {
     return `วันที่ลงนามสัญญาจริง: ${STEP8_TIMELINE_NODE2_PENDING}`;
   }
-  return `วันที่ลงนามสัญญาจริง: ${formatThaiDateSlash(signedISO)}`;
+  return `วันที่ลงนามสัญญาจริง: ${formatThaiDate(signedISO)}`;
 }
 
 export function formatStep8TimelineNode3Line(
@@ -92,10 +92,10 @@ export function formatStep8TimelineNode3Line(
   step7ReceivedISO: string,
 ): string {
   const holidayNote = formatStep8SigningHolidaySkipsNote(step7ReceivedISO, deadlineISO);
-  return `ต้องลงนามผูกพันสัญญาภายในวันที่ ${formatThaiDateSlash(deadlineISO)} (คำนวณบวก ${STEP7_CONTRACT_SIGNING_DEADLINE_WORKDAYS} วันทำการจากฐานขั้นตอนที่ 7 ${holidayNote})`;
+  return `ต้องลงนามผูกพันสัญญาภายใน ${formatThaiDateHint(deadlineISO)} (คำนวณบวก ${STEP7_CONTRACT_SIGNING_DEADLINE_WORKDAYS} วันทำการจากฐานขั้นตอนที่ 7 ${holidayNote})`;
 }
 
 export function formatStep8GuidelineOverdueWarning(deadlineISO: string): string {
-  const dateLabel = deadlineISO?.trim() ? formatThaiDateSlash(deadlineISO) : "—";
+  const dateLabel = deadlineISO?.trim() ? formatThaiDateHint(deadlineISO) : "—";
   return `หากคู่สัญญาไม่มาลงนามภายในวันที่ ${dateLabel} โดยไม่มีเหตุอันสมควร พัสดุต้องรายงานหัวหน้าหน่วยงานเพื่อพิจารณา ริบหลักประกันซอง และแจ้งเป็น ผู้ทิ้งงาน ทันที`;
 }
