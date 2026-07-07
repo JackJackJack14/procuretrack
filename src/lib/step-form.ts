@@ -5467,7 +5467,7 @@ export const STEP7_NOTICE_OUTCOME_REQUIRED_MSG =
   "กรุณาเลือกสถานการณ์การดำเนินการ (ผู้ชนะมาลงนาม หรือ ไม่มาลงนาม)";
 
 export const STEP7_PERFORMANCE_BOND_BELOW_MINIMUM_MSG =
-  "❌ ยอดเงินหลักประกันสัญญาไม่ครบถ้วนตามร้อยละ 5 ของมูลค่าสัญญา";
+  "❌ จำนวนเงินหลักประกันต้องไม่น้อยกว่าเกณฑ์ขั้นต่ำ (5%)";
 
 export const STEP7_SIGNING_DEADLINE_EXTENSION_REQUIRED_MSG =
   "กรุณาระบุเหตุผลความจำเป็นในการขยายเวลาเกิน 15 วัน";
@@ -5479,7 +5479,23 @@ export function isStep7PerformanceBondBelowMinimum(
   bondAmount: number | null | undefined,
   contractAmount: number | null | undefined,
 ): boolean {
-  return isStep8GuaranteeBelowMinimum(bondAmount, contractAmount);
+  return (
+    resolveStep7PerformanceBondAmountError(
+      bondAmount,
+      computeRecommendedGuaranteeAmount(contractAmount),
+    ) != null
+  );
+}
+
+/** ตรวจยอดหลักประกันที่กรอกเทียบเกณฑ์ขั้นต่ำ (5%) — ใช้ผูกกับ onChange ของช่องกรอกโดยตรง */
+export function resolveStep7PerformanceBondAmountError(
+  inputAmount: number | null | undefined,
+  minimum: number | null | undefined,
+): string | null {
+  if (minimum == null || !Number.isFinite(minimum) || minimum <= 0) return null;
+  if (inputAmount == null || !Number.isFinite(inputAmount)) return null;
+  if (inputAmount < minimum) return STEP7_PERFORMANCE_BOND_BELOW_MINIMUM_MSG;
+  return null;
 }
 
 export function mapStep7BondTypeToStep8(
@@ -5906,7 +5922,13 @@ function normalizeStep7ContractNotice(
     performance_bond_type: bondType,
     performance_bond_amount: bondAmount,
     performance_bond_lg_expiry_date: raw.performance_bond_lg_expiry_date?.trim() ?? "",
-    contract_duration_days: migrateStep7ContractDurationDays(raw),
+    contract_duration_days: (() => {
+      const rawDays = raw?.contract_duration_days;
+      if (rawDays != null && Number.isFinite(Number(rawDays)) && Number(rawDays) > 0) {
+        return Math.round(Number(rawDays));
+      }
+      return null;
+    })(),
     defect_warranty_years: (() => {
       const yearsRaw = raw.defect_warranty_years;
       if (yearsRaw != null && Number.isFinite(Number(yearsRaw)) && Number(yearsRaw) > 0) {

@@ -102,6 +102,33 @@ export const STEP7_LG_EXPIRY_BEFORE_WARRANTY_END_MSG = (minISO: string) =>
 export const STEP7_LG_MIN_EXPIRY_HELPER_MSG = (minISO: string) =>
   `ℹ️ วันสิ้นสุดความคุ้มครองขั้นต่ำ: ${formatThaiDateHint(minISO)}`;
 
+/** แสดง helper วันสิ้นสุดความคุ้มครองขั้นต่ำเฉพาะเมื่อระยะเวลาดำเนินการ > 0 และคำนวณวันขั้นต่ำได้ */
+export function shouldShowStep7MinLgExpiryHelper(
+  durationDays: number | null | undefined,
+  minLgExpiryISO: string | null | undefined,
+): boolean {
+  return isStep7ContractDurationReady(durationDays) && !!minLgExpiryISO?.trim();
+}
+
+/** ซิงก์วันสิ้นสุดความคุ้มครอง LG กับขั้นต่ำที่คำนวณได้ — เคลียร์เมื่อยังคำนวณไม่ได้, auto-fill เมื่อว่างหรือต่ำกว่า min */
+export function syncStep7LgExpiryWithMin(
+  currentExpiryISO: string | null | undefined,
+  minLgExpiryISO: string | null | undefined,
+): { next: string; changed: boolean } {
+  const current = currentExpiryISO?.trim() ?? "";
+  const min = minLgExpiryISO?.trim() ?? "";
+  if (!min) {
+    return { next: "", changed: current !== "" };
+  }
+  if (!current) {
+    return { next: min, changed: true };
+  }
+  if (isStep7LgExpiryBeforeMin(current, min)) {
+    return { next: min, changed: current !== min };
+  }
+  return { next: current, changed: false };
+}
+
 export const STEP7_COMPUTED_CONTRACT_END_HELPER_MSG = (endISO: string) =>
   `วันครบกำหนดส่งมอบงานตามสัญญา (คำนวณอัตโนมัติ): ${formatThaiDateHint(endISO)}`;
 

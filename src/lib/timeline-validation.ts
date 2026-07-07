@@ -285,11 +285,6 @@ export function getStep7TimelineDateFields(contractNotice: Step7ContractNotice):
       label: "วันที่ลงนามในสัญญาจริง",
     },
     {
-      id: "performance_bond_lg_expiry_date",
-      iso: contractNotice.performance_bond_lg_expiry_date ?? "",
-      label: "วันสิ้นสุดความคุ้มครองของหนังสือค้ำประกัน",
-    },
-    {
       id: "contractor_received_date",
       iso: contractNotice.contractor_received_date ?? "",
       label: "วันที่ผู้ประกอบการได้รับหนังสือเชิญ",

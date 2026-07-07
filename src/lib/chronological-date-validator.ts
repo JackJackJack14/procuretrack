@@ -45,6 +45,7 @@ import {
 } from "@/lib/step-form";
 import {
   computeStep7MinLgExpiryFromNotice,
+  isStep7ContractDurationReady,
   isStep7LgExpiryBeforeMin,
   STEP7_LG_EXPIRY_BEFORE_WARRANTY_END_MSG,
 } from "@/lib/step7-lg-expiry";
@@ -363,7 +364,8 @@ export function getIntraStepChronologicalIssues(
     const bondType = snapshot.step7ContractNotice.performance_bond_type;
     if (
       bondType === "bank_guarantee" &&
-      snapshot.step7ContractNotice.performance_bond_collection === "collect"
+      snapshot.step7ContractNotice.performance_bond_collection === "collect" &&
+      isStep7ContractDurationReady(snapshot.step7ContractNotice.contract_duration_days)
     ) {
       const minLgExpiry = computeStep7MinLgExpiryFromNotice(snapshot.step7ContractNotice);
       const lgExpiry = isoTrim(snapshot.step7ContractNotice.performance_bond_lg_expiry_date);
@@ -628,17 +630,18 @@ export function resolveChronologicalFieldMinDate(
   }
 
   if (stepNumber === 7 && pureFieldId === "performance_bond_lg_expiry_date") {
-    const minLgExpiry = computeStep7MinLgExpiryFromNotice(
-      snapshot.step7ContractNotice ?? {
-        actual_contract_signed_date: "",
-        contract_duration_days: null,
-        defect_warranty_years: null,
-      },
-    );
-    if (minLgExpiry) candidates.push(minLgExpiry);
-  }
-
-  if (stepNumber > 1 && timelineCtx) {
+    const notice = snapshot.step7ContractNotice ?? {
+      actual_contract_signed_date: "",
+      contract_duration_days: null,
+      defect_warranty_years: null,
+    };
+    if (isStep7ContractDurationReady(notice.contract_duration_days)) {
+      const minLgExpiry = computeStep7MinLgExpiryFromNotice(notice);
+      if (minLgExpiry) candidates.push(minLgExpiry);
+    }
+    const signed = isoTrim(notice.actual_contract_signed_date);
+    if (signed) candidates.push(signed);
+  } else if (stepNumber > 1 && timelineCtx) {
     candidates.push(
       resolvePreviousStepMilestoneEndISO(
         stepNumber,

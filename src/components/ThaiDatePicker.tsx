@@ -77,6 +77,12 @@ export function ThaiDatePicker({
   const min = parseBoundary(minDate);
   const max = parseBoundary(maxDate);
   const displayValue = value ? formatThaiDateSlash(value) : "";
+  /** เปิดปฏิทินที่เดือนที่เลือกได้ — ป้องกันกรณีค่าเดิมน้อยกว่า minDate แล้วกดวันในปฏิทินไม่ได้ */
+  const openToDate = useMemo(() => {
+    if (min && selected && selected < min) return min;
+    if (!selected && min) return min;
+    return selected ?? min ?? new Date();
+  }, [min, selected]);
 
   const customInput = useMemo(
     () => <ThaiDateInput displayValue={displayValue} className={className} id={id} />,
@@ -109,6 +115,7 @@ export function ThaiDatePicker({
     <DatePicker
       selected={selected}
       onChange={handleChange}
+      openToDate={openToDate}
       minDate={min}
       maxDate={max}
       disabled={disabled}

@@ -226,7 +226,6 @@ import {
   STEP7_SIGNING_DEADLINE_EXTENSION_REQUIRED_MSG,
   STEP7_PERFORMANCE_BOND_COLLECTION_REQUIRED_MSG,
   STEP7_NOTICE_OUTCOME_REQUIRED_MSG,
-  isStep7PerformanceBondBelowMinimum,
   type Step7NoticeOutcome,
   type Step7PerformanceBondCollection,
   type Step7EgpSyncStatus,
@@ -261,11 +260,15 @@ import {
   STEP7_RECEIVED_BEFORE_LETTER_MSG,
   STEP7_SIGNED_BEFORE_RECEIVED_MSG,
   isStep7ContractorReceivedDateChronoValid,
+  resolveStep7PerformanceBondAmountError,
 } from "@/lib/step-form";
 import {
   computeStep7ContractEndFromNotice,
   computeStep7MinLgExpiryFromNotice,
+  isStep7ContractDurationReady,
   isStep7LgExpiryBeforeMin,
+  shouldShowStep7MinLgExpiryHelper,
+  syncStep7LgExpiryWithMin,
   STEP7_DEFECT_WARRANTY_YEARS_DEFAULT,
   STEP7_LG_EXPIRY_BEFORE_WARRANTY_END_MSG,
   STEP7_LG_MIN_EXPIRY_HELPER_MSG,
@@ -5422,6 +5425,9 @@ export function Step7ContractNoticeForm({
   const [receivedDateRejected, setReceivedDateRejected] = useState(false);
   const [signedDateRejected, setSignedDateRejected] = useState(false);
   const [lgExpiryRejected, setLgExpiryRejected] = useState(false);
+  const [performanceBondAmountError, setPerformanceBondAmountError] = useState<string | null>(
+    null,
+  );
 
   const contractNoticeLetterDate = contractNotice?.contract_notice_letter_date ?? "";
   const actualSignedDate = contractNotice?.actual_contract_signed_date ?? "";
@@ -5433,52 +5439,55 @@ export function Step7ContractNoticeForm({
   const bondAmount = contractNotice?.performance_bond_amount ?? null;
   const minLetterDateISO = computeStep7NoticeLetterMinDateISO(appealDeadlineISO);
   const recommendedBond = computeRecommendedGuaranteeAmount(winningProjectAmount);
-  const bondBelowMin =
-    bondAmount != null &&
-    isStep7PerformanceBondBelowMinimum(bondAmount, winningProjectAmount);
+  const bondBelowMin = performanceBondAmountError != null;
   const showBondBankFields = bondType && bondType !== "cash";
   const showLgExpiryField = bondType === "bank_guarantee";
   const contractDurationDays = contractNotice?.contract_duration_days ?? null;
-  const computedContractEndISO = useMemo(
-    () =>
-      computeStep7ContractEndFromNotice(
-        contractNotice ?? {
-          actual_contract_signed_date: "",
-          contract_duration_days: null,
-        },
-      ),
-    [
-      contractNotice?.actual_contract_signed_date,
-      contractNotice?.contract_duration_days,
-    ],
-  );
+  const hasContractDurationReady = isStep7ContractDurationReady(contractDurationDays);
+  const canComputeContractDates =
+    hasContractDurationReady && !!actualSignedDate?.trim();
+  const computedContractEndISO = useMemo(() => {
+    if (!canComputeContractDates) return null;
+    return computeStep7ContractEndFromNotice(
+      contractNotice ?? {
+        actual_contract_signed_date: "",
+        contract_duration_days: null,
+      },
+    );
+  }, [
+    canComputeContractDates,
+    contractNotice?.actual_contract_signed_date,
+    contractNotice?.contract_duration_days,
+  ]);
   const defectWarrantyYears =
     contractNotice?.defect_warranty_years ?? STEP7_DEFECT_WARRANTY_YEARS_DEFAULT;
-  const minLgExpiryISO = useMemo(
-    () =>
-      computeStep7MinLgExpiryFromNotice(
-        contractNotice ?? {
-          actual_contract_signed_date: "",
-          contract_duration_days: null,
-          defect_warranty_years: null,
-        },
-      ),
-    [
-      contractNotice?.actual_contract_signed_date,
-      contractNotice?.contract_duration_days,
-      contractNotice?.defect_warranty_years,
-    ],
-  );
-  const lgExpiryMinDateISO = mergeMinDateISO(
+  const minLgExpiryISO = useMemo(() => {
+    if (!hasContractDurationReady) return null;
+    if (!actualSignedDate?.trim()) return null;
+    return computeStep7MinLgExpiryFromNotice(
+      contractNotice ?? {
+        actual_contract_signed_date: "",
+        contract_duration_days: null,
+        defect_warranty_years: null,
+      },
+    );
+  }, [
+    hasContractDurationReady,
+    actualSignedDate,
+    contractNotice?.actual_contract_signed_date,
+    contractNotice?.contract_duration_days,
+    contractNotice?.defect_warranty_years,
+  ]);
+  const lgExpiryPickerMinISO = mergeMinDateISO(
     minLgExpiryISO,
     actualSignedDate || undefined,
   );
   const lgExpiryDate = contractNotice?.performance_bond_lg_expiry_date ?? "";
   const showLgExpiryChronoError =
     lgExpiryRejected ||
-    (!!minLgExpiryISO &&
+    (!!lgExpiryPickerMinISO &&
       !!lgExpiryDate &&
-      isStep7LgExpiryBeforeMin(lgExpiryDate, minLgExpiryISO));
+      isStep7LgExpiryBeforeMin(lgExpiryDate, lgExpiryPickerMinISO));
   const egpSyncStatus: Step7EgpSyncStatus =
     contractNotice?.egp_sync_status === "synced" ? "synced" : "pending";
   const letterAnchoredDeadline = contractNoticeLetterDate
@@ -5490,29 +5499,6 @@ export function Step7ContractNoticeForm({
     isStep7SigningDeadlineBeyondStandard(contractNoticeLetterDate, signingDeadline);
 
   useEffect(() => {
-    if (readOnly || !showLgExpiryField) return;
-    if (contractNotice?.contract_duration_days != null && contractNotice.contract_duration_days > 0) {
-      return;
-    }
-    if (
-      suggestedContractDurationDays == null ||
-      !Number.isFinite(suggestedContractDurationDays) ||
-      suggestedContractDurationDays <= 0
-    ) {
-      return;
-    }
-    onContractNoticeChange({
-      contract_duration_days: Math.round(suggestedContractDurationDays),
-    });
-  }, [
-    readOnly,
-    showLgExpiryField,
-    contractNotice?.contract_duration_days,
-    suggestedContractDurationDays,
-    onContractNoticeChange,
-  ]);
-
-  useEffect(() => {
     if (readOnly || signingBeyondStandard) return;
     if (!contractNotice?.signing_deadline_extension_reason?.trim()) return;
     onContractNoticeChange({ signing_deadline_extension_reason: "" });
@@ -5520,6 +5506,27 @@ export function Step7ContractNoticeForm({
     readOnly,
     signingBeyondStandard,
     contractNotice?.signing_deadline_extension_reason,
+    onContractNoticeChange,
+  ]);
+
+  useEffect(() => {
+    setPerformanceBondAmountError(
+      resolveStep7PerformanceBondAmountError(bondAmount, recommendedBond),
+    );
+  }, [bondAmount, recommendedBond]);
+
+  /** Auto-fill / เคลียร์วันสิ้นสุดความคุ้มครอง LG ตาม min ที่คำนวณจากระยะเวลาสัญญา */
+  useEffect(() => {
+    if (readOnly || !showLgExpiryField) return;
+    const { next, changed } = syncStep7LgExpiryWithMin(lgExpiryDate, minLgExpiryISO);
+    if (!changed) return;
+    setLgExpiryRejected(false);
+    onContractNoticeChange({ performance_bond_lg_expiry_date: next });
+  }, [
+    readOnly,
+    showLgExpiryField,
+    minLgExpiryISO,
+    lgExpiryDate,
     onContractNoticeChange,
   ]);
 
@@ -5569,7 +5576,11 @@ export function Step7ContractNoticeForm({
   const handleSignedDateChange = (v: string) => {
     if (!v) {
       setSignedDateRejected(false);
-      onContractNoticeChange({ actual_contract_signed_date: "" });
+      setLgExpiryRejected(false);
+      onContractNoticeChange({
+        actual_contract_signed_date: "",
+        ...(showLgExpiryField ? { performance_bond_lg_expiry_date: "" } : {}),
+      });
       return;
     }
     if (contractorReceivedDate && v < contractorReceivedDate) {
@@ -5578,7 +5589,20 @@ export function Step7ContractNoticeForm({
       return;
     }
     setSignedDateRejected(false);
-    onContractNoticeChange({ actual_contract_signed_date: v });
+    setLgExpiryRejected(false);
+    const patch: Partial<Step7ContractNotice> = { actual_contract_signed_date: v };
+    if (showLgExpiryField && hasContractDurationReady) {
+      const nextMin = computeStep7MinLgExpiryFromNotice({
+        actual_contract_signed_date: v,
+        contract_duration_days: contractDurationDays,
+        defect_warranty_years: defectWarrantyYears,
+      });
+      patch.performance_bond_lg_expiry_date = syncStep7LgExpiryWithMin(
+        lgExpiryDate,
+        nextMin,
+      ).next;
+    }
+    onContractNoticeChange(patch);
   };
 
   const handleContractorReceivedDateChange = (v: string) => {
@@ -5619,9 +5643,9 @@ export function Step7ContractNoticeForm({
       onContractNoticeChange({ performance_bond_lg_expiry_date: "" });
       return;
     }
-    if (minLgExpiryISO && isStep7LgExpiryBeforeMin(v, minLgExpiryISO)) {
+    if (lgExpiryPickerMinISO && isStep7LgExpiryBeforeMin(v, lgExpiryPickerMinISO)) {
       setLgExpiryRejected(true);
-      toast.error(STEP7_LG_EXPIRY_BEFORE_WARRANTY_END_MSG(minLgExpiryISO));
+      toast.error(STEP7_LG_EXPIRY_BEFORE_WARRANTY_END_MSG(lgExpiryPickerMinISO));
       return;
     }
     setLgExpiryRejected(false);
@@ -6269,9 +6293,27 @@ export function Step7ContractNoticeForm({
                     value={contractDurationDays ?? ""}
                     onChange={(e) => {
                       const raw = e.target.value.trim();
-                      onContractNoticeChange({
-                        contract_duration_days: raw ? Math.max(1, Math.round(Number(raw))) : null,
-                      });
+                      const days = raw ? Math.max(1, Math.round(Number(raw))) : null;
+                      setLgExpiryRejected(false);
+                      const patch: Partial<Step7ContractNotice> = {
+                        contract_duration_days: days,
+                      };
+                      if (showLgExpiryField) {
+                        if (days == null || !actualSignedDate?.trim()) {
+                          patch.performance_bond_lg_expiry_date = "";
+                        } else {
+                          const nextMin = computeStep7MinLgExpiryFromNotice({
+                            actual_contract_signed_date: actualSignedDate,
+                            contract_duration_days: days,
+                            defect_warranty_years: defectWarrantyYears,
+                          });
+                          patch.performance_bond_lg_expiry_date = syncStep7LgExpiryWithMin(
+                            lgExpiryDate,
+                            nextMin,
+                          ).next;
+                        }
+                      }
+                      onContractNoticeChange(patch);
                     }}
                     disabled={readOnly}
                     className={complianceHighlightInputCls(
@@ -6295,14 +6337,24 @@ export function Step7ContractNoticeForm({
                     readOnly
                     aria-readonly
                     value={
-                      computedContractEndISO
+                      canComputeContractDates && computedContractEndISO
                         ? formatThaiDateHint(computedContractEndISO)
-                        : "— ระบุวันที่ลงนามในสัญญาจริงและระยะเวลาดำเนินการก่อน —"
+                        : "—"
                     }
                     className={`${inputCls} bg-muted/50 cursor-not-allowed text-foreground`}
                     tabIndex={-1}
                   />
-                  {computedContractEndISO && (
+                  {!hasContractDurationReady && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      กรุณาระบุระยะเวลาดำเนินการตามสัญญา (วัน) ก่อน — ระบบจะคำนวณวันครบกำหนดส่งมอบงานให้อัตโนมัติ
+                    </p>
+                  )}
+                  {hasContractDurationReady && !actualSignedDate?.trim() && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      กรุณาระบุวันที่ลงนามในสัญญาจริงก่อน — ระบบจะคำนวณวันครบกำหนดส่งมอบงานให้อัตโนมัติ
+                    </p>
+                  )}
+                  {canComputeContractDates && computedContractEndISO && (
                     <p className="text-xs text-muted-foreground mt-1">
                       คำนวณจากวันที่ลงนามในสัญญาจริง + ระยะเวลาดำเนินการ (วันปฏิทิน)
                     </p>
@@ -6323,9 +6375,27 @@ export function Step7ContractNoticeForm({
                     value={defectWarrantyYears}
                     onChange={(e) => {
                       const raw = e.target.value.trim();
-                      onContractNoticeChange({
-                        defect_warranty_years: raw ? Math.max(1, Math.round(Number(raw))) : null,
-                      });
+                      const years = raw ? Math.max(1, Math.round(Number(raw))) : null;
+                      setLgExpiryRejected(false);
+                      const patch: Partial<Step7ContractNotice> = {
+                        defect_warranty_years: years,
+                      };
+                      if (
+                        showLgExpiryField &&
+                        hasContractDurationReady &&
+                        actualSignedDate?.trim()
+                      ) {
+                        const nextMin = computeStep7MinLgExpiryFromNotice({
+                          actual_contract_signed_date: actualSignedDate,
+                          contract_duration_days: contractDurationDays,
+                          defect_warranty_years: years,
+                        });
+                        patch.performance_bond_lg_expiry_date = syncStep7LgExpiryWithMin(
+                          lgExpiryDate,
+                          nextMin,
+                        ).next;
+                      }
+                      onContractNoticeChange(patch);
                     }}
                     disabled={readOnly}
                     className={inputCls}
@@ -6345,27 +6415,28 @@ export function Step7ContractNoticeForm({
                 >
                   <ChronologicalDatePicker
                     stepNumber={7}
-                    fieldId="performance_bond_lg_expiry_date"
                     chronologicalCtx={chronologicalCtx}
-                    minDate={lgExpiryMinDateISO}
+                    minDate={lgExpiryPickerMinISO}
                     value={lgExpiryDate}
                     onChange={handleLgExpiryDateChange}
-                    disabled={readOnly || !computedContractEndISO}
+                    disabled={readOnly || !canComputeContractDates}
                     showChronologicalHint={false}
+                    skipChronologicalLock
+                    showChainError={false}
                   />
-                  {minLgExpiryISO && (
+                  {shouldShowStep7MinLgExpiryHelper(contractDurationDays, lgExpiryPickerMinISO) ? (
                     <p className="text-xs text-muted-foreground mt-1">
-                      {STEP7_LG_MIN_EXPIRY_HELPER_MSG(minLgExpiryISO)}
+                      {STEP7_LG_MIN_EXPIRY_HELPER_MSG(lgExpiryPickerMinISO!)}
                     </p>
-                  )}
-                  {!computedContractEndISO && (
+                  ) : null}
+                  {hasContractDurationReady && !canComputeContractDates ? (
                     <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">
-                      กรุณาระบุวันที่ลงนามในสัญญาจริงและระยะเวลาดำเนินการก่อนเลือกวันสิ้นสุดความคุ้มครอง
+                      กรุณาระบุวันที่ลงนามในสัญญาจริงก่อนเลือกวันสิ้นสุดความคุ้มครอง
                     </p>
-                  )}
-                  {showLgExpiryChronoError && minLgExpiryISO && (
+                  ) : null}
+                  {showLgExpiryChronoError && lgExpiryPickerMinISO && (
                     <p className="text-xs text-destructive mt-1">
-                      {STEP7_LG_EXPIRY_BEFORE_WARRANTY_END_MSG(minLgExpiryISO)}
+                      {STEP7_LG_EXPIRY_BEFORE_WARRANTY_END_MSG(lgExpiryPickerMinISO)}
                     </p>
                   )}
                   <ComplianceFieldError show={fieldHighlighted("performance_bond_lg_expiry_date")} />
@@ -6388,9 +6459,13 @@ export function Step7ContractNoticeForm({
                 value={bondAmount ?? ""}
                 onChange={(e) => {
                   const raw = e.target.value.trim();
+                  const amount = raw ? Number(raw) : null;
                   onContractNoticeChange({
-                    performance_bond_amount: raw ? Number(raw) : null,
+                    performance_bond_amount: amount,
                   });
+                  setPerformanceBondAmountError(
+                    resolveStep7PerformanceBondAmountError(amount, recommendedBond),
+                  );
                 }}
                 disabled={readOnly}
                 className={complianceHighlightInputCls(
@@ -6400,11 +6475,16 @@ export function Step7ContractNoticeForm({
                     bondBelowMin,
                 )}
               />
-              {bondBelowMin && (
+              {performanceBondAmountError ? (
                 <p className="text-xs text-destructive font-semibold mt-1" role="alert">
-                  {STEP7_PERFORMANCE_BOND_BELOW_MINIMUM_MSG}
+                  {performanceBondAmountError}
+                  {recommendedBond != null && (
+                    <span className="block mt-0.5 font-normal">
+                      เกณฑ์ขั้นต่ำ: {formatCurrencyDisplay(recommendedBond)} บาท
+                    </span>
+                  )}
                 </p>
-              )}
+              ) : null}
               <ComplianceFieldError
                 show={
                   fieldHighlighted("performance_bond_amount_min") && !bondBelowMin
