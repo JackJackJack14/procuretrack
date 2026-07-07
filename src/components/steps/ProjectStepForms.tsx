@@ -259,8 +259,18 @@ import {
   STEP4_EVALUATION_APPROVAL_GATE_MSG,
   STEP7_NOTIFICATION_DEADLINE_EXCEEDED_MSG,
   STEP7_RECEIVED_BEFORE_LETTER_MSG,
+  STEP7_SIGNED_BEFORE_RECEIVED_MSG,
   isStep7ContractorReceivedDateChronoValid,
 } from "@/lib/step-form";
+import {
+  computeStep7MinLgExpiryFromNotice,
+  isStep7LgExpiryBeforeMin,
+  resolveStep7EffectiveContractEndDateISO,
+  STEP7_DEFECT_WARRANTY_YEARS_DEFAULT,
+  STEP7_LG_EXPIRY_BEFORE_WARRANTY_END_MSG,
+  STEP7_LG_MIN_EXPIRY_HELPER_MSG,
+} from "@/lib/step7-lg-expiry";
+import { mergeMinDateISO } from "@/lib/chronological-lock";
 import {
   computeStep9EgpDeadlineISO,
   getStep9EgpPublicationTooLateMsg,
@@ -1715,6 +1725,7 @@ export function Step2DetailForm({
           <ChronologicalDatePicker
             stepNumber={2}
             chronologicalCtx={chronologicalCtx}
+            fieldId="appointment_order_date"
             value={committeeOrder.appointment_order_date ?? ""}
             onChange={(v) => onCommitteeOrderChange({ appointment_order_date: v })}
             showChronologicalHint
@@ -1844,6 +1855,7 @@ export function Step2DetailForm({
             stepNumber={2}
             chronologicalCtx={chronologicalCtx}
             intraStepMinDate={appointmentDate}
+            fieldId="median_price_approval_date"
             value={medianPrice.median_price_approval_date ?? ""}
             onChange={(v) => onMedianPriceChange({ median_price_approval_date: v })}
             showChronologicalHint={false}
@@ -2543,6 +2555,7 @@ export function Step3DetailForm({
             stepNumber={3}
             chronologicalCtx={chronologicalCtx}
             minProfile="step3_tor_approval"
+            fieldId="approval_letter_date"
             value={announcement.approval_letter_date ?? ""}
             onChange={handleApprovalDateChange}
             showChronologicalHint={false}
@@ -2612,6 +2625,7 @@ export function Step3DetailForm({
               stepNumber={3}
               chronologicalCtx={chronologicalCtx}
               intraStepMinDate={approvalDate}
+              fieldId="publication_start"
               value={announcement.publication_start ?? ""}
               onChange={handlePublicationStartChange}
               workdaysOnly
@@ -2635,6 +2649,7 @@ export function Step3DetailForm({
               stepNumber={3}
               chronologicalCtx={chronologicalCtx}
               additionalMinDates={[minPublicationEnd]}
+              fieldId="publication_end"
               value={announcement.publication_end ?? ""}
               onChange={handlePublicationEndChange}
               workdaysOnly
@@ -2837,6 +2852,7 @@ export function Step3DetailForm({
             stepNumber={3}
             chronologicalCtx={chronologicalCtx}
             intraStepMinDate={publicationEnd}
+            fieldId="procurement_request_approval_date"
             value={announcement.procurement_request_approval_date ?? ""}
             onChange={handleProcApprovalDateChange}
             disabled={(hearingFormActive && !publicationEnd) || readOnly}
@@ -4947,6 +4963,7 @@ export function Step5DetailForm({
           <ChronologicalDatePicker
             stepNumber={5}
             chronologicalCtx={chronologicalCtx}
+            chainFieldKey="4.evaluation_report_approval_date"
             intraStepMinDate={
               [publicationEnd, committeeReviewDeadlineISO].filter(Boolean).sort().pop() || ""
             }
@@ -5100,7 +5117,10 @@ export function Step5DetailForm({
           complianceTarget="winner_announcement_date"
         >
           <div className="space-y-1">
-            <ThaiDatePicker
+            <ChronologicalDatePicker
+              stepNumber={5}
+              chronologicalCtx={chronologicalCtx}
+              fieldId="winner_announcement_date"
               minDate={minAnnouncementDate || undefined}
               value={winnerDate}
               onChange={handleWinnerAnnouncementDateChange}
@@ -5115,6 +5135,7 @@ export function Step5DetailForm({
                 setAnnouncementDateRejected(true);
                 if (announcementDateErrorMsg) toast.error(announcementDateErrorMsg);
               }}
+              showChronologicalHint={false}
             />
             {winnerDate && !showAnnouncementDateError && (
               <p className="text-xs text-muted-foreground">
@@ -5164,6 +5185,7 @@ export function Step5DetailForm({
             <ChronologicalDatePicker
               stepNumber={5}
               skipChronologicalLock
+              fieldId="winner_result_notification_date"
               minDate={winnerDate || undefined}
               value={notificationDate}
               onChange={handleResultNotificationDateChange}
@@ -5342,6 +5364,8 @@ type Step7ContractNoticeFormProps = {
   onNoteChange: (value: string) => void;
   highlightedComplianceIssues?: string[];
   complianceSubmitTriggered?: boolean;
+  /** วันครบกำหนดส่งมอบงานตามสัญญา — จากขั้น 9 หรือแหล่งอื่นในโครงการ */
+  contractEndDateISO?: string;
 } & ChronologicalFormProps;
 
 const CLEAR_STEP7_BOND_FIELDS: Partial<Step7ContractNotice> = {
@@ -5381,6 +5405,7 @@ export function Step7ContractNoticeForm({
   onNoteChange,
   highlightedComplianceIssues = [],
   complianceSubmitTriggered = false,
+  contractEndDateISO = "",
   chronologicalCtx,
 }: Step7ContractNoticeFormProps) {
   const complianceHi = highlightedComplianceIssues;
@@ -5395,8 +5420,11 @@ export function Step7ContractNoticeForm({
   );
 
   const [receivedDateRejected, setReceivedDateRejected] = useState(false);
+  const [signedDateRejected, setSignedDateRejected] = useState(false);
+  const [lgExpiryRejected, setLgExpiryRejected] = useState(false);
 
   const contractNoticeLetterDate = contractNotice?.contract_notice_letter_date ?? "";
+  const actualSignedDate = contractNotice?.actual_contract_signed_date ?? "";
   const contractorReceivedDate = contractNotice?.contractor_received_date ?? "";
   const signingDeadline = contractNotice?.contract_signing_deadline ?? "";
   const noticeOutcome = contractNotice?.notice_outcome ?? "";
@@ -5410,6 +5438,31 @@ export function Step7ContractNoticeForm({
     isStep7PerformanceBondBelowMinimum(bondAmount, winningProjectAmount);
   const showBondBankFields = bondType && bondType !== "cash";
   const showLgExpiryField = bondType === "bank_guarantee";
+  const effectiveContractEndISO = resolveStep7EffectiveContractEndDateISO(
+    contractEndDateISO,
+    contractNotice ?? { lg_reference_contract_end_date: "" },
+  );
+  const showLgReferenceContractEndField = showLgExpiryField && !contractEndDateISO?.trim();
+  const defectWarrantyYears =
+    contractNotice?.defect_warranty_years ?? STEP7_DEFECT_WARRANTY_YEARS_DEFAULT;
+  const minLgExpiryISO = useMemo(
+    () =>
+      computeStep7MinLgExpiryFromNotice(contractEndDateISO, contractNotice ?? {
+        lg_reference_contract_end_date: "",
+        defect_warranty_years: null,
+      }),
+    [contractEndDateISO, contractNotice?.lg_reference_contract_end_date, contractNotice?.defect_warranty_years],
+  );
+  const lgExpiryMinDateISO = mergeMinDateISO(
+    minLgExpiryISO,
+    actualSignedDate || undefined,
+  );
+  const lgExpiryDate = contractNotice?.performance_bond_lg_expiry_date ?? "";
+  const showLgExpiryChronoError =
+    lgExpiryRejected ||
+    (!!minLgExpiryISO &&
+      !!lgExpiryDate &&
+      isStep7LgExpiryBeforeMin(lgExpiryDate, minLgExpiryISO));
   const egpSyncStatus: Step7EgpSyncStatus =
     contractNotice?.egp_sync_status === "synced" ? "synced" : "pending";
   const letterAnchoredDeadline = contractNoticeLetterDate
@@ -5440,6 +5493,11 @@ export function Step7ContractNoticeForm({
     (!!contractNoticeLetterDate &&
       !!contractorReceivedDate &&
       contractorReceivedDate < contractNoticeLetterDate);
+  const showSignedChronoError =
+    signedDateRejected ||
+    (!!contractorReceivedDate &&
+      !!actualSignedDate &&
+      actualSignedDate < contractorReceivedDate);
 
   console.log("⏳ [STEP 7 CHRONO VALIDATION]:", {
     letterDate: contractNoticeLetterDate,
@@ -5459,8 +5517,29 @@ export function Step7ContractNoticeForm({
     } else {
       setReceivedDateRejected(false);
     }
+    if (v && actualSignedDate && contractorReceivedDate && actualSignedDate < contractorReceivedDate) {
+      setSignedDateRejected(true);
+      toast.error(STEP7_SIGNED_BEFORE_RECEIVED_MSG);
+    } else if (!contractorReceivedDate || !actualSignedDate || actualSignedDate >= contractorReceivedDate) {
+      setSignedDateRejected(false);
+    }
     patch.signing_deadline_extension_reason = "";
     onContractNoticeChange(patch);
+  };
+
+  const handleSignedDateChange = (v: string) => {
+    if (!v) {
+      setSignedDateRejected(false);
+      onContractNoticeChange({ actual_contract_signed_date: "" });
+      return;
+    }
+    if (contractorReceivedDate && v < contractorReceivedDate) {
+      setSignedDateRejected(true);
+      toast.error(STEP7_SIGNED_BEFORE_RECEIVED_MSG);
+      return;
+    }
+    setSignedDateRejected(false);
+    onContractNoticeChange({ actual_contract_signed_date: v });
   };
 
   const handleContractorReceivedDateChange = (v: string) => {
@@ -5473,6 +5552,12 @@ export function Step7ContractNoticeForm({
       setReceivedDateRejected(true);
       toast.error(STEP7_RECEIVED_BEFORE_LETTER_MSG);
       return;
+    }
+    if (actualSignedDate && v && actualSignedDate < v) {
+      setSignedDateRejected(true);
+      toast.error(STEP7_SIGNED_BEFORE_RECEIVED_MSG);
+    } else if (!actualSignedDate || !v || actualSignedDate >= v) {
+      setSignedDateRejected(false);
     }
     setReceivedDateRejected(false);
     onContractNoticeChange({ contractor_received_date: v });
@@ -5487,6 +5572,21 @@ export function Step7ContractNoticeForm({
       contract_signing_deadline: v,
       ...(!beyond ? { signing_deadline_extension_reason: "" } : {}),
     });
+  };
+
+  const handleLgExpiryDateChange = (v: string) => {
+    if (!v) {
+      setLgExpiryRejected(false);
+      onContractNoticeChange({ performance_bond_lg_expiry_date: "" });
+      return;
+    }
+    if (minLgExpiryISO && isStep7LgExpiryBeforeMin(v, minLgExpiryISO)) {
+      setLgExpiryRejected(true);
+      toast.error(STEP7_LG_EXPIRY_BEFORE_WARRANTY_END_MSG(minLgExpiryISO));
+      return;
+    }
+    setLgExpiryRejected(false);
+    onContractNoticeChange({ performance_bond_lg_expiry_date: v });
   };
 
   return (
@@ -5677,24 +5777,6 @@ export function Step7ContractNoticeForm({
           />
           <ComplianceFieldError show={fieldHighlighted("agreed_contract_no")} />
           <FieldRow
-            label={
-              <>
-                วันที่ลงนามในสัญญาจริง <span className="text-destructive">*</span>
-              </>
-            }
-            complianceTarget="actual_contract_signed_date"
-          >
-            <ChronologicalDatePicker
-              stepNumber={7}
-              chronologicalCtx={chronologicalCtx}
-              value={contractNotice?.actual_contract_signed_date ?? ""}
-              onChange={(v) => onContractNoticeChange({ actual_contract_signed_date: v })}
-              disabled={readOnly}
-              showChronologicalHint={false}
-            />
-            <ComplianceFieldError show={fieldHighlighted("actual_contract_signed_date")} />
-          </FieldRow>
-          <FieldRow
             label="วันที่ในหนังสือเชิญลงนาม *"
             tooltipKey="step7.contract_notice_letter_date"
             complianceTarget="contract_notice_letter_date"
@@ -5704,6 +5786,7 @@ export function Step7ContractNoticeForm({
                 stepNumber={7}
                 chronologicalCtx={chronologicalCtx}
                 minDate={minLetterDateISO}
+                fieldId="contract_notice_letter_date"
                 value={contractNoticeLetterDate}
                 onChange={handleLetterDateChange}
                 disabled={readOnly}
@@ -5743,6 +5826,7 @@ export function Step7ContractNoticeForm({
                 stepNumber={7}
                 chronologicalCtx={chronologicalCtx}
                 minDate={contractNoticeLetterDate || undefined}
+                fieldId="contract_signing_deadline"
                 value={signingDeadline}
                 onChange={handleSigningDeadlineChange}
                 disabled={readOnly || !contractNoticeLetterDate}
@@ -5806,6 +5890,7 @@ export function Step7ContractNoticeForm({
                 chronologicalCtx={chronologicalCtx}
                 minDate={contractNoticeLetterDate || undefined}
                 additionalMinDates={[contractNoticeLetterDate]}
+                fieldId="contractor_received_date"
                 value={contractorReceivedDate}
                 onChange={handleContractorReceivedDateChange}
                 onInvalidDate={() => {
@@ -5840,6 +5925,65 @@ export function Step7ContractNoticeForm({
                   {STEP7_RECEIVED_BEFORE_LETTER_MSG}
                 </p>
               )}
+            </div>
+          </FieldRow>
+          <FieldRow
+            label={
+              <>
+                วันที่ลงนามในสัญญาจริง <span className="text-destructive">*</span>
+              </>
+            }
+            complianceTarget="actual_contract_signed_date"
+          >
+            <div className="space-y-1">
+              <ChronologicalDatePicker
+                stepNumber={7}
+                chronologicalCtx={chronologicalCtx}
+                minDate={contractorReceivedDate || undefined}
+                additionalMinDates={[contractorReceivedDate]}
+                fieldId="actual_contract_signed_date"
+                value={actualSignedDate}
+                onChange={handleSignedDateChange}
+                onInvalidDate={() => {
+                  setSignedDateRejected(true);
+                  toast.error(STEP7_SIGNED_BEFORE_RECEIVED_MSG);
+                }}
+                disabled={readOnly || !contractorReceivedDate}
+                showChronologicalHint={false}
+                className={
+                  showSignedChronoError
+                    ? `${inputCls} border-destructive focus:ring-destructive`
+                    : inputCls
+                }
+              />
+              {!contractorReceivedDate && (
+                <p className="text-xs text-muted-foreground">
+                  กรุณาระบุวันที่ผู้ประกอบการได้รับหนังสือเชิญก่อน
+                </p>
+              )}
+              {contractorReceivedDate && (
+                <p className="text-xs text-muted-foreground">
+                  เลือกได้ตั้งแต่ {formatThaiDateSlash(contractorReceivedDate)} (วันที่ผู้ประกอบการได้รับหนังสือเชิญ)
+                </p>
+              )}
+              {actualSignedDate && !showSignedChronoError && (
+                <p className="text-xs text-muted-foreground">
+                  📅 {formatThaiDate(actualSignedDate)}
+                </p>
+              )}
+              {(showSignedChronoError ||
+                fieldHighlighted("actual_contract_signed_date_before_received")) && (
+                <p className="text-xs text-destructive font-semibold mt-1" role="alert">
+                  {STEP7_SIGNED_BEFORE_RECEIVED_MSG}
+                </p>
+              )}
+              <ComplianceFieldError
+                show={
+                  fieldHighlighted("actual_contract_signed_date") &&
+                  !fieldHighlighted("actual_contract_signed_date_before_received")
+                }
+                message="กรุณาระบุวันที่ลงนามในสัญญาจริง"
+              />
             </div>
           </FieldRow>
         </div>
@@ -6069,31 +6213,105 @@ export function Step7ContractNoticeForm({
               </>
             )}
             {showLgExpiryField && (
-              <FieldRow
-                label={
-                  <>
-                    วันสิ้นสุดความคุ้มครองของหนังสือค้ำประกัน{" "}
-                    <span className="text-destructive">*</span>
-                  </>
-                }
-                complianceTarget="performance_bond_lg_expiry_date"
-              >
-                <ChronologicalDatePicker
-                  stepNumber={7}
-                  chronologicalCtx={chronologicalCtx}
-                  minDate={contractNotice?.actual_contract_signed_date || undefined}
-                  value={contractNotice?.performance_bond_lg_expiry_date ?? ""}
-                  onChange={(v) =>
-                    onContractNoticeChange({ performance_bond_lg_expiry_date: v })
+              <>
+                {showLgReferenceContractEndField && (
+                  <FieldRow
+                    label={
+                      <>
+                        วันครบกำหนดส่งมอบงานตามสัญญา (อ้างอิง){" "}
+                        <span className="text-destructive">*</span>
+                      </>
+                    }
+                    complianceTarget="lg_reference_contract_end_date"
+                  >
+                    <ChronologicalDatePicker
+                      stepNumber={7}
+                      chronologicalCtx={chronologicalCtx}
+                      minDate={actualSignedDate || undefined}
+                      value={contractNotice?.lg_reference_contract_end_date ?? ""}
+                      onChange={(v) =>
+                        onContractNoticeChange({ lg_reference_contract_end_date: v })
+                      }
+                      disabled={readOnly}
+                      showChronologicalHint={false}
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      ใช้คำนวณวันสิ้นสุดความคุ้มครองขั้นต่ำ — ระบบจะดึงจากขั้นตอนที่ 9 อัตโนมัติเมื่อมีข้อมูลแล้ว
+                    </p>
+                    <ComplianceFieldError
+                      show={fieldHighlighted("lg_reference_contract_end_date")}
+                    />
+                  </FieldRow>
+                )}
+                {!!contractEndDateISO?.trim() && (
+                  <p className="text-xs text-muted-foreground">
+                    วันครบกำหนดส่งมอบงานตามสัญญา (จากขั้นตอนที่ 9):{" "}
+                    {formatThaiDateSlash(contractEndDateISO)}
+                  </p>
+                )}
+                <FieldRow
+                  label={
+                    <>
+                      ระยะเวลารับประกันความชำรุดบกพร่อง (ปี){" "}
+                      <span className="text-destructive">*</span>
+                    </>
                   }
-                  disabled={readOnly}
-                  showChronologicalHint={false}
-                />
-                <p className="text-xs text-muted-foreground mt-1">
-                  ใช้แจ้งเตือนก่อนหมดอายุ LG เพื่อขอขยายอายุหรือยึดหลักประกัน
-                </p>
-                <ComplianceFieldError show={fieldHighlighted("performance_bond_lg_expiry_date")} />
-              </FieldRow>
+                >
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={defectWarrantyYears}
+                    onChange={(e) => {
+                      const raw = e.target.value.trim();
+                      onContractNoticeChange({
+                        defect_warranty_years: raw ? Math.max(1, Math.round(Number(raw))) : null,
+                      });
+                    }}
+                    disabled={readOnly}
+                    className={inputCls}
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    ค่าเริ่มต้น {STEP7_DEFECT_WARRANTY_YEARS_DEFAULT} ปีปฏิทิน (ตามระเบียบรับประกันผลงาน)
+                  </p>
+                </FieldRow>
+                <FieldRow
+                  label={
+                    <>
+                      วันสิ้นสุดความคุ้มครองของหนังสือค้ำประกัน{" "}
+                      <span className="text-destructive">*</span>
+                    </>
+                  }
+                  complianceTarget="performance_bond_lg_expiry_date"
+                >
+                  <ChronologicalDatePicker
+                    stepNumber={7}
+                    fieldId="performance_bond_lg_expiry_date"
+                    chronologicalCtx={chronologicalCtx}
+                    minDate={lgExpiryMinDateISO}
+                    value={lgExpiryDate}
+                    onChange={handleLgExpiryDateChange}
+                    disabled={readOnly || !effectiveContractEndISO}
+                    showChronologicalHint={false}
+                  />
+                  {minLgExpiryISO && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {STEP7_LG_MIN_EXPIRY_HELPER_MSG(minLgExpiryISO)}
+                    </p>
+                  )}
+                  {!effectiveContractEndISO && (
+                    <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">
+                      กรุณาระบุวันครบกำหนดส่งมอบงานตามสัญญาก่อนเลือกวันสิ้นสุดความคุ้มครอง
+                    </p>
+                  )}
+                  {showLgExpiryChronoError && minLgExpiryISO && (
+                    <p className="text-xs text-destructive mt-1">
+                      {STEP7_LG_EXPIRY_BEFORE_WARRANTY_END_MSG(minLgExpiryISO)}
+                    </p>
+                  )}
+                  <ComplianceFieldError show={fieldHighlighted("performance_bond_lg_expiry_date")} />
+                </FieldRow>
+              </>
             )}
             <FieldRow
               label={
@@ -6471,6 +6689,7 @@ export function Step8ContractGuaranteeForm({
                 stepNumber={8}
                 chronologicalCtx={chronologicalCtx}
                 skipChronologicalLock
+                fieldId="contract_signed_date"
                 minDate={earliestSigningISO || undefined}
                 maxDate={step7SigningDeadlineISO || undefined}
                 additionalMinDates={[earliestSigningISO]}
@@ -6956,6 +7175,7 @@ export function Step9DetailForm({
                 stepNumber={9}
                 chronologicalCtx={chronologicalCtx}
                 additionalMinDates={[signedISO]}
+                fieldId="egp_essential_publication_date"
                 value={egpPublication}
                 onChange={(v) => {
                   if (signedISO && v && isISODateBefore(v, signedISO)) {
@@ -7015,6 +7235,7 @@ export function Step9DetailForm({
                 stepNumber={9}
                 chronologicalCtx={chronologicalCtx}
                 additionalMinDates={[signedISO]}
+                fieldId="work_start_date"
                 value={startInvalid ? "" : contractStart}
                 onChange={patchContractStart}
                 disabled={readOnly || !signedISO}
@@ -7049,6 +7270,7 @@ export function Step9DetailForm({
                 stepNumber={9}
                 chronologicalCtx={chronologicalCtx}
                 additionalMinDates={contractStart ? [contractStart] : []}
+                fieldId="contract_end_date"
                 value={endInvalid ? "" : contractEnd}
                 onChange={patchContractEnd}
                 disabled={readOnly || !contractStart}
@@ -7553,6 +7775,8 @@ export function Step10DetailForm({
                             stepNumber={10}
                             chronologicalCtx={genericProps.chronologicalCtx}
                             additionalMinDates={contractStart ? [contractStart] : []}
+                            fieldId="delivery_date"
+                            installmentNo={n}
                             value={row.delivery_date}
                             onChange={(iso) => patchDeliveryDate(n, iso)}
                             disabled={fieldsDisabled}
@@ -7570,6 +7794,8 @@ export function Step10DetailForm({
                             stepNumber={10}
                             chronologicalCtx={genericProps.chronologicalCtx}
                             intraStepMinDate={inspectionMinDate}
+                            fieldId="inspection_date"
+                            installmentNo={n}
                             value={row.inspection_date}
                             onChange={(iso) => patchRow(n, { inspection_date: iso })}
                             disabled={fieldsDisabled || !row.delivery_date?.trim()}

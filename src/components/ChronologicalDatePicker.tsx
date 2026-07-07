@@ -1,6 +1,12 @@
 import { useMemo } from "react";
 import { ThaiDatePicker } from "@/components/ThaiDatePicker";
 import {
+  useChronologicalDateValidation,
+  ChronologicalDateFieldError,
+} from "@/contexts/ChronologicalDateValidationContext";
+import type { ChronologicalFieldKey } from "@/lib/chronological-date-chains";
+import { chronologicalFieldKey } from "@/lib/chronological-date-chains";
+import {
   type ChronologicalMinProfile,
   resolveChronologicalMinDateISO,
 } from "@/lib/chronological-lock";
@@ -30,6 +36,14 @@ export type ChronologicalDatePickerProps = Omit<ThaiDatePickerProps, "minDate"> 
   skipChronologicalLock?: boolean;
   /** วันที่สูงสุดที่เลือกได้ (yyyy-mm-dd) */
   maxDate?: string | null;
+  /** คีย์ฟิลด์ใน Global Date Chain — เปิดใช้ minDate + real-time error อัตโนมัติ */
+  chainFieldKey?: ChronologicalFieldKey;
+  /** ชื่อฟิลด์ใน chain (ย่อ — รวมกับ stepNumber เป็น chainFieldKey) */
+  fieldId?: string;
+  /** งวดที่ (ขั้น 10) */
+  installmentNo?: number;
+  /** แสดง error จาก Global Validator ใต้ปฏิทิน */
+  showChainError?: boolean;
 };
 
 export function ChronologicalDatePicker({
@@ -43,10 +57,41 @@ export function ChronologicalDatePicker({
   showChronologicalHint = true,
   skipChronologicalLock = false,
   maxDate,
+  chainFieldKey,
+  fieldId,
+  installmentNo,
+  showChainError = true,
   disabled,
   ...pickerProps
 }: ChronologicalDatePickerProps) {
+  const chronoValidation = useChronologicalDateValidation();
+
+  const resolvedChainKey = useMemo((): ChronologicalFieldKey | undefined => {
+    if (chainFieldKey) return chainFieldKey;
+    if (!fieldId) return undefined;
+    if (installmentNo != null) {
+      return chronologicalFieldKey(stepNumber, `i${installmentNo}.${fieldId}`);
+    }
+    return chronologicalFieldKey(stepNumber, fieldId);
+  }, [chainFieldKey, fieldId, installmentNo, stepNumber]);
+
+  const chainMinDate = useMemo(() => {
+    if (!resolvedChainKey || !chronoValidation) return undefined;
+    return chronoValidation.getFieldMinDate(resolvedChainKey, {
+      explicitMinDate,
+      additionalMinDates,
+    });
+  }, [
+    resolvedChainKey,
+    chronoValidation,
+    explicitMinDate,
+    additionalMinDates,
+  ]);
+
   const effectiveMin = useMemo(() => {
+    if (resolvedChainKey && chainMinDate) {
+      return chainMinDate;
+    }
     if (skipChronologicalLock) {
       return explicitMinDate?.trim() || intraStepMinDate?.trim() || undefined;
     }
@@ -60,6 +105,8 @@ export function ChronologicalDatePicker({
       evaluationApprovalDate,
     });
   }, [
+    resolvedChainKey,
+    chainMinDate,
     stepNumber,
     chronologicalCtx,
     minProfile,
@@ -69,6 +116,11 @@ export function ChronologicalDatePicker({
     evaluationApprovalDate,
     skipChronologicalLock,
   ]);
+
+  const chainError =
+    resolvedChainKey && chronoValidation
+      ? chronoValidation.getFieldError(resolvedChainKey)
+      : null;
 
   const prevStepLabel = stepNumber > 1 ? stepNumber - 1 : null;
 
@@ -80,6 +132,9 @@ export function ChronologicalDatePicker({
         maxDate={maxDate?.trim() || undefined}
         disabled={disabled}
       />
+      {showChainError && resolvedChainKey && chainError && (
+        <ChronologicalDateFieldError fieldKey={resolvedChainKey} show />
+      )}
       {showChronologicalHint &&
         effectiveMin &&
         !skipChronologicalLock &&

@@ -23,8 +23,8 @@ import {
 } from "@/lib/project-timeline";
 import {
   buildTimelineValidationContext,
-  getTimelineSaveBlockMessage,
 } from "@/lib/timeline-validation";
+import { getChronologicalSaveBlockMessage } from "@/lib/chronological-date-validator";
 import { resolveStep1PlanPublicationDateISO } from "@/lib/step-milestone-dates";
 import { resolveDocFilePolicy, validateDocFile } from "@/lib/doc-file-types";
 import { uploadStepDocument, deleteStepDocument } from "@/lib/doc-upload";
@@ -34,6 +34,7 @@ import { GuidelineBox } from "@/components/GuidelineBox";
 import { StepWorkflowBanner } from "@/components/StepWorkflowBanner";
 import { GuideModeToggle } from "@/components/GuideModeToggle";
 import { GuideModeProvider } from "@/contexts/GuideModeContext";
+import { ChronologicalDateValidationProvider } from "@/contexts/ChronologicalDateValidationContext";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   Step1DetailForm,
@@ -357,7 +358,7 @@ import {
 import { WorkflowStepper } from "@/components/WorkflowStepper";
 import { ProcurementMethodBadge } from "@/components/ProcurementMethodBadge";
 import { ProjectManagementActions } from "@/components/ProjectManagementActions";
-import { RollbackToEditProjectButton } from "@/components/RollbackToEditProjectButton";
+import { WorkflowStepFooterNav } from "@/components/WorkflowStepFooter";
 import { UnlockHistoricalStepButton } from "@/components/UnlockHistoricalStepButton";
 import {
   getDownstreamResetBackendSteps,
@@ -366,7 +367,6 @@ import {
   resetDownstreamWorkflowSteps,
   resolvePerformerProfile,
   rollbackProjectToBasicsEdit,
-  shouldShowRollbackToEditProjectButton,
 } from "@/lib/project-basics-edit";
 import {
   buildProjectEgpIdSyncFields,
@@ -712,6 +712,101 @@ function ProjectDetailPage() {
   const handlePrevStep = () => {
     if (activeStep <= 1) return;
     setActiveStep(activeStep - 1);
+  };
+
+  const handleClearCurrentStepForm = () => {
+    if (!current || workflowReadOnly) return;
+
+    setError(null);
+    setHighlightedMissingDocs([]);
+    setHighlightedComplianceIssues([]);
+    setComplianceSubmitTriggered(false);
+
+    const stepNum = current.step_number;
+    switch (stepNum) {
+      case 1:
+        setStep1Checklist({ ...EMPTY_STEP1_CHECKLIST });
+        setStep1Profile({ ...EMPTY_STEP1_PROJECT_PROFILE });
+        setStep1SpecificWorkflow({ ...EMPTY_STEP1_SPECIFIC_WORKFLOW });
+        setStep1ProjectName("");
+        setStep1Budget("");
+        setStep1Method("e_bidding");
+        setStep1MethodDirty(false);
+        setEgpCode("");
+        setNote("");
+        setDueDate("");
+        setResponsibleName("");
+        break;
+      case 2:
+        setStep2Checklist({ ...EMPTY_STEP2_CHECKLIST });
+        setStep2CommitteeOrder({ ...EMPTY_STEP2_COMMITTEE_ORDER });
+        setStep2MedianPrice({ ...EMPTY_STEP2_MEDIAN_PRICE });
+        setStep2Committees({ ...EMPTY_STEP2_COMMITTEES });
+        setStep2ComplianceLog({});
+        setStep2SpecificQuotation({ ...EMPTY_STEP2_SPECIFIC_QUOTATION });
+        setNote("");
+        setDueDate("");
+        break;
+      case 3:
+        setStep3Checklist({ ...EMPTY_STEP3_CHECKLIST });
+        setStep3Announcement({ ...EMPTY_STEP3_ANNOUNCEMENT });
+        setStep3ComplianceLog({});
+        setNote("");
+        setDueDate("");
+        break;
+      case 4:
+        setStep4BidResult({ ...EMPTY_STEP4_BID_RESULT });
+        setStep4Checklist({ ...EMPTY_STEP4_CHECKLIST });
+        setNote("");
+        setDueDate("");
+        break;
+      case 5:
+        setStep5Checklist({ ...EMPTY_STEP5_CHECKLIST });
+        setStep5Announcement({ ...EMPTY_STEP5_ANNOUNCEMENT });
+        setNote("");
+        setDueDate("");
+        break;
+      case 6:
+        setStep6Appeal({ ...EMPTY_STEP6_APPEAL });
+        setGenericManualChecklist(createEmptyManualChecklist(6));
+        setNote("");
+        setDueDate("");
+        break;
+      case 7:
+        setStep7ContractNotice({ ...EMPTY_STEP7_CONTRACT_NOTICE });
+        setStep7ContractRegistryDuplicate(false);
+        setGenericManualChecklist(createEmptyManualChecklist(7));
+        setNote("");
+        setDueDate("");
+        break;
+      case 8:
+        setStep8ContractExecution({ ...EMPTY_STEP8_CONTRACT_EXECUTION });
+        setGenericManualChecklist(createEmptyManualChecklist(8));
+        setNote("");
+        setDueDate("");
+        break;
+      case 9:
+        setStep9ContractSchedule({ ...EMPTY_STEP9_CONTRACT_SCHEDULE });
+        setGenericManualChecklist(createEmptyManualChecklist(9));
+        setNote("");
+        setDueDate("");
+        break;
+      case 10:
+        setStep10ProjectType("general");
+        setGenericManualChecklist(createEmptyManualChecklist(10));
+        setStep10InspectionRows(
+          buildStep10InspectionRows(totalInstallmentCount, [], step10PlannedDates, "general"),
+        );
+        setNote("");
+        setDueDate("");
+        break;
+      default:
+        break;
+    }
+
+    toast.message(
+      `ล้างข้อมูลขั้นตอนที่ ${stepNum} แล้ว — กดบันทึกร่างเมื่อต้องการบันทึกลงระบบ`,
+    );
   };
 
   useEffect(() => {
@@ -1099,6 +1194,12 @@ function ProjectDetailPage() {
       }
     );
   }, [steps]);
+
+  const step7ContractEndDateISO = useMemo(() => {
+    const fromProject = contractEndDate?.trim();
+    if (fromProject) return fromProject;
+    return resolveStep9ContractEndDateISO(step9ScheduleForProject) ?? "";
+  }, [contractEndDate, step9ScheduleForProject]);
 
   const step10PlannedDates = useMemo(
     () =>
@@ -1497,6 +1598,71 @@ function ProjectDetailPage() {
     );
   }, [step5Record?.note, project]);
 
+  const liveStep5NotificationDate =
+    step5Announcement.winner_result_notification_date?.trim() || step5NotificationDate;
+
+  const globalEarliestSigningISO = useMemo(
+    () => (appealAnchorDate ? computeContractEarliestISO(appealAnchorDate) : ""),
+    [appealAnchorDate],
+  );
+
+  const chronologicalFormSnapshot = useMemo(
+    () => ({
+      step2CommitteeOrder,
+      step2MedianPrice,
+      step3Announcement,
+      step4BidResult: mergedStep4BidResult,
+      step5Announcement,
+      step6Appeal,
+      step7ContractNotice,
+      step8ContractExecution,
+      step9ContractSchedule,
+      step10InspectionRows,
+      step4Timeline,
+      step2MedianApprovalDate: step2MedianPrice.median_price_approval_date ?? "",
+      step3PublicationEnd,
+      step5NotificationDate: liveStep5NotificationDate,
+      contractStartDate,
+      contractEndDate: step7ContractEndDateISO,
+      contractSignedDate:
+        step8ContractExecution.contract_signed_date?.trim() || contractSignedDate,
+      earliestSigningISO: globalEarliestSigningISO,
+      step7SigningDeadlineISO:
+        step7ContractNotice.contract_signing_deadline?.trim() || step7SigningDeadlineISO,
+      evaluationApprovalDate: step5EvaluationApprovalDate,
+    }),
+    [
+      step2CommitteeOrder,
+      step2MedianPrice,
+      step3Announcement,
+      mergedStep4BidResult,
+      step5Announcement,
+      step6Appeal,
+      step7ContractNotice,
+      step8ContractExecution,
+      step9ContractSchedule,
+      step10InspectionRows,
+      step4Timeline,
+      step3PublicationEnd,
+      liveStep5NotificationDate,
+      contractStartDate,
+      step7ContractEndDateISO,
+      contractSignedDate,
+      globalEarliestSigningISO,
+      step7ContractNotice.contract_signing_deadline,
+      step7SigningDeadlineISO,
+      step5EvaluationApprovalDate,
+      step8ContractExecution.contract_signed_date,
+    ],
+  );
+
+  const blockChronologicalSave = (stepNumber: number): string | null =>
+    getChronologicalSaveBlockMessage(
+      stepNumber,
+      chronologicalFormSnapshot,
+      timelineValidationCtx,
+    );
+
   /** ซิงก์ชื่อเจ้าหน้าที่กลับขั้นตอนที่ 1 (ค่ามาตรฐาน) เมื่อบันทึกจากขั้นอื่น */
   const propagateResponsibleToStep1 = async (name: string) => {
     const trimmed = name.trim();
@@ -1879,23 +2045,10 @@ function ProjectDetailPage() {
 
     if (current.step_number === 2) {
       if (!isSpecificShortWorkflow) {
-        const timelineBlock = getTimelineSaveBlockMessage(2, timelineValidationCtx, {
-          committeeOrder: step2CommitteeOrder,
-          medianPrice: step2MedianPrice,
-        });
+        const timelineBlock = blockChronologicalSave(2);
         if (timelineBlock) {
           toast.error(timelineBlock);
           setError(timelineBlock);
-          return false;
-        }
-        if (
-          isStep2MedianApprovalBeforeAppointment(
-            step2MedianPrice.median_price_approval_date ?? "",
-            step2CommitteeOrder.appointment_order_date ?? "",
-          )
-        ) {
-          toast.error(STEP2_MEDIAN_APPROVAL_BEFORE_APPOINTMENT_MSG);
-          setError(STEP2_MEDIAN_APPROVAL_BEFORE_APPOINTMENT_MSG);
           return false;
         }
       }
@@ -2014,9 +2167,7 @@ function ProjectDetailPage() {
     }
 
     if (current.step_number === 3) {
-      const timelineBlock = getTimelineSaveBlockMessage(3, timelineValidationCtx, {
-        announcement: step3Announcement,
-      });
+      const timelineBlock = blockChronologicalSave(3);
       if (timelineBlock) {
         toast.error(timelineBlock);
         setError(timelineBlock);
@@ -2069,9 +2220,7 @@ function ProjectDetailPage() {
         setError(STEP4_PROCUREMENT_SIGN_DATE_INVALID_MSG);
         return false;
       }
-      const timelineBlock = getTimelineSaveBlockMessage(4, timelineValidationCtx, {
-        bidResult: step4BidResult,
-      });
+      const timelineBlock = blockChronologicalSave(4);
       if (timelineBlock) {
         toast.error(timelineBlock);
         setError(timelineBlock);
@@ -2123,10 +2272,7 @@ function ProjectDetailPage() {
         applyStep4WinnerFromBiddersTable(step4BidResult),
       );
       setStep4BidResult(bidResultForSave);
-      const timelineBlock = getTimelineSaveBlockMessage(5, timelineValidationCtx, {
-        step5Announcement: step5Announcement,
-        bidResult: bidResultForSave,
-      });
+      const timelineBlock = blockChronologicalSave(5);
       if (timelineBlock) {
         toast.error(timelineBlock);
         setError(timelineBlock);
@@ -2199,9 +2345,7 @@ function ProjectDetailPage() {
     }
 
     if (current.step_number === 6) {
-      const timelineBlock = getTimelineSaveBlockMessage(6, timelineValidationCtx, {
-        appeal: step6Appeal,
-      });
+      const timelineBlock = blockChronologicalSave(6);
       if (timelineBlock) {
         toast.error(timelineBlock);
         setError(timelineBlock);
@@ -2237,9 +2381,7 @@ function ProjectDetailPage() {
     }
 
     if (current.step_number === 9) {
-      const timelineBlock = getTimelineSaveBlockMessage(9, timelineValidationCtx, {
-        contractSchedule: step9ContractSchedule,
-      });
+      const timelineBlock = blockChronologicalSave(9);
       if (timelineBlock) {
         toast.error(timelineBlock);
         setError(timelineBlock);
@@ -2294,11 +2436,7 @@ function ProjectDetailPage() {
     }
 
     if (current.step_number === 7 || current.step_number === 8 || current.step_number === 10) {
-      const timelineBlock = getTimelineSaveBlockMessage(current.step_number, timelineValidationCtx, {
-        contractNotice: step7ContractNotice,
-        contractExecution: step8ContractExecution,
-        inspectionRows: step10InspectionRows,
-      });
+      const timelineBlock = blockChronologicalSave(current.step_number);
       if (timelineBlock) {
         toast.error(timelineBlock);
         setError(timelineBlock);
@@ -2578,16 +2716,17 @@ function ProjectDetailPage() {
           hasPerformanceBondExemptionDoc: false,
           hasAbandonmentReportDoc: hasStep7AbandonmentReportDoc(step7Uploaded),
           winningProjectAmount: resolveStep4ContractAmount(mergedStep4BidResult, project),
-          stepDocs: step7Docs,
-          timelineCtx: timelineValidationCtx,
-        },
-      );
-      if (complianceIssues.length > 0) {
-        failStepCompliance(complianceIssues[0].message, complianceIssues[0].id);
-        return;
-      }
-      await saveDraft({ silent: true });
-      const projectUpdateResult = await updateProjectWithSchemaFallback(
+                  stepDocs: step7Docs,
+                  timelineCtx: timelineValidationCtx,
+                  contractEndDateISO: step7ContractEndDateISO,
+                },
+              );
+              if (complianceIssues.length > 0) {
+                failStepCompliance(complianceIssues[0].message, complianceIssues[0].id);
+                return;
+              }
+              await saveDraft({ silent: true });
+              const projectUpdateResult = await updateProjectWithSchemaFallback(
         supabase,
         projectId,
         { status: PROJECT_STATUS_CONTRACT_BREACH_CANCELLED },
@@ -2627,6 +2766,12 @@ function ProjectDetailPage() {
       );
       return;
     }
+    const chronoBlock = blockChronologicalSave(current.step_number);
+    if (chronoBlock) {
+      failStepCompliance(chronoBlock);
+      return;
+    }
+
     const bypassProcurementGates = isProcurementStepBypassed(
       current.step_number,
       project.procurement_path,
@@ -2864,6 +3009,7 @@ function ProjectDetailPage() {
           winningProjectAmount: resolveStep4ContractAmount(mergedStep4BidResult, project),
           stepDocs: step7Docs,
           timelineCtx: timelineValidationCtx,
+          contractEndDateISO: step7ContractEndDateISO,
         },
       );
       if (complianceIssues.length > 0) {
@@ -3759,6 +3905,11 @@ function ProjectDetailPage() {
                       />
                     </div>
                   </div>
+                  <ChronologicalDateValidationProvider
+                    snapshot={chronologicalFormSnapshot}
+                    timelineCtx={timelineValidationCtx}
+                    activeStepNumber={current.step_number}
+                  >
                   {current.step_number === 1 && (
                     <Step1DetailForm
                       checklist={step1Checklist}
@@ -4008,6 +4159,7 @@ function ProjectDetailPage() {
                       chronologicalCtx={timelineValidationCtx}
                       highlightedComplianceIssues={highlightedComplianceIssues}
                       complianceSubmitTriggered={complianceSubmitTriggered}
+                      contractEndDateISO={step7ContractEndDateISO}
                     />
                   )}
                   {current.step_number === 8 && !isSpecificShortWorkflow && (
@@ -4136,6 +4288,7 @@ function ProjectDetailPage() {
                       chronologicalCtx={timelineValidationCtx}
                     />
                   )}
+                  </ChronologicalDateValidationProvider>
                   </>
                   )}
                 </fieldset>
@@ -4493,6 +4646,7 @@ function ProjectDetailPage() {
                   winningProjectAmount: step7WinningAmount,
                   stepDocs: docsForStep,
                   timelineCtx: timelineValidationCtx,
+                  contractEndDateISO: step7ContractEndDateISO,
                 };
                 const step7ComplianceIssues =
                   current.step_number === 7
@@ -4978,6 +5132,8 @@ function ProjectDetailPage() {
                     : "บันทึกและไปขั้นตอนถัดไป";
                 const showBackButton =
                   activeStep > 1 && workflowMode !== "historical_edit";
+                const showClearCurrentStep =
+                  !workflowReadOnly && workflowMode !== "historical_readonly";
                 const checklistProgressPct =
                   reactiveChecklist.total > 0
                     ? Math.round((reactiveChecklist.done / reactiveChecklist.total) * 100)
@@ -5000,17 +5156,12 @@ function ProjectDetailPage() {
                     />
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="flex flex-wrap gap-3">
-                        {showBackButton && (
-                          <button
-                            type="button"
-                            onClick={() => handlePrevStep()}
-                            title="ย้อนกลับไปดูขั้นตอนก่อนหน้า"
-                            className="h-10 px-4 rounded-md border border-input bg-background text-sm font-medium hover:bg-accent flex items-center gap-2"
-                          >
-                            <ArrowLeft className="h-4 w-4" />
-                            ย้อนกลับ
-                          </button>
-                        )}
+                        <WorkflowStepFooterNav
+                          showBack={showBackButton}
+                          onBack={handlePrevStep}
+                          showClear={showClearCurrentStep}
+                          onConfirmClear={handleClearCurrentStepForm}
+                        />
                         {showUnlockHistoricalEdit && (
                           <UnlockHistoricalStepButton
                             onClick={() => setHistoricalEditUnlocked(true)}
@@ -5024,15 +5175,6 @@ function ProjectDetailPage() {
                           >
                             ยกเลิกการแก้ไข
                           </button>
-                        )}
-                        {shouldShowRollbackToEditProjectButton(project.current_step) &&
-                          !showHistoricalSaveAndNext && (
-                          <RollbackToEditProjectButton
-                            onConfirm={handleRollbackToEditProject}
-                            loading={rollingBackToEdit}
-                            size="default"
-                            variant="destructive"
-                          />
                         )}
                         {showSaveDraft && (
                           <button

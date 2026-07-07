@@ -27,6 +27,14 @@ import {
 } from "@/lib/currency-format";
 import { computeStep6HeadSignedMinDateISO } from "@/lib/step6-guideline";
 import {
+  computeStep7MinLgExpiryFromNotice,
+  isStep7LgExpiryBeforeMin,
+  resolveStep7EffectiveContractEndDateISO,
+  STEP7_DEFECT_WARRANTY_YEARS_DEFAULT,
+  STEP7_LG_EXPIRY_BEFORE_WARRANTY_END_MSG,
+  STEP7_LG_REFERENCE_CONTRACT_END_REQUIRED_MSG,
+} from "@/lib/step7-lg-expiry";
+import {
   STEP2_DOC,
   STEP3_DOC,
   STEP4_DOC,
@@ -1871,6 +1879,10 @@ export type Step7ContractNotice = {
   performance_bond_document_no: string;
   performance_bond_amount: number | null;
   performance_bond_lg_expiry_date: string;
+  /** วันครบกำหนดส่งมอบงานตามสัญญา (อ้างอิงเมื่อยังไม่มีข้อมูลขั้น 9) */
+  lg_reference_contract_end_date: string;
+  /** ระยะเวลารับประกันความชำรุดบกพร่อง (ปีปฏิทิน) */
+  defect_warranty_years: number | null;
   egp_sync_status: Step7EgpSyncStatus;
   breach_report_letter_no: string;
   breach_missed_deadline_date: string;
@@ -1896,6 +1908,8 @@ export const EMPTY_STEP7_CONTRACT_NOTICE: Step7ContractNotice = {
   performance_bond_document_no: "",
   performance_bond_amount: null,
   performance_bond_lg_expiry_date: "",
+  lg_reference_contract_end_date: "",
+  defect_warranty_years: null,
   egp_sync_status: "pending",
   breach_report_letter_no: "",
   breach_missed_deadline_date: "",
@@ -5065,6 +5079,8 @@ function step7ContractNoticeHasData(notice?: Step7ContractNotice): boolean {
     notice.performance_bond_document_no?.trim() ||
     (notice.performance_bond_amount != null && notice.performance_bond_amount > 0) ||
     notice.performance_bond_lg_expiry_date?.trim() ||
+    notice.lg_reference_contract_end_date?.trim() ||
+    (notice.defect_warranty_years != null && notice.defect_warranty_years > 0) ||
     notice.egp_sync_status === "synced" ||
     notice.breach_report_letter_no?.trim() ||
     notice.breach_missed_deadline_date?.trim()
@@ -5440,6 +5456,12 @@ export const STEP7_NOTIFICATION_DEADLINE_EXCEEDED_MSG = (deadlineISO: string) =>
 export const STEP7_RECEIVED_BEFORE_LETTER_MSG =
   "❌ วันที่ได้รับหนังสือเชิญ ห้ามเกิดก่อนวันที่ออกหนังสือเชิญชวน";
 
+export const STEP7_SIGNED_BEFORE_NOTICE_LETTER_MSG =
+  "❌ วันที่ลงนามในสัญญา ต้องไม่ก่อนวันที่ออกหนังสือเชิญ";
+
+export const STEP7_SIGNED_BEFORE_RECEIVED_MSG =
+  "❌ วันที่ลงนามในสัญญา ต้องไม่ก่อนวันที่ผู้ประกอบการได้รับหนังสือเชิญ";
+
 export const STEP7_NOTICE_OUTCOME_REQUIRED_MSG =
   "กรุณาเลือกสถานการณ์การดำเนินการ (ผู้ชนะมาลงนาม หรือ ไม่มาลงนาม)";
 
@@ -5491,6 +5513,25 @@ export function buildStep8ExecutionFromStep7Bond(
   };
 }
 
+/** วันที่ลงนามในสัญญาจริงอยู่ก่อนวันที่ในหนังสือเชิญลงนามหรือไม่ */
+export function isStep7SignedBeforeNoticeLetterDate(
+  letterDateISO: string,
+  signedDateISO: string,
+): boolean {
+  const letter = letterDateISO?.trim() ?? "";
+  const signed = signedDateISO?.trim() ?? "";
+  if (!letter || !signed) return false;
+  return signed < letter;
+}
+
+/** ความสัมพันธ์เชิงเวลาระหว่างวันที่ในหนังสือ vs วันที่ลงนามจริง — ผ่านเมื่อยังไม่กรอกหรือ signed ≥ letter */
+export function isStep7SignedDateChronoValid(
+  letterDateISO: string,
+  signedDateISO: string,
+): boolean {
+  return !isStep7SignedBeforeNoticeLetterDate(letterDateISO, signedDateISO);
+}
+
 /** วันที่ได้รับหนังสือเชิญอยู่ก่อนวันที่ในหนังสือเชิญลงนามหรือไม่ */
 export function isStep7ContractorReceivedBeforeLetterDate(
   letterDateISO: string,
@@ -5527,6 +5568,8 @@ export function getStep7ComplianceIssues(
     winningProjectAmount?: number | null;
     stepDocs?: Array<{ document_type: string }>;
     timelineCtx?: TimelineValidationContext;
+    /** วันครบกำหนดส่งมอบงานตามสัญญา — จากขั้น 9 หรือแหล่งอื่นในโครงการ */
+    contractEndDateISO?: string | null;
   },
   _autoStates?: Record<string, boolean>,
 ): Step7ComplianceIssue[] {
@@ -5553,12 +5596,6 @@ export function getStep7ComplianceIssues(
         message: "กรุณาระบุเลขที่สัญญา (อ้างอิงทะเบียนคุมสัญญา)",
       });
     }
-    if (!contractNotice?.actual_contract_signed_date?.trim()) {
-      issues.push({
-        id: "actual_contract_signed_date",
-        message: "กรุณาระบุวันที่ลงนามในสัญญาจริง",
-      });
-    }
     const letterDate = contractNotice?.contract_notice_letter_date?.trim() ?? "";
     if (!letterDate) {
       issues.push({
@@ -5566,6 +5603,13 @@ export function getStep7ComplianceIssues(
         message: "กรุณาระบุวันที่ในหนังสือเชิญลงนาม",
       });
     }
+    if (!contractNotice?.actual_contract_signed_date?.trim()) {
+      issues.push({
+        id: "actual_contract_signed_date",
+        message: "กรุณาระบุวันที่ลงนามในสัญญาจริง",
+      });
+    }
+    const signedDate = contractNotice?.actual_contract_signed_date?.trim() ?? "";
     const minLetterDate = computeStep7NoticeLetterMinDateISO(opts.appealDeadlineISO);
     if (letterDate && minLetterDate && letterDate < minLetterDate) {
       issues.push({
@@ -5610,6 +5654,16 @@ export function getStep7ComplianceIssues(
       issues.push({
         id: "contractor_received_date_before_letter",
         message: STEP7_RECEIVED_BEFORE_LETTER_MSG,
+      });
+    }
+    if (
+      receivedDate &&
+      signedDate &&
+      signedDate < receivedDate
+    ) {
+      issues.push({
+        id: "actual_contract_signed_date_before_received",
+        message: STEP7_SIGNED_BEFORE_RECEIVED_MSG,
       });
     }
     const signingDeadline = contractNotice?.contract_signing_deadline?.trim() ?? "";
@@ -5685,10 +5739,38 @@ export function getStep7ComplianceIssues(
       }
     }
     if (bondType === "bank_guarantee") {
+      const contractEnd = resolveStep7EffectiveContractEndDateISO(
+        opts.contractEndDateISO,
+        contractNotice ?? { lg_reference_contract_end_date: "" },
+      );
+      if (!contractEnd) {
+        issues.push({
+          id: "lg_reference_contract_end_date",
+          message: STEP7_LG_REFERENCE_CONTRACT_END_REQUIRED_MSG,
+        });
+      }
+      const minLgExpiry = computeStep7MinLgExpiryFromNotice(
+        opts.contractEndDateISO,
+        contractNotice ?? {
+          lg_reference_contract_end_date: "",
+          defect_warranty_years: null,
+        },
+      );
       if (!contractNotice?.performance_bond_lg_expiry_date?.trim()) {
         issues.push({
           id: "performance_bond_lg_expiry_date",
           message: "กรุณาระบุวันสิ้นสุดความคุ้มครองของหนังสือค้ำประกัน",
+        });
+      } else if (
+        minLgExpiry &&
+        isStep7LgExpiryBeforeMin(
+          contractNotice.performance_bond_lg_expiry_date,
+          minLgExpiry,
+        )
+      ) {
+        issues.push({
+          id: "performance_bond_lg_expiry_date",
+          message: STEP7_LG_EXPIRY_BEFORE_WARRANTY_END_MSG(minLgExpiry),
         });
       }
     }
@@ -5822,6 +5904,14 @@ function normalizeStep7ContractNotice(
     performance_bond_type: bondType,
     performance_bond_amount: bondAmount,
     performance_bond_lg_expiry_date: raw.performance_bond_lg_expiry_date?.trim() ?? "",
+    lg_reference_contract_end_date: raw.lg_reference_contract_end_date?.trim() ?? "",
+    defect_warranty_years: (() => {
+      const yearsRaw = raw.defect_warranty_years;
+      if (yearsRaw != null && Number.isFinite(Number(yearsRaw)) && Number(yearsRaw) > 0) {
+        return Math.round(Number(yearsRaw));
+      }
+      return STEP7_DEFECT_WARRANTY_YEARS_DEFAULT;
+    })(),
     egp_sync_status: egpSyncStatus,
     agreed_contract_no: raw.agreed_contract_no?.trim() ?? "",
     actual_contract_signed_date: raw.actual_contract_signed_date?.trim() ?? "",
