@@ -238,6 +238,7 @@ import {
   type Step6AppealState,
   type Step6Checklist,
 } from "@/lib/step-form";
+import { CONTRACT_REGISTRY_NUMBER_DUPLICATE_ERROR_MSG } from "@/lib/contract-registry-number";
 import {
   buildProjectStep1ProfileFields,
   EMPTY_STEP1_PROJECT_PROFILE,
@@ -547,6 +548,7 @@ function ProjectDetailPage() {
   const [step7ContractNotice, setStep7ContractNotice] = useState<Step7ContractNotice>({
     ...EMPTY_STEP7_CONTRACT_NOTICE,
   });
+  const [step7ContractRegistryDuplicate, setStep7ContractRegistryDuplicate] = useState(false);
   const [step8ContractExecution, setStep8ContractExecution] = useState<Step8ContractExecution>({
     ...EMPTY_STEP8_CONTRACT_EXECUTION,
   });
@@ -2852,6 +2854,13 @@ function ProjectDetailPage() {
         failStepCompliance(complianceIssues[0].message, complianceIssues[0].id);
         return;
       }
+      if (step7ContractRegistryDuplicate) {
+        failStepCompliance(
+          CONTRACT_REGISTRY_NUMBER_DUPLICATE_ERROR_MSG,
+          "agreed_contract_no",
+        );
+        return;
+      }
     }
     if (current.step_number === 8) {
       const step8Docs = docs.filter((d) => d.step_number === 8);
@@ -3947,6 +3956,10 @@ function ProjectDetailPage() {
                       standardModelCode={
                         isConstructionProject ? resolvedStandardModelCode : undefined
                       }
+                      fiscalYear={project.fiscal_year}
+                      projectId={project.id}
+                      organizationId={project.organization_id}
+                      onContractRegistryDuplicateChange={setStep7ContractRegistryDuplicate}
                       readOnly={workflowReadOnly}
                       docBinder={{
                         project,

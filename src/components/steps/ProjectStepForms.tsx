@@ -274,6 +274,7 @@ import {
   logCurrencyRawInput,
   parseCurrencyForDatabase,
 } from "@/lib/currency-format";
+import { ContractRegistryNumberField } from "@/components/ContractRegistryNumberField";
 import { SmartChecklist, type SmartChecklistDocBinder } from "@/components/SmartChecklist";
 import {
   Dialog,
@@ -348,11 +349,9 @@ import {
   computeContractEarliestFromAppealDeadlineISO,
   computeContractNotificationDeadlineISO,
   computeStep7ContractSigningDeadlineISO,
-  computeStep7SigningDeadlineCalendarCapISO,
   computeStep7NoticeLetterMinDateISO,
   CONTRACT_NOTIFICATION_WORKDAYS,
   STEP7_CONTRACT_SIGNING_DEADLINE_WORKDAYS,
-  STEP7_CONTRACT_SIGNING_DEADLINE_CALENDAR_DAYS,
   STEP7_NOTICE_MIN_DATE_ISO,
   isStep7SigningDeadlineBeyondStandard,
 } from "@/lib/workdays";
@@ -5330,6 +5329,10 @@ type Step7ContractNoticeFormProps = {
   letterDateTooLate?: boolean;
   egpProjectId?: string;
   standardModelCode?: string;
+  fiscalYear: number;
+  projectId: string;
+  organizationId: string;
+  onContractRegistryDuplicateChange?: (isDuplicate: boolean) => void;
   readOnly?: boolean;
   docBinder: SmartChecklistDocBinder;
   responsibleName: string;
@@ -5365,6 +5368,10 @@ export function Step7ContractNoticeForm({
   letterDateTooLate,
   egpProjectId = "",
   standardModelCode = "",
+  fiscalYear,
+  projectId,
+  organizationId,
+  onContractRegistryDuplicateChange,
   readOnly,
   docBinder,
   responsibleName,
@@ -5408,13 +5415,21 @@ export function Step7ContractNoticeForm({
   const letterAnchoredDeadline = contractNoticeLetterDate
     ? computeStep7ContractSigningDeadlineISO(contractNoticeLetterDate)
     : "";
-  const calendarCapDeadline = contractNoticeLetterDate
-    ? computeStep7SigningDeadlineCalendarCapISO(contractNoticeLetterDate)
-    : "";
   const signingBeyondStandard =
     !!contractNoticeLetterDate &&
     !!signingDeadline &&
     isStep7SigningDeadlineBeyondStandard(contractNoticeLetterDate, signingDeadline);
+
+  useEffect(() => {
+    if (readOnly || signingBeyondStandard) return;
+    if (!contractNotice?.signing_deadline_extension_reason?.trim()) return;
+    onContractNoticeChange({ signing_deadline_extension_reason: "" });
+  }, [
+    readOnly,
+    signingBeyondStandard,
+    contractNotice?.signing_deadline_extension_reason,
+    onContractNoticeChange,
+  ]);
 
   const isChronoValid = isStep7ContractorReceivedDateChronoValid(
     contractNoticeLetterDate,
@@ -5648,29 +5663,19 @@ export function Step7ContractNoticeForm({
               placeholder="เช่น อว 1234.5/ว 1234"
             />
           </FieldRow>
-          <FieldRow
-            label={
-              <>
-                เลขที่สัญญาที่ตกลงกัน <span className="text-destructive">*</span>
-              </>
-            }
+          <ContractRegistryNumberField
+            value={contractNotice?.agreed_contract_no ?? ""}
+            onChange={(v) => onContractNoticeChange({ agreed_contract_no: v })}
+            organizationId={organizationId}
+            fiscalYear={fiscalYear}
+            projectId={projectId}
+            readOnly={readOnly}
             complianceTarget="agreed_contract_no"
-          >
-            <input
-              type="text"
-              value={contractNotice?.agreed_contract_no ?? ""}
-              onChange={(e) =>
-                onContractNoticeChange({ agreed_contract_no: e.target.value })
-              }
-              disabled={readOnly}
-              className={complianceHighlightInputCls(
-                inputCls,
-                fieldHighlighted("agreed_contract_no"),
-              )}
-              placeholder="เช่น สข.68/001"
-            />
-            <ComplianceFieldError show={fieldHighlighted("agreed_contract_no")} />
-          </FieldRow>
+            complianceHighlighted={fieldHighlighted("agreed_contract_no")}
+            onDuplicateChange={onContractRegistryDuplicateChange}
+            inputClassName={inputCls}
+          />
+          <ComplianceFieldError show={fieldHighlighted("agreed_contract_no")} />
           <FieldRow
             label={
               <>
@@ -5756,13 +5761,7 @@ export function Step7ContractNoticeForm({
               {contractNoticeLetterDate && letterAnchoredDeadline && (
                 <p className="text-xs text-muted-foreground">
                   ค่าเริ่มต้น +{STEP7_CONTRACT_SIGNING_DEADLINE_WORKDAYS} วันทำการจากวันที่ในหนังสือเชิญ (
-                  {formatThaiDateSlash(letterAnchoredDeadline)})
-                </p>
-              )}
-              {contractNoticeLetterDate && calendarCapDeadline && (
-                <p className="text-xs text-muted-foreground">
-                  เกณฑ์ขยายเวลา: ห้ามเกิน +{STEP7_CONTRACT_SIGNING_DEADLINE_CALENDAR_DAYS} วันปฏิทินจากวันที่ในหนังสือเชิญ (
-                  {formatThaiDateSlash(calendarCapDeadline)}) โดยไม่บันทึกเหตุผล
+                  {formatThaiDateSlash(letterAnchoredDeadline)}) — หากเลือกวันลงนามเกินกรอบนี้ต้องระบุเหตุผลขยายเวลา
                 </p>
               )}
               {signingBeyondStandard && (

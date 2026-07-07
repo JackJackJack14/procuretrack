@@ -479,7 +479,7 @@ export function computeStep7SigningDeadlineCalendarCapISO(
   return toISODate(d);
 }
 
-/** กำหนดลงนามเกินกรอบ [วันที่ในหนังสือเชิญ + 15 วันปฏิทิน] หรือไม่ */
+/** กำหนดลงนามเกินกรอบ [วันที่ในหนังสือเชิญ + 15 วันทำการ] หรือไม่ */
 export function isStep7SigningDeadlineBeyondStandard(
   noticeDateISO: string,
   signingDeadlineISO: string,
@@ -487,9 +487,9 @@ export function isStep7SigningDeadlineBeyondStandard(
   const notice = noticeDateISO?.trim() ?? "";
   const deadline = signingDeadlineISO?.trim() ?? "";
   if (!notice || !deadline) return false;
-  const calendarCap = computeStep7SigningDeadlineCalendarCapISO(notice);
-  if (!calendarCap) return false;
-  return deadline > calendarCap;
+  const workdayStandard = computeStep7ContractSigningDeadlineISO(notice);
+  if (!workdayStandard) return false;
+  return deadline > workdayStandard;
 }
 
 /** วันที่ในหนังสือเชิญลงนามขั้นต่ำ — หลังอุทธรณ์ และไม่ก่อน 17/07/2569 */

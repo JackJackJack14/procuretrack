@@ -5550,7 +5550,7 @@ export function getStep7ComplianceIssues(
     if (!contractNotice?.agreed_contract_no?.trim()) {
       issues.push({
         id: "agreed_contract_no",
-        message: "กรุณาระบุเลขที่สัญญาที่ตกลงกัน",
+        message: "กรุณาระบุเลขที่สัญญา (อ้างอิงทะเบียนคุมสัญญา)",
       });
     }
     if (!contractNotice?.actual_contract_signed_date?.trim()) {
