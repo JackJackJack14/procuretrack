@@ -29,10 +29,11 @@ import { computeStep6HeadSignedMinDateISO } from "@/lib/step6-guideline";
 import {
   computeStep7MinLgExpiryFromNotice,
   isStep7LgExpiryBeforeMin,
-  resolveStep7EffectiveContractEndDateISO,
+  migrateStep7ContractDurationDays,
+  STEP7_CONTRACT_DURATION_REQUIRED_MSG,
+  STEP7_CONTRACT_SIGNED_REQUIRED_FOR_LG_MSG,
   STEP7_DEFECT_WARRANTY_YEARS_DEFAULT,
   STEP7_LG_EXPIRY_BEFORE_WARRANTY_END_MSG,
-  STEP7_LG_REFERENCE_CONTRACT_END_REQUIRED_MSG,
 } from "@/lib/step7-lg-expiry";
 import {
   STEP2_DOC,
@@ -1879,8 +1880,8 @@ export type Step7ContractNotice = {
   performance_bond_document_no: string;
   performance_bond_amount: number | null;
   performance_bond_lg_expiry_date: string;
-  /** วันครบกำหนดส่งมอบงานตามสัญญา (อ้างอิงเมื่อยังไม่มีข้อมูลขั้น 9) */
-  lg_reference_contract_end_date: string;
+  /** ระยะเวลาดำเนินการตามสัญญา (วันปฏิทิน) — ใช้คำนวณวันครบกำหนดส่งมอบงานใน Step 7 */
+  contract_duration_days: number | null;
   /** ระยะเวลารับประกันความชำรุดบกพร่อง (ปีปฏิทิน) */
   defect_warranty_years: number | null;
   egp_sync_status: Step7EgpSyncStatus;
@@ -1908,7 +1909,7 @@ export const EMPTY_STEP7_CONTRACT_NOTICE: Step7ContractNotice = {
   performance_bond_document_no: "",
   performance_bond_amount: null,
   performance_bond_lg_expiry_date: "",
-  lg_reference_contract_end_date: "",
+  contract_duration_days: null,
   defect_warranty_years: null,
   egp_sync_status: "pending",
   breach_report_letter_no: "",
@@ -5079,7 +5080,7 @@ function step7ContractNoticeHasData(notice?: Step7ContractNotice): boolean {
     notice.performance_bond_document_no?.trim() ||
     (notice.performance_bond_amount != null && notice.performance_bond_amount > 0) ||
     notice.performance_bond_lg_expiry_date?.trim() ||
-    notice.lg_reference_contract_end_date?.trim() ||
+    (notice.contract_duration_days != null && notice.contract_duration_days > 0) ||
     (notice.defect_warranty_years != null && notice.defect_warranty_years > 0) ||
     notice.egp_sync_status === "synced" ||
     notice.breach_report_letter_no?.trim() ||
@@ -5568,8 +5569,6 @@ export function getStep7ComplianceIssues(
     winningProjectAmount?: number | null;
     stepDocs?: Array<{ document_type: string }>;
     timelineCtx?: TimelineValidationContext;
-    /** วันครบกำหนดส่งมอบงานตามสัญญา — จากขั้น 9 หรือแหล่งอื่นในโครงการ */
-    contractEndDateISO?: string | null;
   },
   _autoStates?: Record<string, boolean>,
 ): Step7ComplianceIssue[] {
@@ -5739,20 +5738,23 @@ export function getStep7ComplianceIssues(
       }
     }
     if (bondType === "bank_guarantee") {
-      const contractEnd = resolveStep7EffectiveContractEndDateISO(
-        opts.contractEndDateISO,
-        contractNotice ?? { lg_reference_contract_end_date: "" },
-      );
-      if (!contractEnd) {
+      if (!contractNotice?.actual_contract_signed_date?.trim()) {
         issues.push({
-          id: "lg_reference_contract_end_date",
-          message: STEP7_LG_REFERENCE_CONTRACT_END_REQUIRED_MSG,
+          id: "actual_contract_signed_date",
+          message: STEP7_CONTRACT_SIGNED_REQUIRED_FOR_LG_MSG,
+        });
+      }
+      const durationDays = contractNotice?.contract_duration_days;
+      if (durationDays == null || !Number.isFinite(durationDays) || durationDays <= 0) {
+        issues.push({
+          id: "contract_duration_days",
+          message: STEP7_CONTRACT_DURATION_REQUIRED_MSG,
         });
       }
       const minLgExpiry = computeStep7MinLgExpiryFromNotice(
-        opts.contractEndDateISO,
         contractNotice ?? {
-          lg_reference_contract_end_date: "",
+          actual_contract_signed_date: "",
+          contract_duration_days: null,
           defect_warranty_years: null,
         },
       );
@@ -5904,7 +5906,7 @@ function normalizeStep7ContractNotice(
     performance_bond_type: bondType,
     performance_bond_amount: bondAmount,
     performance_bond_lg_expiry_date: raw.performance_bond_lg_expiry_date?.trim() ?? "",
-    lg_reference_contract_end_date: raw.lg_reference_contract_end_date?.trim() ?? "",
+    contract_duration_days: migrateStep7ContractDurationDays(raw),
     defect_warranty_years: (() => {
       const yearsRaw = raw.defect_warranty_years;
       if (yearsRaw != null && Number.isFinite(Number(yearsRaw)) && Number(yearsRaw) > 0) {

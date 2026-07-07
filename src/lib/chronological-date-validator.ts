@@ -365,13 +365,7 @@ export function getIntraStepChronologicalIssues(
       bondType === "bank_guarantee" &&
       snapshot.step7ContractNotice.performance_bond_collection === "collect"
     ) {
-      const projectContractEnd =
-        isoTrim(snapshot.contractEndDate) ||
-        isoTrim(resolveStep9ContractEndDateISO(snapshot.step9ContractSchedule ?? {}) ?? "");
-      const minLgExpiry = computeStep7MinLgExpiryFromNotice(
-        projectContractEnd,
-        snapshot.step7ContractNotice,
-      );
+      const minLgExpiry = computeStep7MinLgExpiryFromNotice(snapshot.step7ContractNotice);
       const lgExpiry = isoTrim(snapshot.step7ContractNotice.performance_bond_lg_expiry_date);
       if (minLgExpiry && lgExpiry && isStep7LgExpiryBeforeMin(lgExpiry, minLgExpiry)) {
         issues.push({
@@ -634,13 +628,10 @@ export function resolveChronologicalFieldMinDate(
   }
 
   if (stepNumber === 7 && pureFieldId === "performance_bond_lg_expiry_date") {
-    const projectContractEnd =
-      isoTrim(snapshot.contractEndDate) ||
-      isoTrim(resolveStep9ContractEndDateISO(snapshot.step9ContractSchedule ?? {}) ?? "");
     const minLgExpiry = computeStep7MinLgExpiryFromNotice(
-      projectContractEnd,
       snapshot.step7ContractNotice ?? {
-        lg_reference_contract_end_date: "",
+        actual_contract_signed_date: "",
+        contract_duration_days: null,
         defect_warranty_years: null,
       },
     );

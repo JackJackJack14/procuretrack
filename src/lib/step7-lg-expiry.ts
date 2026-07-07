@@ -1,4 +1,9 @@
-import { isISODateBefore, type Step7ContractNotice } from "@/lib/step-form";
+import {
+  addCalendarDaysISO,
+  computeStep9ContractDurationDays,
+  isISODateBefore,
+  type Step7ContractNotice,
+} from "@/lib/step-form";
 import { formatThaiDateHint } from "@/lib/utils";
 
 /** ระยะรับประกันความชำรุดบกพร่องมาตรฐาน (ปีปฏิทิน) — สอดคล้องขั้นตอนที่ 10 */
@@ -26,21 +31,39 @@ export function addCalendarYearsISO(startISO: string, years: number): string | n
   return formatLocalISODate(d);
 }
 
-export function resolveStep7EffectiveContractEndDateISO(
-  contractEndDateFromProject: string | null | undefined,
-  notice: Pick<Step7ContractNotice, "lg_reference_contract_end_date">,
-): string {
-  const fromProject = contractEndDateFromProject?.trim() ?? "";
-  if (fromProject) return fromProject;
-  return notice.lg_reference_contract_end_date?.trim() ?? "";
-}
-
 export function resolveStep7DefectWarrantyYears(
   notice: Pick<Step7ContractNotice, "defect_warranty_years">,
 ): number {
   const raw = notice.defect_warranty_years;
   if (raw != null && Number.isFinite(raw) && raw > 0) return Math.round(raw);
   return STEP7_DEFECT_WARRANTY_YEARS_DEFAULT;
+}
+
+/** วันครบกำหนดส่งมอบงาน = วันที่ลงนามในสัญญาจริง + ระยะเวลาดำเนินการ (วันปฏิทิน) */
+export function computeStep7ContractEndDateISO(
+  signedDateISO: string,
+  durationDays: number | null | undefined,
+): string | null {
+  const signed = signedDateISO?.trim();
+  const days = durationDays;
+  if (!signed || days == null || !Number.isFinite(days) || days <= 0) return null;
+  return addCalendarDaysISO(signed, Math.round(days));
+}
+
+export function isStep7ContractDurationReady(
+  durationDays: number | null | undefined,
+): boolean {
+  return durationDays != null && Number.isFinite(durationDays) && durationDays > 0;
+}
+
+export function computeStep7ContractEndFromNotice(
+  notice: Pick<Step7ContractNotice, "actual_contract_signed_date" | "contract_duration_days">,
+): string | null {
+  if (!isStep7ContractDurationReady(notice.contract_duration_days)) return null;
+  return computeStep7ContractEndDateISO(
+    notice.actual_contract_signed_date,
+    notice.contract_duration_days,
+  );
 }
 
 /** Min_LG_Date = วันครบกำหนดส่งมอบงานตามสัญญา + ระยะเวลารับประกันความชำรุดบกพร่อง */
@@ -54,16 +77,12 @@ export function computeStep7MinLgExpiryDateISO(
 }
 
 export function computeStep7MinLgExpiryFromNotice(
-  contractEndDateFromProject: string | null | undefined,
   notice: Pick<
     Step7ContractNotice,
-    "lg_reference_contract_end_date" | "defect_warranty_years"
+    "actual_contract_signed_date" | "contract_duration_days" | "defect_warranty_years"
   >,
 ): string | null {
-  const contractEnd = resolveStep7EffectiveContractEndDateISO(
-    contractEndDateFromProject,
-    notice,
-  );
+  const contractEnd = computeStep7ContractEndFromNotice(notice);
   if (!contractEnd) return null;
   return computeStep7MinLgExpiryDateISO(
     contractEnd,
@@ -71,14 +90,20 @@ export function computeStep7MinLgExpiryFromNotice(
   );
 }
 
+export const STEP7_CONTRACT_DURATION_REQUIRED_MSG =
+  "กรุณาระบุระยะเวลาดำเนินการตามสัญญา (วัน) เพื่อคำนวณวันครบกำหนดส่งมอบงาน";
+
+export const STEP7_CONTRACT_SIGNED_REQUIRED_FOR_LG_MSG =
+  "กรุณาระบุวันที่ลงนามในสัญญาจริงก่อนคำนวณวันครบกำหนดส่งมอบงาน";
+
 export const STEP7_LG_EXPIRY_BEFORE_WARRANTY_END_MSG = (minISO: string) =>
   `❌ วันสิ้นสุดความคุ้มครองต้องไม่น้อยกว่าวันสิ้นสุดการรับประกันผลงาน (${formatThaiDateHint(minISO)})`;
 
 export const STEP7_LG_MIN_EXPIRY_HELPER_MSG = (minISO: string) =>
   `ℹ️ วันสิ้นสุดความคุ้มครองขั้นต่ำ: ${formatThaiDateHint(minISO)}`;
 
-export const STEP7_LG_REFERENCE_CONTRACT_END_REQUIRED_MSG =
-  "กรุณาระบุวันครบกำหนดส่งมอบงานตามสัญญา เพื่อคำนวณวันสิ้นสุดความคุ้มครองขั้นต่ำ";
+export const STEP7_COMPUTED_CONTRACT_END_HELPER_MSG = (endISO: string) =>
+  `วันครบกำหนดส่งมอบงานตามสัญญา (คำนวณอัตโนมัติ): ${formatThaiDateHint(endISO)}`;
 
 export function isStep7LgExpiryBeforeMin(
   lgExpiryISO: string,
@@ -88,4 +113,21 @@ export function isStep7LgExpiryBeforeMin(
   const min = minLgExpiryISO?.trim() ?? "";
   if (!lg || !min) return false;
   return isISODateBefore(lg, min);
+}
+
+/** แปลง legacy lg_reference_contract_end_date → contract_duration_days */
+export function migrateStep7ContractDurationDays(
+  raw?: (Partial<Step7ContractNotice> & { lg_reference_contract_end_date?: string }) | null,
+): number | null {
+  const rawDays = raw?.contract_duration_days;
+  if (rawDays != null && Number.isFinite(Number(rawDays)) && Number(rawDays) > 0) {
+    return Math.round(Number(rawDays));
+  }
+  const signed = raw?.actual_contract_signed_date?.trim();
+  const legacyEnd = raw?.lg_reference_contract_end_date?.trim();
+  if (signed && legacyEnd) {
+    const days = computeStep9ContractDurationDays(signed, legacyEnd);
+    if (days != null && days > 0) return days;
+  }
+  return null;
 }

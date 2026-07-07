@@ -254,7 +254,11 @@ import {
   normalizeProcurementPath,
 } from "@/lib/procurement-path";
 import { resolveProjectContractSignedDate } from "@/lib/step9-guideline";
-import { resolveProjectContractEndDate, resolveProjectContractStartDate } from "@/lib/step10-guideline";
+import { computeStep7ContractEndFromNotice } from "@/lib/step7-lg-expiry";
+import {
+  resolveProjectContractEndDate,
+  resolveProjectContractStartDate,
+} from "@/lib/step10-guideline";
 import { resolveProjectWorkType } from "@/lib/construction-tracking";
 import {
   hasStep4SignedProcurementRequestDoc,
@@ -1196,10 +1200,20 @@ function ProjectDetailPage() {
   }, [steps]);
 
   const step7ContractEndDateISO = useMemo(() => {
+    const fromStep7 = computeStep7ContractEndFromNotice(step7ContractNotice);
+    if (fromStep7) return fromStep7;
     const fromProject = contractEndDate?.trim();
     if (fromProject) return fromProject;
     return resolveStep9ContractEndDateISO(step9ScheduleForProject) ?? "";
-  }, [contractEndDate, step9ScheduleForProject]);
+  }, [step7ContractNotice, contractEndDate, step9ScheduleForProject]);
+
+  const step7SuggestedContractDurationDays = useMemo(() => {
+    const fromStep7 = step7ContractNotice.contract_duration_days;
+    if (fromStep7 != null && fromStep7 > 0) return fromStep7;
+    const fromStep9 = step9ScheduleForProject.contract_duration_days;
+    if (fromStep9 != null && fromStep9 > 0) return fromStep9;
+    return null;
+  }, [step7ContractNotice.contract_duration_days, step9ScheduleForProject.contract_duration_days]);
 
   const step10PlannedDates = useMemo(
     () =>
@@ -2717,16 +2731,15 @@ function ProjectDetailPage() {
           hasAbandonmentReportDoc: hasStep7AbandonmentReportDoc(step7Uploaded),
           winningProjectAmount: resolveStep4ContractAmount(mergedStep4BidResult, project),
                   stepDocs: step7Docs,
-                  timelineCtx: timelineValidationCtx,
-                  contractEndDateISO: step7ContractEndDateISO,
-                },
-              );
-              if (complianceIssues.length > 0) {
-                failStepCompliance(complianceIssues[0].message, complianceIssues[0].id);
-                return;
-              }
-              await saveDraft({ silent: true });
-              const projectUpdateResult = await updateProjectWithSchemaFallback(
+          timelineCtx: timelineValidationCtx,
+        },
+      );
+      if (complianceIssues.length > 0) {
+        failStepCompliance(complianceIssues[0].message, complianceIssues[0].id);
+        return;
+      }
+      await saveDraft({ silent: true });
+      const projectUpdateResult = await updateProjectWithSchemaFallback(
         supabase,
         projectId,
         { status: PROJECT_STATUS_CONTRACT_BREACH_CANCELLED },
@@ -3009,7 +3022,6 @@ function ProjectDetailPage() {
           winningProjectAmount: resolveStep4ContractAmount(mergedStep4BidResult, project),
           stepDocs: step7Docs,
           timelineCtx: timelineValidationCtx,
-          contractEndDateISO: step7ContractEndDateISO,
         },
       );
       if (complianceIssues.length > 0) {
@@ -4159,7 +4171,7 @@ function ProjectDetailPage() {
                       chronologicalCtx={timelineValidationCtx}
                       highlightedComplianceIssues={highlightedComplianceIssues}
                       complianceSubmitTriggered={complianceSubmitTriggered}
-                      contractEndDateISO={step7ContractEndDateISO}
+                      suggestedContractDurationDays={step7SuggestedContractDurationDays}
                     />
                   )}
                   {current.step_number === 8 && !isSpecificShortWorkflow && (
@@ -4646,7 +4658,6 @@ function ProjectDetailPage() {
                   winningProjectAmount: step7WinningAmount,
                   stepDocs: docsForStep,
                   timelineCtx: timelineValidationCtx,
-                  contractEndDateISO: step7ContractEndDateISO,
                 };
                 const step7ComplianceIssues =
                   current.step_number === 7

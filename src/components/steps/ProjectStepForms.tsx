@@ -263,9 +263,9 @@ import {
   isStep7ContractorReceivedDateChronoValid,
 } from "@/lib/step-form";
 import {
+  computeStep7ContractEndFromNotice,
   computeStep7MinLgExpiryFromNotice,
   isStep7LgExpiryBeforeMin,
-  resolveStep7EffectiveContractEndDateISO,
   STEP7_DEFECT_WARRANTY_YEARS_DEFAULT,
   STEP7_LG_EXPIRY_BEFORE_WARRANTY_END_MSG,
   STEP7_LG_MIN_EXPIRY_HELPER_MSG,
@@ -5364,8 +5364,8 @@ type Step7ContractNoticeFormProps = {
   onNoteChange: (value: string) => void;
   highlightedComplianceIssues?: string[];
   complianceSubmitTriggered?: boolean;
-  /** วันครบกำหนดส่งมอบงานตามสัญญา — จากขั้น 9 หรือแหล่งอื่นในโครงการ */
-  contractEndDateISO?: string;
+  /** ค่าเริ่มต้นระยะเวลาสัญญา (วัน) — จาก TOR/ขั้นก่อนหน้า ถ้ามี */
+  suggestedContractDurationDays?: number | null;
 } & ChronologicalFormProps;
 
 const CLEAR_STEP7_BOND_FIELDS: Partial<Step7ContractNotice> = {
@@ -5405,7 +5405,7 @@ export function Step7ContractNoticeForm({
   onNoteChange,
   highlightedComplianceIssues = [],
   complianceSubmitTriggered = false,
-  contractEndDateISO = "",
+  suggestedContractDurationDays = null,
   chronologicalCtx,
 }: Step7ContractNoticeFormProps) {
   const complianceHi = highlightedComplianceIssues;
@@ -5438,20 +5438,36 @@ export function Step7ContractNoticeForm({
     isStep7PerformanceBondBelowMinimum(bondAmount, winningProjectAmount);
   const showBondBankFields = bondType && bondType !== "cash";
   const showLgExpiryField = bondType === "bank_guarantee";
-  const effectiveContractEndISO = resolveStep7EffectiveContractEndDateISO(
-    contractEndDateISO,
-    contractNotice ?? { lg_reference_contract_end_date: "" },
+  const contractDurationDays = contractNotice?.contract_duration_days ?? null;
+  const computedContractEndISO = useMemo(
+    () =>
+      computeStep7ContractEndFromNotice(
+        contractNotice ?? {
+          actual_contract_signed_date: "",
+          contract_duration_days: null,
+        },
+      ),
+    [
+      contractNotice?.actual_contract_signed_date,
+      contractNotice?.contract_duration_days,
+    ],
   );
-  const showLgReferenceContractEndField = showLgExpiryField && !contractEndDateISO?.trim();
   const defectWarrantyYears =
     contractNotice?.defect_warranty_years ?? STEP7_DEFECT_WARRANTY_YEARS_DEFAULT;
   const minLgExpiryISO = useMemo(
     () =>
-      computeStep7MinLgExpiryFromNotice(contractEndDateISO, contractNotice ?? {
-        lg_reference_contract_end_date: "",
-        defect_warranty_years: null,
-      }),
-    [contractEndDateISO, contractNotice?.lg_reference_contract_end_date, contractNotice?.defect_warranty_years],
+      computeStep7MinLgExpiryFromNotice(
+        contractNotice ?? {
+          actual_contract_signed_date: "",
+          contract_duration_days: null,
+          defect_warranty_years: null,
+        },
+      ),
+    [
+      contractNotice?.actual_contract_signed_date,
+      contractNotice?.contract_duration_days,
+      contractNotice?.defect_warranty_years,
+    ],
   );
   const lgExpiryMinDateISO = mergeMinDateISO(
     minLgExpiryISO,
@@ -5472,6 +5488,29 @@ export function Step7ContractNoticeForm({
     !!contractNoticeLetterDate &&
     !!signingDeadline &&
     isStep7SigningDeadlineBeyondStandard(contractNoticeLetterDate, signingDeadline);
+
+  useEffect(() => {
+    if (readOnly || !showLgExpiryField) return;
+    if (contractNotice?.contract_duration_days != null && contractNotice.contract_duration_days > 0) {
+      return;
+    }
+    if (
+      suggestedContractDurationDays == null ||
+      !Number.isFinite(suggestedContractDurationDays) ||
+      suggestedContractDurationDays <= 0
+    ) {
+      return;
+    }
+    onContractNoticeChange({
+      contract_duration_days: Math.round(suggestedContractDurationDays),
+    });
+  }, [
+    readOnly,
+    showLgExpiryField,
+    contractNotice?.contract_duration_days,
+    suggestedContractDurationDays,
+    onContractNoticeChange,
+  ]);
 
   useEffect(() => {
     if (readOnly || signingBeyondStandard) return;
@@ -6214,41 +6253,61 @@ export function Step7ContractNoticeForm({
             )}
             {showLgExpiryField && (
               <>
-                {showLgReferenceContractEndField && (
-                  <FieldRow
-                    label={
-                      <>
-                        วันครบกำหนดส่งมอบงานตามสัญญา (อ้างอิง){" "}
-                        <span className="text-destructive">*</span>
-                      </>
-                    }
-                    complianceTarget="lg_reference_contract_end_date"
-                  >
-                    <ChronologicalDatePicker
-                      stepNumber={7}
-                      chronologicalCtx={chronologicalCtx}
-                      minDate={actualSignedDate || undefined}
-                      value={contractNotice?.lg_reference_contract_end_date ?? ""}
-                      onChange={(v) =>
-                        onContractNoticeChange({ lg_reference_contract_end_date: v })
-                      }
-                      disabled={readOnly}
-                      showChronologicalHint={false}
-                    />
-                    <p className="text-xs text-muted-foreground mt-1">
-                      ใช้คำนวณวันสิ้นสุดความคุ้มครองขั้นต่ำ — ระบบจะดึงจากขั้นตอนที่ 9 อัตโนมัติเมื่อมีข้อมูลแล้ว
-                    </p>
-                    <ComplianceFieldError
-                      show={fieldHighlighted("lg_reference_contract_end_date")}
-                    />
-                  </FieldRow>
-                )}
-                {!!contractEndDateISO?.trim() && (
-                  <p className="text-xs text-muted-foreground">
-                    วันครบกำหนดส่งมอบงานตามสัญญา (จากขั้นตอนที่ 9):{" "}
-                    {formatThaiDateHint(contractEndDateISO)}
+                <FieldRow
+                  label={
+                    <>
+                      ระยะเวลาดำเนินการตามสัญญา (วัน){" "}
+                      <span className="text-destructive">*</span>
+                    </>
+                  }
+                  complianceTarget="contract_duration_days"
+                >
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={contractDurationDays ?? ""}
+                    onChange={(e) => {
+                      const raw = e.target.value.trim();
+                      onContractNoticeChange({
+                        contract_duration_days: raw ? Math.max(1, Math.round(Number(raw))) : null,
+                      });
+                    }}
+                    disabled={readOnly}
+                    className={complianceHighlightInputCls(
+                      inputCls,
+                      fieldHighlighted("contract_duration_days"),
+                    )}
+                    placeholder="เช่น 330"
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    กรอกตาม TOR/สัญญา — ใช้คำนวณวันครบกำหนดส่งมอบงานอัตโนมัติ
+                    {suggestedContractDurationDays != null &&
+                      suggestedContractDurationDays > 0 &&
+                      contractDurationDays == null &&
+                      ` (ค่าอ้างอิงจาก TOR: ${suggestedContractDurationDays} วัน)`}
                   </p>
-                )}
+                  <ComplianceFieldError show={fieldHighlighted("contract_duration_days")} />
+                </FieldRow>
+                <FieldRow label="วันครบกำหนดส่งมอบงานตามสัญญา">
+                  <input
+                    type="text"
+                    readOnly
+                    aria-readonly
+                    value={
+                      computedContractEndISO
+                        ? formatThaiDateHint(computedContractEndISO)
+                        : "— ระบุวันที่ลงนามในสัญญาจริงและระยะเวลาดำเนินการก่อน —"
+                    }
+                    className={`${inputCls} bg-muted/50 cursor-not-allowed text-foreground`}
+                    tabIndex={-1}
+                  />
+                  {computedContractEndISO && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      คำนวณจากวันที่ลงนามในสัญญาจริง + ระยะเวลาดำเนินการ (วันปฏิทิน)
+                    </p>
+                  )}
+                </FieldRow>
                 <FieldRow
                   label={
                     <>
@@ -6291,7 +6350,7 @@ export function Step7ContractNoticeForm({
                     minDate={lgExpiryMinDateISO}
                     value={lgExpiryDate}
                     onChange={handleLgExpiryDateChange}
-                    disabled={readOnly || !effectiveContractEndISO}
+                    disabled={readOnly || !computedContractEndISO}
                     showChronologicalHint={false}
                   />
                   {minLgExpiryISO && (
@@ -6299,9 +6358,9 @@ export function Step7ContractNoticeForm({
                       {STEP7_LG_MIN_EXPIRY_HELPER_MSG(minLgExpiryISO)}
                     </p>
                   )}
-                  {!effectiveContractEndISO && (
+                  {!computedContractEndISO && (
                     <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">
-                      กรุณาระบุวันครบกำหนดส่งมอบงานตามสัญญาก่อนเลือกวันสิ้นสุดความคุ้มครอง
+                      กรุณาระบุวันที่ลงนามในสัญญาจริงและระยะเวลาดำเนินการก่อนเลือกวันสิ้นสุดความคุ้มครอง
                     </p>
                   )}
                   {showLgExpiryChronoError && minLgExpiryISO && (
