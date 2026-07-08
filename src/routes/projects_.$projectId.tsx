@@ -49,6 +49,7 @@ import {
   Step9ExternalContractCapturePanel,
   Step10DetailForm,
   GenericStepDetailForm,
+  ComplianceFieldHighlightProvider,
 } from "@/components/steps/ProjectStepForms";
 import {
   computeAutoChecklistState,
@@ -69,7 +70,7 @@ import {
 import {
   addWorkdays,
   computeAppealDeadlineISO,
-  computeContractEarliestISO,
+  resolveStep8EarliestSigningISO,
   computeContractNotificationDeadlineISO,
   computeContractNotificationDeadlineFromAppealISO,
   parseISODateLocal,
@@ -182,6 +183,8 @@ import {
   countStep6FormRequiredProgress,
   EMPTY_STEP7_CONTRACT_NOTICE,
   loadStep7FormFromNote,
+  resolveStep7ContractDurationDays,
+  computeStep9ContractEndDateISO,
   getStep7ComplianceIssues,
   isStep7ReadyForNext,
   buildStep8ExecutionFromStep7Bond,
@@ -190,6 +193,7 @@ import {
   loadStep8FormFromNote,
   parseStepNote,
   mergeStep8FromProject,
+  sanitizeStep8ContractExecutionForForm,
   resolveDefaultStep8ContractAmount,
   buildProjectStep8Fields,
   getStep8ComplianceIssues,
@@ -198,7 +202,7 @@ import {
   type Step8ContractExecution,
   EMPTY_STEP9_CONTRACT_SCHEDULE,
   loadStep9FormFromNote,
-  mergeStep9ScheduleFromSources,
+  prepareStep9ContractScheduleForForm,
   resolveStep9ContractEndDateISO,
   countStep9FormRequiredProgress,
   getStep9ComplianceIssues,
@@ -283,7 +287,6 @@ import {
   isStep4RequiredDocSatisfied,
   isStep5RequiredDocSatisfied,
 } from "@/lib/form-audit-trail";
-import { ComplianceGateBanner } from "@/components/ComplianceGateBanner";
 import {
   inferPublicationComplianceTarget,
   resolveDocTypeFromComplianceIssue,
@@ -482,6 +485,10 @@ function ProjectDetailPage() {
   const [highlightedMissingDocs, setHighlightedMissingDocs] = useState<string[]>([]);
   const [highlightedComplianceIssues, setHighlightedComplianceIssues] = useState<string[]>([]);
   const [complianceSubmitTriggered, setComplianceSubmitTriggered] = useState(false);
+  const [activeComplianceIssue, setActiveComplianceIssue] = useState<{
+    id: string;
+    message: string;
+  } | null>(null);
 
   // Step edit state
   const [responsibleName, setResponsibleName] = useState("");
@@ -725,6 +732,7 @@ function ProjectDetailPage() {
     setHighlightedMissingDocs([]);
     setHighlightedComplianceIssues([]);
     setComplianceSubmitTriggered(false);
+    setActiveComplianceIssue(null);
 
     const stepNum = current.step_number;
     switch (stepNum) {
@@ -1014,6 +1022,19 @@ function ProjectDetailPage() {
     [step6Record?.note, project?.appeal_status],
   );
   const step7Record = useMemo(() => steps.find((s) => s.step_number === 7), [steps]);
+  const step7FormFromNote = useMemo(
+    () => loadStep7FormFromNote(step7Record?.note ?? null),
+    [step7Record?.note],
+  );
+  const step7ContractNoticeFromDb = useMemo(
+    () => step7FormFromNote.contractNotice ?? { ...EMPTY_STEP7_CONTRACT_NOTICE },
+    [step7FormFromNote],
+  );
+  const step7ContractDurationDaysResolved = useMemo(
+    () =>
+      resolveStep7ContractDurationDays(step7Record?.note, step7ContractNotice),
+    [step7Record?.note, step7ContractNotice.contract_duration_days],
+  );
   const step7SigningDeadlineISO = useMemo(() => {
     const form = loadStep7FormFromNote(step7Record?.note ?? null);
     return form.contractNotice?.contract_signing_deadline?.trim() ?? "";
@@ -1330,7 +1351,14 @@ function ProjectDetailPage() {
     setHighlightedMissingDocs([]);
     setHighlightedComplianceIssues([]);
     setComplianceSubmitTriggered(false);
+    setActiveComplianceIssue(null);
   }, [activeStep]);
+
+  /** Hydrate Step 7 form state จาก DB เมื่ออยู่ขั้น 8+ (Step 9 ต้องอ่านระยะเวลาสัญญา) */
+  useEffect(() => {
+    if (!step7Record?.note || current?.step_number === 7) return;
+    setStep7ContractNotice(step7ContractNoticeFromDb);
+  }, [step7Record?.note, current?.step_number, step7ContractNoticeFromDb]);
 
   useEffect(() => {
     if (!current || !project) return;
@@ -1479,11 +1507,24 @@ function ProjectDetailPage() {
       setGenericManualChecklist(
         normalizeManualChecklist(8, step8Form.checklist),
       );
+      const step7Form = loadStep7FormFromNote(step7Record?.note ?? null);
+      const step7Notice = step7Form.contractNotice ?? { ...EMPTY_STEP7_CONTRACT_NOTICE };
+      const earliestSigningISO = appealAnchorDate
+        ? resolveStep8EarliestSigningISO(appealAnchorDate, step7Notice)
+        : "";
+      const signingDeadlineISO =
+        step7Notice.contract_signing_deadline?.trim() || step7SigningDeadlineISO;
       setStep8ContractExecution(
-        mergeStep8FromProject(
-          step8Form.contractExecution ?? { ...EMPTY_STEP8_CONTRACT_EXECUTION },
-          project,
-          mergedStep4BidResult,
+        sanitizeStep8ContractExecutionForForm(
+          mergeStep8FromProject(
+            step8Form.contractExecution ?? { ...EMPTY_STEP8_CONTRACT_EXECUTION },
+            project,
+            mergedStep4BidResult,
+          ),
+          {
+            earliestSigningISO,
+            step7SigningDeadlineISO: signingDeadlineISO,
+          },
         ),
       );
       const draft = loadStepDraftFields(current);
@@ -1498,15 +1539,17 @@ function ProjectDetailPage() {
       );
       const step7Form = loadStep7FormFromNote(step7Record?.note ?? null);
       const draft = loadStepDraftFields(current);
+      const step7DurationDays = resolveStep7ContractDurationDays(
+        step7Record?.note,
+        step7Form.contractNotice,
+      );
       setStep9ContractSchedule(
-        mergeStep9ScheduleFromSources(
-          step9Form.contractSchedule ?? { ...EMPTY_STEP9_CONTRACT_SCHEDULE },
-          {
-            step7NoticeDate: step7Form.contractNotice?.contract_notice_letter_date,
-            savedDueDate: draft.dueDate,
-            contractSignedDate,
-          },
-        ),
+        prepareStep9ContractScheduleForForm(step9Form.contractSchedule, {
+          step7NoticeDate: step7Form.contractNotice?.contract_notice_letter_date,
+          savedDueDate: draft.dueDate,
+          contractSignedDate,
+          contractDurationDays: step7DurationDays,
+        }),
       );
       if (isExternalProcurement(effectiveProcurementPath)) {
         setStep1Profile(mergeStep1ProfileFromProject(project));
@@ -1584,6 +1627,28 @@ function ProjectDetailPage() {
     step9ContractSchedule.contract_duration_days,
   ]);
 
+  /** ซิงก์ระยะเวลาจาก Step 7 เข้า Step 9 เมื่อโหลดข้อมูล Step 7 จาก DB แล้ว */
+  useEffect(() => {
+    if (current?.step_number !== 9) return;
+    const duration = step7ContractDurationDaysResolved;
+    if (duration == null) return;
+    setStep9ContractSchedule((prev) => {
+      const start = prev.work_start_date?.trim() ?? "";
+      const needsDuration = prev.contract_duration_days !== duration;
+      const needsEnd =
+        start &&
+        duration > 0 &&
+        !prev.contract_end_date?.trim();
+      if (!needsDuration && !needsEnd) return prev;
+      const next = { ...prev, contract_duration_days: duration };
+      if (needsEnd) {
+        const endISO = computeStep9ContractEndDateISO(start, duration);
+        if (endISO) next.contract_end_date = endISO;
+      }
+      return next;
+    });
+  }, [current?.step_number, step7ContractDurationDaysResolved]);
+
   const effectiveResponsibleName =
     responsibleName.trim() || step1ResponsibleDefault.trim();
 
@@ -1616,8 +1681,17 @@ function ProjectDetailPage() {
     step5Announcement.winner_result_notification_date?.trim() || step5NotificationDate;
 
   const globalEarliestSigningISO = useMemo(
-    () => (appealAnchorDate ? computeContractEarliestISO(appealAnchorDate) : ""),
-    [appealAnchorDate],
+    () => resolveStep8EarliestSigningISO(appealAnchorDate, step7ContractNotice),
+    [appealAnchorDate, step7ContractNotice],
+  );
+
+  const complianceFieldHighlightValue = useMemo(
+    () => ({
+      submitTriggered: complianceSubmitTriggered,
+      activeIssueId: activeComplianceIssue?.id ?? null,
+      activeMessage: activeComplianceIssue?.message ?? null,
+    }),
+    [complianceSubmitTriggered, activeComplianceIssue],
   );
 
   const chronologicalFormSnapshot = useMemo(
@@ -1901,6 +1975,7 @@ function ProjectDetailPage() {
     setHighlightedMissingDocs([]);
     setHighlightedComplianceIssues([]);
     setComplianceSubmitTriggered(false);
+    setActiveComplianceIssue(null);
     if (workflowReadOnly) {
       toast.error("อยู่ในโหมดดูอย่างเดียว — กด «ปลดล็อกเพื่อแก้ไขข้อมูลขั้นตอนนี้» ก่อนบันทึก");
       return false;
@@ -2583,12 +2658,8 @@ function ProjectDetailPage() {
 
   const failStepCompliance = (message: string, issueId?: string, docType?: string) => {
     setComplianceSubmitTriggered(true);
-    toast.error(message);
-    if (current?.step_number !== 5 && current?.step_number !== 6) {
-      setError(message);
-    } else {
-      setError(null);
-    }
+    setActiveComplianceIssue(issueId ? { id: issueId, message } : null);
+    setError(null);
     const resolvedDocType =
       docType ?? (issueId ? resolveDocTypeFromComplianceIssue(issueId) : null);
     setHighlightedMissingDocs(resolvedDocType ? [resolvedDocType] : []);
@@ -3042,7 +3113,7 @@ function ProjectDetailPage() {
         ? computeAppealDeadlineISO(appealAnchorDate)
         : "";
       const earliestSigningISO = appealAnchorDate
-        ? computeContractEarliestISO(appealAnchorDate)
+        ? resolveStep8EarliestSigningISO(appealAnchorDate, step7ContractNotice)
         : "";
       const complianceIssues = getStep8ComplianceIssues(
         step8ContractExecution,
@@ -3134,6 +3205,7 @@ function ProjectDetailPage() {
       setHighlightedMissingDocs([]);
       setHighlightedComplianceIssues([]);
       setComplianceSubmitTriggered(false);
+      setActiveComplianceIssue(null);
       setActiveStep(nextUiStep);
       toast.success(
         `บันทึกการแก้ไขขั้นตอนที่ ${completedStepNumber} เรียบร้อย — ไปขั้นตอนที่ ${nextUiStep} แล้ว`,
@@ -3147,11 +3219,23 @@ function ProjectDetailPage() {
       const bondPatch = buildStep8ExecutionFromStep7Bond(step7ContractNotice);
       const step8Record = steps.find((s) => s.step_number === 8);
       const existingStep8 = loadStep8FormFromNote(step8Record?.note ?? null);
-      const mergedStep8: Step8ContractExecution = {
-        ...existingStep8.contractExecution,
-        ...step8ContractExecution,
-        ...bondPatch,
-      };
+      const earliestForStep8 = appealAnchorDate
+        ? resolveStep8EarliestSigningISO(appealAnchorDate, step7ContractNotice)
+        : "";
+      const signingDeadlineForStep8 =
+        step7ContractNotice.contract_signing_deadline?.trim() || step7SigningDeadlineISO;
+      const mergedStep8 = sanitizeStep8ContractExecutionForForm(
+        {
+          ...EMPTY_STEP8_CONTRACT_EXECUTION,
+          ...existingStep8.contractExecution,
+          ...step8ContractExecution,
+          ...bondPatch,
+        },
+        {
+          earliestSigningISO: earliestForStep8,
+          step7SigningDeadlineISO: signingDeadlineForStep8,
+        },
+      );
       setStep8ContractExecution(mergedStep8);
       if (step8Record) {
         const { userNote: step8UserNote } = parseStepNote(step8Record.note ?? null);
@@ -3228,6 +3312,7 @@ function ProjectDetailPage() {
       setHighlightedMissingDocs([]);
       setHighlightedComplianceIssues([]);
       setComplianceSubmitTriggered(false);
+      setActiveComplianceIssue(null);
       toast.success(
         completedStepNumber === 10
           ? "ปิดโครงการจ้างสำเร็จ — อยู่ระหว่างค้ำประกันความชำรุด 2 ปี"
@@ -3591,7 +3676,7 @@ function ProjectDetailPage() {
               : "";
           const step8EarliestSigningISO =
             current.step_number === 8 && appealAnchorDate
-              ? computeContractEarliestISO(appealAnchorDate)
+              ? resolveStep8EarliestSigningISO(appealAnchorDate, step7ContractNotice)
               : "";
           const minDeadline =
             (current.step_number === 6 ? appealDeadlineDate : null) ??
@@ -3917,6 +4002,7 @@ function ProjectDetailPage() {
                       />
                     </div>
                   </div>
+                  <ComplianceFieldHighlightProvider value={complianceFieldHighlightValue}>
                   <ChronologicalDateValidationProvider
                     snapshot={chronologicalFormSnapshot}
                     timelineCtx={timelineValidationCtx}
@@ -4233,6 +4319,7 @@ function ProjectDetailPage() {
                       onDocsChange={invalidateAll}
                       projectName={project.name}
                       contractSignedDate={contractSignedDate}
+                      step7ContractDurationDays={step7ContractDurationDaysResolved}
                       winningBidderName={
                         mergedStep4BidResult.winning_bidder_name ||
                         project.winning_bidder_name ||
@@ -4301,17 +4388,11 @@ function ProjectDetailPage() {
                     />
                   )}
                   </ChronologicalDateValidationProvider>
+                  </ComplianceFieldHighlightProvider>
                   </>
                   )}
                 </fieldset>
                 </>
-              )}
-
-              {error &&
-                current.step_number !== 5 &&
-                current.step_number !== 6 &&
-                (isHistoricalWorkflowMode(workflowMode) || !isStepCompletedView) && (
-                <p className="text-sm text-destructive mt-3">{error}</p>
               )}
 
               {(isHistoricalWorkflowMode(workflowMode) || !isStepCompletedView) && (() => {
@@ -5078,32 +5159,7 @@ function ProjectDetailPage() {
                 const showHistoricalSaveAndNext =
                   workflowMode === "historical_edit" &&
                   canSubmitHistoricalSaveAndNext(activeStep, currentWorkflowUiStep);
-                const disabled =
-                  !showHistoricalSaveAndNext &&
-                  (isCompleted ||
-                  (bypassCurrentStep
-                    ? false
-                    : current.step_number === 1
-                    ? !step1Ready
-                    : current.step_number === 2
-                      ? !step2Ready
-                      : current.step_number === 3
-                        ? !step3Ready
-                        : current.step_number === 4
-                          ? !step4Ready
-                          : current.step_number === 5
-                            ? false
-                            : current.step_number === 6
-                              ? false
-                              : current.step_number === 7
-                                ? !step7Ready
-                                : current.step_number === 8
-                                  ? !step8Ready
-                                  : current.step_number === 9
-                                    ? !step9Ready
-                                    : current.step_number === 10
-                                      ? !step10Ready
-                                      : !allUploaded));
+                const disabled = !showHistoricalSaveAndNext && isCompleted;
                 if (
                   current.step_number === 2 &&
                   disabled &&
@@ -5152,19 +5208,6 @@ function ProjectDetailPage() {
 
                 return (
                   <div className="mt-6 pt-5 border-t space-y-4">
-                    <ComplianceGateBanner
-                      show={
-                        !isCompleted &&
-                        showCompleteBtn &&
-                        !reactiveChecklist.allDone &&
-                        workflowMode === "current" &&
-                        current.step_number !== 5 &&
-                        current.step_number !== 6 &&
-                        current.step_number !== 7
-                      }
-                      progressPct={checklistProgressPct}
-                      issues={complianceGateIssues}
-                    />
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="flex flex-wrap gap-3">
                         <WorkflowStepFooterNav

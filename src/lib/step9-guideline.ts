@@ -73,6 +73,19 @@ export function getStep9EgpPublicationTooLateMsg(deadlineISO: string): string {
   return `❌ วันที่ประกาศสาระสำคัญใน e-GP เกินกำหนดมาตรา 98 — ต้องไม่เกิน ${STEP9_ARTICLE_98_DEADLINE_CALENDAR_DAYS} วันปฏิทินนับจากวันลงนามในสัญญา (เดดไลน์: ${formatThaiDateHint(deadlineISO)})`;
 }
 
+/** เตือนสติเมื่อวันบันทึก หส.1 ตรงกับวันลงนามสัญญา — ไม่บล็อกการบันทึก */
+export const STEP9_EGP_SAME_AS_SIGNED_WARNING =
+  "⚠️ หมายเหตุ: ท่านเลือกวันบันทึกข้อมูล หส.1 เป็นวันเดียวกับวันเซ็นสัญญา โปรดตรวจสอบความถูกต้องอีกครั้งก่อนบันทึก";
+
+export function isStep9EgpPublicationSameAsSigned(
+  publicationISO: string,
+  contractSignedISO: string,
+): boolean {
+  const pub = publicationISO?.trim() ?? "";
+  const signed = contractSignedISO?.trim() ?? "";
+  return !!pub && !!signed && pub === signed;
+}
+
 export const STEP9_SCHEDULE_INCOMPLETE_MSG =
   "กรุณาบันทึกวันที่ลงนามสัญญาในขั้นตอนที่ 8 ก่อน — ระบบจะคำนวณเดดไลน์มาตรา 98 ให้อัตโนมัติ";
 

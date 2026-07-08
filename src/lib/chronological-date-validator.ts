@@ -224,7 +224,7 @@ const CROSS_STEP_DATE_CHAINS: CrossStepDateChainRule[] = [
     dependentFieldId: "contract_signed_date",
     dependentLabel: "วันที่ลงนามสัญญาจริง",
     resolveBaseISO: (s) => isoTrim(s.earliestSigningISO),
-    baseLabel: "วันเริ่มลงนามในสัญญาได้",
+    baseLabel: "วันสิ้นสุดขั้นตอนที่ 7",
     message: (_d, b, iso) =>
       `วันที่ลงนามสัญญาจริงต้องไม่ก่อน${b} (${formatThaiDateHint(iso)})`,
   },

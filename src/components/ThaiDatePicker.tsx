@@ -73,7 +73,7 @@ export function ThaiDatePicker({
   disabled,
   onInvalidDate,
 }: ThaiDatePickerProps) {
-  const selected = useMemo(() => parseLocalISODate(value), [value]);
+  const selected = useMemo(() => (value?.trim() ? parseLocalISODate(value) : null), [value]);
   const min = parseBoundary(minDate);
   const max = parseBoundary(maxDate);
   const displayValue = value ? formatThaiDateSlash(value) : "";

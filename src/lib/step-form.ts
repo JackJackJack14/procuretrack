@@ -5512,7 +5512,7 @@ export function buildStep8ExecutionFromStep7Bond(
 ): Partial<Step8ContractExecution> {
   const registration: Partial<Step8ContractExecution> = {
     contract_no: notice.agreed_contract_no?.trim() ?? "",
-    contract_signed_date: notice.actual_contract_signed_date?.trim() ?? "",
+    // วันที่ลงนามสัญญาจริง — ให้ผู้ใช้กรอกในขั้นตอนที่ 8 เท่านั้น (ไม่คัดลอกจากขั้นตอนที่ 7)
   };
   if (notice.performance_bond_collection === "exempt") {
     return {
@@ -5887,6 +5887,19 @@ export function loadStep7FormFromNote(note: string | null): Step7FormData {
   };
 }
 
+/** ระยะเวลาดำเนินการตามสัญญา (วัน) — จาก note ขั้นตอนที่ 7 หรือ state สด */
+export function resolveStep7ContractDurationDays(
+  step7Note: string | null | undefined,
+  liveNotice?: Pick<Step7ContractNotice, "contract_duration_days"> | null,
+): number | null {
+  const fromDb = loadStep7FormFromNote(step7Note ?? null).contractNotice
+    ?.contract_duration_days;
+  if (fromDb != null && fromDb > 0) return Math.round(fromDb);
+  const fromLive = liveNotice?.contract_duration_days;
+  if (fromLive != null && fromLive > 0) return Math.round(fromLive);
+  return null;
+}
+
 function normalizeStep7ContractNotice(
   raw?: Partial<Step7ContractNotice> | null,
 ): Step7ContractNotice {
@@ -5975,8 +5988,7 @@ export function mergeStep8FromProject(
   const defaultAmount = resolveDefaultStep8ContractAmount(project, step4BidResult ?? undefined);
   return {
     contract_no: execution.contract_no?.trim() || project?.contract_no?.trim() || "",
-    contract_signed_date:
-      execution.contract_signed_date?.trim() || project?.contract_signed_date?.trim() || "",
+    contract_signed_date: execution.contract_signed_date?.trim() || "",
     contract_amount:
       execution.contract_amount != null && execution.contract_amount > 0
         ? execution.contract_amount
@@ -6066,6 +6078,30 @@ export function isStep8SignedOutsideAllowedRange(
     isStep8SignedBeforeEarliest(signedDateISO, earliestSigningISO) ||
     isStep8SignedPastDeadline(signedDateISO, step7SigningDeadlineISO)
   );
+}
+
+/** เคลียร์วันที่ลงนามที่ไม่ถูกต้อง/นอกช่วงเมื่อโหลดฟอร์มขั้นตอนที่ 8 */
+export function sanitizeStep8ContractExecutionForForm(
+  execution: Step8ContractExecution,
+  opts?: {
+    earliestSigningISO?: string;
+    step7SigningDeadlineISO?: string;
+  },
+): Step8ContractExecution {
+  const signed = execution.contract_signed_date?.trim() ?? "";
+  if (!signed) {
+    return { ...execution, contract_signed_date: "" };
+  }
+  const earliest = opts?.earliestSigningISO?.trim() ?? "";
+  const deadline = opts?.step7SigningDeadlineISO?.trim() ?? "";
+  if (
+    earliest &&
+    deadline &&
+    isStep8SignedOutsideAllowedRange(signed, earliest, deadline)
+  ) {
+    return { ...execution, contract_signed_date: "" };
+  }
+  return execution;
 }
 
 export function hasStep8SignedContractDoc(documentTypes: string[]): boolean {
@@ -6158,7 +6194,7 @@ export function getStep8ComplianceIssues(
   if (signedDate && earliestSigning && isStep8SignedBeforeEarliest(signedDate, earliestSigning)) {
     issues.push({
       id: "contract_signed_date_earliest",
-      message: `วันที่ลงนามสัญญาจริงต้องไม่ก่อนวันที่เริ่มลงนามในสัญญาได้ (${formatThaiDateHint(earliestSigning)})`,
+      message: `วันที่ลงนามสัญญาจริงต้องไม่ก่อนวันสิ้นสุดขั้นตอนที่ 7 (${formatThaiDateHint(earliestSigning)})`,
     });
   }
   if (signedDate && step7Deadline && isStep8SignedPastDeadline(signedDate, step7Deadline)) {
@@ -6317,6 +6353,40 @@ export function syncStep9ContractDurationFromDates(
   return { ...schedule, contract_duration_days: days };
 }
 
+/** ตั้งวันเริ่มสัญญาและคำนวณวันสิ้นสุดอัตโนมัติจากระยะเวลาขั้นตอนที่ 7 */
+export function applyStep9WorkStartWithAutoEnd(
+  schedule: Step9ContractSchedule,
+  workStartISO: string,
+  step7DurationDays: number | null | undefined,
+): Step9ContractSchedule {
+  const synced = syncStep9WorkStartDate(schedule, workStartISO);
+  const duration =
+    step7DurationDays != null && step7DurationDays > 0
+      ? Math.round(step7DurationDays)
+      : synced.contract_duration_days;
+  const start = synced.work_start_date?.trim() ?? "";
+  const endISO =
+    start && duration != null && duration > 0
+      ? computeStep9ContractEndDateISO(start, duration) ?? ""
+      : "";
+  return {
+    ...synced,
+    contract_duration_days: duration ?? null,
+    contract_end_date: endISO,
+  };
+}
+
+/** แก้ไขวันสิ้นสุดสัญญา — คำนวณระยะเวลาย้อนกลับจากวันเริ่มต้น–สิ้นสุด */
+export function applyStep9ContractEndWithReverseDuration(
+  schedule: Step9ContractSchedule,
+  endISO: string,
+): Step9ContractSchedule {
+  return syncStep9ContractDurationFromDates({
+    ...schedule,
+    contract_end_date: endISO,
+  });
+}
+
 /** Sync วันเริ่มงานระหว่างฟิลด์หลักและ legacy */
 export function syncStep9WorkStartDate(
   schedule: Step9ContractSchedule,
@@ -6328,6 +6398,25 @@ export function syncStep9WorkStartDate(
     work_start_date: v,
     notice_to_proceed_date: v,
   };
+}
+
+/** โหลดฟอร์ม Step 9 — ไม่ auto-fill วันที่ประกาศ หส.1 (ใช้เฉพาะค่าที่บันทึกใน note) */
+export function prepareStep9ContractScheduleForForm(
+  saved: Step9ContractSchedule | undefined | null,
+  opts: {
+    step7NoticeDate?: string | null;
+    savedDueDate?: string | null;
+    contractDurationDays?: number | null;
+    contractSignedDate?: string | null;
+  },
+): Step9ContractSchedule {
+  const savedEgp = saved?.egp_essential_publication_date?.trim() ?? "";
+  const base = saved ?? { ...EMPTY_STEP9_CONTRACT_SCHEDULE };
+  const merged = mergeStep9ScheduleFromSources(
+    { ...base, egp_essential_publication_date: "" },
+    opts,
+  );
+  return { ...merged, egp_essential_publication_date: savedEgp };
 }
 
 export function mergeStep9ScheduleFromSources(
@@ -6350,10 +6439,10 @@ export function mergeStep9ScheduleFromSources(
     }
   }
   const duration =
-    schedule.contract_duration_days != null && schedule.contract_duration_days > 0
-      ? schedule.contract_duration_days
-      : opts.contractDurationDays != null && opts.contractDurationDays > 0
-        ? opts.contractDurationDays
+    opts.contractDurationDays != null && opts.contractDurationDays > 0
+      ? Math.round(opts.contractDurationDays)
+      : schedule.contract_duration_days != null && schedule.contract_duration_days > 0
+        ? schedule.contract_duration_days
         : null;
   const synced = syncStep9WorkStartDate(
     { ...EMPTY_STEP9_CONTRACT_SCHEDULE, ...schedule, contract_duration_days: duration },
@@ -6368,6 +6457,7 @@ export function mergeStep9ScheduleFromSources(
     ...sanitized,
     contract_end_date: contractEnd,
     contract_duration_days: duration,
+    egp_essential_publication_date: schedule.egp_essential_publication_date?.trim() ?? "",
   });
 }
 

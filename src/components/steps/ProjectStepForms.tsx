@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Plus, Trash2, Download, ChevronDown, FileText, Loader2, FolderOpen, CheckCircle2 } from "lucide-react";
 import { ChronologicalDatePicker } from "@/components/ChronologicalDatePicker";
 import { ThaiDatePicker } from "@/components/ThaiDatePicker";
@@ -238,8 +238,9 @@ import {
   hasStep8SignedContractDoc,
   hasStep8GuaranteeVerificationDoc,
   computeStep9ContractDurationDays,
-  syncStep9ContractDurationFromDates,
-  syncStep9WorkStartDate,
+  computeStep9ContractEndDateISO,
+  applyStep9WorkStartWithAutoEnd,
+  applyStep9ContractEndWithReverseDuration,
   sanitizeStep9WorkStartAgainstSignedDate,
   isISODateBefore,
   EMPTY_STEP9_CONTRACT_SCHEDULE,
@@ -278,7 +279,9 @@ import {
   computeStep9EgpDeadlineISO,
   getStep9EgpPublicationTooLateMsg,
   isStep9EgpPublicationTooLate,
+  isStep9EgpPublicationSameAsSigned,
   STEP9_ARTICLE_98_DEADLINE_CALENDAR_DAYS,
+  STEP9_EGP_SAME_AS_SIGNED_WARNING,
 } from "@/lib/step9-guideline";
 import { toast } from "sonner";
 import { formatBaht } from "@/lib/procurement";
@@ -400,6 +403,32 @@ const inputCls =
 export const STEP5_COMPLIANCE_INLINE_ERROR_MSG =
   "❌ กรุณากรอกข้อมูล/แนบไฟล์หลักในช่องนี้ให้เรียบร้อย";
 
+export type ComplianceFieldHighlightValue = {
+  submitTriggered: boolean;
+  activeIssueId: string | null;
+  activeMessage: string | null;
+};
+
+export const ComplianceFieldHighlightContext = createContext<ComplianceFieldHighlightValue>({
+  submitTriggered: false,
+  activeIssueId: null,
+  activeMessage: null,
+});
+
+export function ComplianceFieldHighlightProvider({
+  value,
+  children,
+}: {
+  value: ComplianceFieldHighlightValue;
+  children: React.ReactNode;
+}) {
+  return (
+    <ComplianceFieldHighlightContext.Provider value={value}>
+      {children}
+    </ComplianceFieldHighlightContext.Provider>
+  );
+}
+
 export function complianceHighlightInputCls(base: string, highlighted: boolean): string {
   return highlighted
     ? `${base} border-red-500 bg-red-50 focus:ring-red-500`
@@ -409,10 +438,20 @@ export function complianceHighlightInputCls(base: string, highlighted: boolean):
 function ComplianceFieldError({
   show,
   message = STEP5_COMPLIANCE_INLINE_ERROR_MSG,
+  target,
 }: {
   show: boolean;
   message?: string;
+  /** จับคู่กับ issue.id — แสดงข้อความจาก on-submit validation */
+  target?: string;
 }) {
+  const complianceCtx = useContext(ComplianceFieldHighlightContext);
+  const fromContext =
+    !!target &&
+    complianceCtx.submitTriggered &&
+    complianceCtx.activeIssueId === target &&
+    !!complianceCtx.activeMessage;
+  if (fromContext) return null;
   if (!show) return null;
   return (
     <p className="text-xs text-red-600 font-medium mt-1" role="alert">
@@ -439,6 +478,12 @@ export function FieldRow({
   complianceTarget?: string;
 }) {
   const tooltipText = getFieldTooltip(tooltipKey);
+  const complianceCtx = useContext(ComplianceFieldHighlightContext);
+  const showContextError =
+    !!complianceTarget &&
+    complianceCtx.submitTriggered &&
+    complianceCtx.activeIssueId === complianceTarget &&
+    !!complianceCtx.activeMessage;
   return (
     <div data-compliance-target={complianceTarget}>
       <div className="flex items-center gap-1.5 mb-1.5">
@@ -446,6 +491,11 @@ export function FieldRow({
         <FieldLabelTooltip text={tooltipText} />
       </div>
       {children}
+      {showContextError && (
+        <p className="text-xs text-red-600 font-medium mt-1" role="alert">
+          {complianceCtx.activeMessage}
+        </p>
+      )}
     </div>
   );
 }
@@ -6671,11 +6721,13 @@ export function Step8ContractGuaranteeForm({
     guaranteeAmount,
     effectiveContractAmount,
   );
-  const showDeadlineHardBlock = isStep8SignedOutsideAllowedRange(
-    signedDate,
-    earliestSigningISO,
-    step7SigningDeadlineISO,
-  );
+  const showDeadlineHardBlock =
+    !!signedDate?.trim() &&
+    isStep8SignedOutsideAllowedRange(
+      signedDate,
+      earliestSigningISO,
+      step7SigningDeadlineISO,
+    );
   const uploadedDocTypes = docBinder.docs.map((d) => d.document_type);
   const hasSignedContractDoc = hasStep8SignedContractDoc(uploadedDocTypes);
   const hasGuaranteeDoc = hasStep8GuaranteeVerificationDoc(uploadedDocTypes);
@@ -6822,7 +6874,11 @@ export function Step8ContractGuaranteeForm({
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
             ตรวจจับวันลงนามสัญญา
           </p>
-          <FieldRow label="วันที่ลงนามสัญญาจริง *" tooltipKey="step8.contract_signed_date">
+          <FieldRow
+            label="วันที่ลงนามสัญญาจริง *"
+            tooltipKey="step8.contract_signed_date"
+            complianceTarget="contract_signed_date"
+          >
             <div className="space-y-1">
               <ChronologicalDatePicker
                 stepNumber={8}
@@ -6832,7 +6888,7 @@ export function Step8ContractGuaranteeForm({
                 minDate={earliestSigningISO || undefined}
                 maxDate={step7SigningDeadlineISO || undefined}
                 additionalMinDates={[earliestSigningISO]}
-                value={signedDate}
+                value={signedDate || ""}
                 onChange={(v) => onContractExecutionChange({ contract_signed_date: v })}
                 disabled={readOnly}
                 onInvalidDate={() => {
@@ -6848,6 +6904,7 @@ export function Step8ContractGuaranteeForm({
                   }
                 }}
                 showChronologicalHint={false}
+                showChainError={false}
               />
               {signedDate && (
                 <p className="text-xs text-muted-foreground">📅 {formatThaiDate(signedDate)}</p>
@@ -6855,18 +6912,13 @@ export function Step8ContractGuaranteeForm({
               {earliestSigningISO && step7SigningDeadlineISO && (
                 <p className="text-xs text-muted-foreground">
                   ล็อกช่วงวันที่: {formatThaiDateHint(earliestSigningISO)} ถึง{" "}
-                  {formatThaiDateHint(step7SigningDeadlineISO)}
+                  {formatThaiDateHint(step7SigningDeadlineISO)} (หลังวันสิ้นสุดขั้นตอนที่ 7)
                 </p>
               )}
               {earliestSigningISO && !step7SigningDeadlineISO && (
                 <p className="text-xs text-muted-foreground">
                   เลือกได้ตั้งแต่ {formatThaiDateHint(earliestSigningISO)} เป็นต้นไป
-                  {appealDeadlineISO && (
-                    <span>
-                      {" "}
-                      (หลังวันสิ้นสุดอุทธรณ์ {formatThaiDateHint(appealDeadlineISO)})
-                    </span>
-                  )}
+                  <span> (หลังวันสิ้นสุดขั้นตอนที่ 7)</span>
                 </p>
               )}
             </div>
@@ -6929,6 +6981,8 @@ type Step9DetailFormProps = {
   projectName: string;
   /** วันที่ลงนามสัญญาจริง (ขั้นตอนที่ 8) */
   contractSignedDate?: string;
+  /** ระยะเวลาดำเนินการตามสัญญา (วัน) จากขั้นตอนที่ 7 */
+  step7ContractDurationDays?: number | null;
   winningBidderName?: string;
   contractAmount?: number | null;
   egpProjectId?: string;
@@ -7158,16 +7212,13 @@ export function Step9DetailForm({
   docsForStep,
   onDocsChange,
   contractSignedDate = "",
+  step7ContractDurationDays = null,
   winningBidderName = "",
   contractAmount = null,
   egpProjectId = "",
   standardModelCode = "",
   chronologicalCtx,
 }: Step9DetailFormProps) {
-  console.log(
-    "🛡️ [ขั้นตอนที่ 9 DEPLOYED]: e-GP Contract Registration with Live Duration Calculator and Strict Date Validation is active.",
-  );
-
   const schedule = contractSchedule ?? { ...EMPTY_STEP9_CONTRACT_SCHEDULE };
   const signedISO = contractSignedDate?.trim() || "";
   const contractStart = schedule.work_start_date?.trim() || "";
@@ -7175,13 +7226,28 @@ export function Step9DetailForm({
   const startInvalid = !!signedISO && !!contractStart && isISODateBefore(contractStart, signedISO);
   const endInvalid =
     !!contractStart && !!contractEnd && !isISODateBefore(contractStart, contractEnd);
-  const durationDays =
+  const step7Duration =
+    step7ContractDurationDays != null && step7ContractDurationDays > 0
+      ? Math.round(step7ContractDurationDays)
+      : schedule.contract_duration_days != null && schedule.contract_duration_days > 0
+        ? Math.round(schedule.contract_duration_days)
+        : null;
+  const autoEndISO =
+    contractStart && step7Duration
+      ? computeStep9ContractEndDateISO(contractStart, step7Duration)
+      : null;
+  const endDiffersFromAuto =
+    !!contractEnd && !!autoEndISO && contractEnd !== autoEndISO;
+  const reverseDurationDays =
     !startInvalid && !endInvalid
       ? computeStep9ContractDurationDays(
           startInvalid ? "" : contractStart,
           endInvalid ? "" : contractEnd,
         )
       : null;
+  const displayDurationDays = endDiffersFromAuto
+    ? reverseDurationDays
+    : step7Duration ?? reverseDurationDays;
   const installmentDisplay =
     schedule.total_installment_count != null && schedule.total_installment_count > 0
       ? String(schedule.total_installment_count)
@@ -7192,6 +7258,8 @@ export function Step9DetailForm({
     !!signedISO && !!egpPublication && isStep9EgpPublicationTooLate(egpPublication, signedISO);
   const egpPublicationBeforeSigned =
     !!signedISO && !!egpPublication && isISODateBefore(egpPublication, signedISO);
+  const egpSameAsSigned =
+    !!signedISO && isStep9EgpPublicationSameAsSigned(egpPublication, signedISO);
   const [egpPublicationRejected, setEgpPublicationRejected] = useState(false);
 
   useEffect(() => {
@@ -7205,14 +7273,15 @@ export function Step9DetailForm({
 
   const patchContractStart = (iso: string) => {
     if (signedISO && iso && isISODateBefore(iso, signedISO)) return;
-    const next = syncStep9WorkStartDate(schedule, iso);
-    onContractScheduleChange(syncStep9ContractDurationFromDates(next));
+    onContractScheduleChange(
+      applyStep9WorkStartWithAutoEnd(schedule, iso, step7Duration),
+    );
   };
 
   const patchContractEnd = (iso: string) => {
+    if (step7Duration != null) return;
     if (contractStart && iso && !isISODateBefore(contractStart, iso)) return;
-    const next = { ...schedule, contract_end_date: iso };
-    onContractScheduleChange(syncStep9ContractDurationFromDates(next));
+    onContractScheduleChange(applyStep9ContractEndWithReverseDuration(schedule, iso));
   };
 
   return (
@@ -7292,6 +7361,7 @@ export function Step9DetailForm({
           <FieldRow
             label="เลขที่สัญญาจากระบบ e-GP *"
             tooltipKey="step9.egp_contract_control_no"
+            complianceTarget="egp_contract_control_no"
           >
             <input
               type="text"
@@ -7308,6 +7378,7 @@ export function Step9DetailForm({
           <FieldRow
             label="วันที่ประกาศเผยแพร่สาระสำคัญในระบบ e-GP *"
             tooltipKey="step9.egp_essential_publication_date"
+            complianceTarget="egp_essential_publication_date"
           >
             <div className="space-y-1">
               <ChronologicalDatePicker
@@ -7355,6 +7426,11 @@ export function Step9DetailForm({
                   📅 {formatThaiDate(egpPublication)}
                 </p>
               )}
+              {egpSameAsSigned && !egpPublicationBeforeSigned && (
+                <p className="text-xs font-medium text-amber-700 dark:text-amber-400">
+                  {STEP9_EGP_SAME_AS_SIGNED_WARNING}
+                </p>
+              )}
               {(egpPublicationTooLate || egpPublicationRejected) && egpDeadlineISO && (
                 <p className="text-xs text-destructive font-medium">
                   {getStep9EgpPublicationTooLateMsg(egpDeadlineISO)}
@@ -7368,7 +7444,7 @@ export function Step9DetailForm({
             </div>
           </FieldRow>
 
-          <FieldRow label="วันเริ่มต้นสัญญา *">
+          <FieldRow label="วันเริ่มต้นสัญญา *" complianceTarget="work_start_date">
             <div className="space-y-1">
               <ChronologicalDatePicker
                 stepNumber={9}
@@ -7400,10 +7476,15 @@ export function Step9DetailForm({
               {contractStart && !startInvalid && (
                 <p className="text-xs text-muted-foreground">📅 {formatThaiDate(contractStart)}</p>
               )}
+              {startInvalid && contractStart && (
+                <p className="text-xs text-destructive font-medium">
+                  วันเริ่มต้นสัญญาต้องไม่ก่อนวันลงนามสัญญา
+                </p>
+              )}
             </div>
           </FieldRow>
 
-          <FieldRow label="วันสิ้นสุดสัญญา *">
+          <FieldRow label="วันสิ้นสุดสัญญา *" complianceTarget="contract_end_date">
             <div className="space-y-1">
               <ChronologicalDatePicker
                 stepNumber={9}
@@ -7412,7 +7493,7 @@ export function Step9DetailForm({
                 fieldId="contract_end_date"
                 value={endInvalid ? "" : contractEnd}
                 onChange={patchContractEnd}
-                disabled={readOnly || !contractStart}
+                disabled={readOnly || !contractStart || step7Duration != null}
                 onInvalidDate={() =>
                   toast.error("วันสิ้นสุดสัญญาต้องอยู่หลังวันเริ่มต้นสัญญา")
                 }
@@ -7421,8 +7502,18 @@ export function Step9DetailForm({
               {!contractStart && (
                 <p className="text-xs text-muted-foreground">ระบุวันเริ่มต้นสัญญาก่อน</p>
               )}
+              {step7Duration != null && contractStart && (
+                <p className="text-xs text-muted-foreground">
+                  คำนวณอัตโนมัติจากวันเริ่มต้น + {step7Duration} วัน (อ้างอิงขั้นตอนที่ 7 — ล็อกไม่ให้แก้ไข)
+                </p>
+              )}
               {contractEnd && !endInvalid && (
                 <p className="text-xs text-muted-foreground">📅 {formatThaiDate(contractEnd)}</p>
+              )}
+              {autoEndISO && contractEnd === autoEndISO && step7Duration != null && (
+                <p className="text-xs text-muted-foreground">
+                  คำนวณอัตโนมัติ: วันเริ่มต้น + {step7Duration} วัน (จากขั้นตอนที่ 7)
+                </p>
               )}
               {endInvalid && contractEnd && (
                 <p className="text-xs text-destructive font-medium">
@@ -7432,24 +7523,42 @@ export function Step9DetailForm({
             </div>
           </FieldRow>
 
-          <FieldRow label="ระยะเวลาดำเนินการทั้งหมด (วัน)">
-            <input
-              type="text"
-              readOnly
-              aria-readonly
-              value={
-                durationDays != null && durationDays > 0
-                  ? `${durationDays} วัน`
-                  : "— ระบุวันเริ่มต้นและวันสิ้นสุดสัญญาก่อน —"
-              }
-              className={`${inputCls} bg-muted/50 cursor-not-allowed text-foreground`}
-              tabIndex={-1}
-            />
+          <FieldRow label="ระยะเวลาดำเนินการทั้งหมด (วัน)" complianceTarget="contract_duration_days">
+            <div className="space-y-1">
+              <input
+                type="text"
+                readOnly
+                aria-readonly
+                value={
+                  displayDurationDays != null && displayDurationDays > 0
+                    ? `${displayDurationDays} วัน`
+                    : step7Duration != null
+                      ? `${step7Duration} วัน`
+                      : "— ยังไม่พบระยะเวลาจากขั้นตอนที่ 7 —"
+                }
+                className={`${inputCls} bg-muted/50 cursor-not-allowed text-foreground`}
+                tabIndex={-1}
+              />
+              {step7Duration != null && !endDiffersFromAuto && (
+                <p className="text-xs text-muted-foreground">
+                  อ้างอิงจากขั้นตอนที่ 7 (ล็อก — ใช้คำนวณวันสิ้นสุดสัญญาอัตโนมัติ)
+                </p>
+              )}
+              {endDiffersFromAuto && displayDurationDays != null && displayDurationDays > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  คำนวณย้อนกลับจากวันเริ่มต้น–สิ้นสุดที่แก้ไข ({displayDurationDays} วัน)
+                  {step7Duration != null && displayDurationDays !== step7Duration && (
+                    <span> — ต่างจากขั้นตอนที่ 7 ({step7Duration} วัน)</span>
+                  )}
+                </p>
+              )}
+            </div>
           </FieldRow>
 
           <FieldRow
             label="จำนวนงวดงานทั้งหมด *"
             tooltipKey="step9.total_installment_count"
+            complianceTarget="total_installment_count"
           >
             <input
               type="number"
@@ -7473,7 +7582,7 @@ export function Step9DetailForm({
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
             เอกสารแนบหลักฐาน
           </p>
-          <FieldRow label="ประกาศสาระสำคัญของสัญญา (แบบ หส.1) (PDF) *">
+          <FieldRow label="ประกาศสาระสำคัญของสัญญา (แบบ หส.1) (PDF) *" complianceTarget="hs1_doc">
             <InlineDocUpload
               project={project}
               stepNumber={9}

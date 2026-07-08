@@ -417,6 +417,41 @@ export function computeContractEarliestISO(winnerAnnouncementISO: string): strin
   return computeContractEarliestFromAppealDeadlineISO(deadlineISO);
 }
 
+/** รวมวันขั้นต่ำ — คืนวันที่ล่าสุด (เข้มงวดสุด) */
+function mergeMinDateISO(
+  ...candidates: Array<string | null | undefined>
+): string {
+  let best = "";
+  for (const c of candidates) {
+    const trimmed = c?.trim() ?? "";
+    if (!trimmed) continue;
+    if (!best || trimmed > best) best = trimmed;
+  }
+  return best;
+}
+
+export type Step8MinSigningStep7Input = {
+  contractor_received_date?: string | null;
+  actual_contract_signed_date?: string | null;
+};
+
+/**
+ * วันเริ่มต้นที่อนุญาตให้ลงนามสัญญาในขั้นตอนที่ 8
+ * — จากวันสิ้นสุดขั้นตอนที่ 7 (เดดไลน์ออกหนังสือแจ้งทำสัญญา +5 วันทำการ)
+ * ไม่ใช่วันพ้นระยะอุทธรณ์ (ขั้นตอนที่ 6)
+ */
+export function resolveStep8EarliestSigningISO(
+  appealAnchorDate: string,
+  step7Notice?: Step8MinSigningStep7Input | null,
+): string {
+  const step7EndISO = appealAnchorDate
+    ? computeContractNotificationDeadlineISO(appealAnchorDate)
+    : "";
+  const receivedISO = step7Notice?.contractor_received_date?.trim() ?? "";
+  const signedInStep7ISO = step7Notice?.actual_contract_signed_date?.trim() ?? "";
+  return mergeMinDateISO(step7EndISO, receivedISO, signedInStep7ISO);
+}
+
 /**
  * วันลงนาม/ออกหนังสือก่อนพ้นระยะอุทธรณ์ (7 วันทำการจากวันประกาศผล)
  * — ใช้กับขั้นตอนที่ 7 และ 8

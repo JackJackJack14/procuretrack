@@ -1,4 +1,12 @@
-import { STEP2_DOC, STEP3_DOC, STEP4_DOC, STEP5_DOC, STEP6_DOC, STEP7_DOC } from "@/lib/step-doc-types";
+import {
+  STEP2_DOC,
+  STEP3_DOC,
+  STEP4_DOC,
+  STEP5_DOC,
+  STEP6_DOC,
+  STEP7_DOC,
+  STEP9_DOC,
+} from "@/lib/step-doc-types";
 
 export const COMPLIANCE_TARGET_ATTR = "data-compliance-target";
 
@@ -34,6 +42,7 @@ const COMPLIANCE_ISSUE_TO_DOC_TYPE: Record<string, string> = {
   performance_bond_doc: STEP7_DOC.PERFORMANCE_BOND_LETTER,
   performance_bond_exemption_doc: STEP7_DOC.PERFORMANCE_BOND_EXEMPTION_MEMO,
   abandonment_report_doc: STEP7_DOC.ABANDONMENT_REPORT_MEMO,
+  hs1_doc: STEP9_DOC.HS1_ESSENTIAL_CONTRACT,
 };
 
 const DOC_TYPE_TO_COMPLIANCE_TARGET: Record<string, string> = {
@@ -72,6 +81,12 @@ const ISSUE_ID_ALIASES: Record<string, string> = {
   evaluation_committee_text: "evaluation_committee_members",
   inspection_committee_text: "inspection_committee_members",
   performance_bond_amount_min: "performance_bond_amount",
+  egp_publication_before_signed: "egp_essential_publication_date",
+  egp_essential_publication_deadline: "egp_essential_publication_date",
+  work_start_before_signed: "work_start_date",
+  work_start_date_before_signed: "work_start_date",
+  contract_end_after_start: "contract_end_date",
+  contract_end_not_after_start: "contract_end_date",
 };
 
 export function mapRequiredDocToComplianceTarget(documentType: string): string {

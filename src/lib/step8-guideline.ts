@@ -77,7 +77,7 @@ export function formatStep8SigningHolidaySkipsNote(
 }
 
 export function formatStep8TimelineNode1Line(earliestISO: string): string {
-  return `เริ่มลงนามในสัญญาได้ตั้งแต่ ${formatThaiDateHint(earliestISO)} เป็นต้นไป (หลังพ้นระยะอุทธรณ์และวันหยุดยาว)`;
+  return `เริ่มลงนามในสัญญาได้ตั้งแต่ ${formatThaiDateHint(earliestISO)} เป็นต้นไป (หลังวันสิ้นสุดขั้นตอนที่ 7)`;
 }
 
 export function formatStep8TimelineNode2Line(signedISO: string): string {
