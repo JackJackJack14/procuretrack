@@ -84,23 +84,46 @@ import {
   STEP10_INSTALLMENT_DOC,
   STEP10_INSPECTION_RESULT_OPTIONS,
   STEP10_PROJECT_TYPE_OPTIONS,
-  computeStep10InstallmentPenalty,
+  STEP10_PAYMENT_STATUS_OPTIONS,
+  STEP10_SUPERVISOR_REPORT_VERIFIED_LABEL,
+  computeStep10InstallmentPenaltyLive,
+  computeStep10TotalAccumulatedPenalty,
+  computeStep10InstallmentDeliveryAlert,
   computeWarrantyEndDateISO,
+  computeWarrantyDaysRemaining,
+  formatWarrantyCountdownLabel,
   formatStep10PenaltyBaseLabel,
   getStep10PenaltyBaseAmount,
-  groupStep10DocsByInstallment,  isStep10DeliveryBeforeContractStart,
+  getStep10InstallmentDocChecklist,
+  isStep10DeliveryBeforeContractStart,
   isStep10InspectionBeforeDelivery,
   isStep10InspectionBeforeSupervisorReport,
+  canAdvanceStep10PaymentStatus,
+  normalizeStep10PaymentStatus,
+  normalizeStep10InspectionResult,
   PROJECT_STATUS_WARRANTY,
   PROJECT_WARRANTY_STATUS_LABEL,
   resolveLastInstallmentInspectionDate,
-  step10RequiredDocCount,
   step10RowHasRequiredDocs,
+  applyContractAmendmentToPlannedDates,
+  step10AmendmentMinExtendedEndDate,
+  step10AmendmentMinSigningDate,
+  step10AmendmentMaxSigningDate,
+  isStep10AmendmentSigningDateOutOfBounds,
+  STEP10_AMENDMENT_SIGNING_DATE_OUT_OF_BOUNDS_MSG,
+  STEP10_AMENDMENT_APPROVAL_UPLOAD_LABEL,
+  STEP10_AMENDMENT_DOC_MISSING_MSG,
+  step10AmendmentApprovalDocType,
+  resolveStep10AmendmentApprovalDocType,
+  step10DefaultPenaltyRatePct,
+  type Step10ContractAmendment,
+  type Step10PaymentStatus,
 } from "@/lib/step10-contract";
 import {
   STEP10_PENALTY_RATE_CONSTRUCTION_MAX,
   STEP10_PENALTY_RATE_CONSTRUCTION_MIN,
   STEP10_PENALTY_RATE_GENERAL_DEFAULT,
+  todayLocalISO,
 } from "@/lib/step10-guideline";
 import {
   FORM_AUDIT_TRAIL_STANDARD,
@@ -400,34 +423,19 @@ import {
 const inputCls =
   "w-full h-10 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring";
 
-export const STEP5_COMPLIANCE_INLINE_ERROR_MSG =
-  "❌ กรุณากรอกข้อมูล/แนบไฟล์หลักในช่องนี้ให้เรียบร้อย";
-
-export type ComplianceFieldHighlightValue = {
-  submitTriggered: boolean;
-  activeIssueId: string | null;
-  activeMessage: string | null;
-};
-
-export const ComplianceFieldHighlightContext = createContext<ComplianceFieldHighlightValue>({
-  submitTriggered: false,
-  activeIssueId: null,
-  activeMessage: null,
-});
-
-export function ComplianceFieldHighlightProvider({
-  value,
-  children,
-}: {
-  value: ComplianceFieldHighlightValue;
-  children: React.ReactNode;
-}) {
-  return (
-    <ComplianceFieldHighlightContext.Provider value={value}>
-      {children}
-    </ComplianceFieldHighlightContext.Provider>
-  );
-}
+import {
+  ComplianceFieldHighlightContext,
+  ComplianceFieldHighlightProvider,
+  STEP5_COMPLIANCE_INLINE_ERROR_MSG,
+  type ComplianceFieldHighlightValue,
+} from "@/components/steps/compliance-field-highlight";
+import { scrollToComplianceError } from "@/lib/compliance-scroll";
+export {
+  ComplianceFieldHighlightContext,
+  ComplianceFieldHighlightProvider,
+  STEP5_COMPLIANCE_INLINE_ERROR_MSG,
+  type ComplianceFieldHighlightValue,
+} from "@/components/steps/compliance-field-highlight";
 
 export function complianceHighlightInputCls(base: string, highlighted: boolean): string {
   return highlighted
@@ -7670,6 +7678,12 @@ type Step10DetailFormProps = Omit<
   executiveReportSource: ExecutiveReportProject;
   warrantyEndDate?: string | null;
   warrantyStartedAt?: string | null;
+  contractAmendments?: Step10ContractAmendment[];
+  onContractAmendmentsChange?: (amendments: Step10ContractAmendment[]) => void;
+  /** วันครบกำหนดต่องวดจาก pipeline (Step 9 + การแก้ไขสัญญา) — แหล่งอ้างอิงสำหรับแสดงผลทันที */
+  installmentPlannedDates?: string[];
+  onApplyContractAmendment?: (amendment: Step10ContractAmendment) => void;
+  effectiveContractEndDate?: string;
 };
 
 /** ขั้นตอนที่ 10 — บริหารสัญญาและตรวจรับพัสดุ (ข้อ 176–179) */
@@ -7688,16 +7702,36 @@ export function Step10DetailForm({
   executiveReportSource,
   warrantyEndDate = null,
   warrantyStartedAt = null,
+  contractAmendments = [],
+  onContractAmendmentsChange,
+  installmentPlannedDates = [],
+  onApplyContractAmendment,
+  effectiveContractEndDate = "",
   ...genericProps
 }: Step10DetailFormProps) {
-  console.log(
-    "🛡️ [ขั้นตอนที่ 10 GRAND FINALE - CONSTRUCTION READY]: Terminology refactored. Dynamic Installment Loop, Calendar-Day Fine Calculator, and Conditional Construction Fields (Reg. 176) are fully functional.",
-  );
-
   const contractStart = contractStartDate?.trim() ?? "";
-  const contractEnd = contractEndDate?.trim() ?? "";
-  const requiredDocsPerInstallment = step10RequiredDocCount(projectType);
+  const baseContractEnd = contractEndDate?.trim() ?? "";
+  const contractEnd = (effectiveContractEndDate || contractEndDate)?.trim() ?? "";
+  const todayISO = todayLocalISO();
   const uploadedDocTypes = genericProps.docsForStep.map((d) => d.document_type);
+
+  /** วันครบกำหนดจริงต่องวด — pipeline มี priority; งวดสุดท้าย reactive ตามวันสิ้นสุดสัญญา */
+  const resolveInstallmentPlannedDate = (installmentNo: number, rowPlanned: string): string => {
+    const fromPipeline = installmentPlannedDates[installmentNo - 1]?.trim();
+    if (fromPipeline) return fromPipeline;
+    if (installmentNo === totalInstallmentCount && totalInstallmentCount > 0) {
+      const hasExtendedAmendment = contractAmendments.some(
+        (a) => a.extended_contract_end_date?.trim(),
+      );
+      const end = hasExtendedAmendment
+        ? effectiveContractEndDate?.trim() || baseContractEnd
+        : baseContractEnd;
+      if (end) return end;
+    }
+    return rowPlanned?.trim() || "";
+  };
+
+  const contractPolicyPenaltyRate = step10DefaultPenaltyRatePct(projectType);
 
   const patchRow = (installmentNo: number, patch: Partial<Step10InspectionRow>) => {
     onInspectionRowsChange(
@@ -7705,6 +7739,207 @@ export function Step10DetailForm({
         row.installment_no === installmentNo ? { ...row, ...patch } : row,
       ),
     );
+  };
+
+  const accumulatedPenalty = useMemo(
+    () =>
+      computeStep10TotalAccumulatedPenalty({
+        projectType,
+        contractAmount,
+        totalInstallments: totalInstallmentCount,
+        rows: inspectionRows,
+        asOfISO: todayISO,
+      }),
+    [projectType, contractAmount, totalInstallmentCount, inspectionRows, todayISO],
+  );
+
+  const complianceCtx = useContext(ComplianceFieldHighlightContext);
+
+  const handlePaymentStatusChange = (installmentNo: number, target: Step10PaymentStatus) => {
+    const row = inspectionRows.find((r) => r.installment_no === installmentNo);
+    if (!row) return;
+    const hasRequiredDocs = step10RowHasRequiredDocs(
+      installmentNo,
+      uploadedDocTypes,
+      projectType,
+    );
+    const gate = canAdvanceStep10PaymentStatus(
+      target,
+      row,
+      projectType,
+      hasRequiredDocs,
+      installmentNo,
+      uploadedDocTypes,
+    );
+    if (!gate.ok) {
+      complianceCtx.raiseComplianceIssue?.(gate.message, gate.issueId);
+      return;
+    }
+    patchRow(installmentNo, { payment_status: target });
+    complianceCtx.clearFieldHighlight?.(`installment-${installmentNo}-payment_status`);
+  };
+
+  /**
+   * Gate การตั้งผลตรวจรับ = "ผ่านการตรวจรับถูกต้องครบถ้วน"
+   * ห้าม Blind Pass เป็นสีเขียว หากวันส่งมอบจริง / วันตรวจรับ / เอกสารบังคับยังไม่ครบ 100%
+   */
+  const handleInspectionResultChange = (installmentNo: number, value: string) => {
+    if (value === "passed") {
+      const row = inspectionRows.find((r) => r.installment_no === installmentNo);
+      if (!row?.delivery_date?.trim()) {
+        complianceCtx.raiseComplianceIssue?.(
+          `งวดที่ ${installmentNo}: ต้องระบุ「วันที่ผู้รับจ้างส่งมอบงานจริง」ก่อนบันทึกผลผ่านการตรวจรับ`,
+          `installment-${installmentNo}-delivery_date`,
+        );
+        return;
+      }
+      if (!row?.inspection_date?.trim()) {
+        complianceCtx.raiseComplianceIssue?.(
+          `งวดที่ ${installmentNo}: ต้องระบุ「วันที่คณะกรรมการตรวจรับพัสดุจริง」ก่อนบันทึกผลผ่านการตรวจรับ`,
+          `installment-${installmentNo}-inspection_date`,
+        );
+        return;
+      }
+      if (!step10RowHasRequiredDocs(installmentNo, uploadedDocTypes, projectType)) {
+        const checklist = getStep10InstallmentDocChecklist(
+          installmentNo,
+          uploadedDocTypes,
+          projectType,
+        );
+        const missing = checklist.find((d) => d.required && !d.uploaded);
+        const issueSuffix =
+          missing?.key === "delivery"
+            ? "delivery_letter_doc"
+            : missing?.key === "supervisor"
+              ? "supervisor_report_doc"
+              : "inspection_report_doc";
+        complianceCtx.raiseComplianceIssue?.(
+          `งวดที่ ${installmentNo}: ต้องแนบเอกสารบังคับให้ครบ 3/3 ก่อนบันทึกผลผ่านการตรวจรับ — ขาด: ${missing?.label ?? "เอกสารบังคับ"}`,
+          `installment-${installmentNo}-${issueSuffix}`,
+        );
+        return;
+      }
+    }
+    patchRow(installmentNo, {
+      inspection_result: value,
+      installment_status: value === "passed" ? "inspection_passed" : "",
+    });
+    complianceCtx.clearFieldHighlight?.(`installment-${installmentNo}-inspection_result`);
+  };
+
+  const [amendmentDraft, setAmendmentDraft] = useState({
+    amendment_date: "",
+    description: "",
+    extended_contract_end_date: "",
+  });
+  const [pendingAmendmentId, setPendingAmendmentId] = useState(
+    () => `amendment-${Date.now()}`,
+  );
+  const pendingAmendmentDocType = useMemo(
+    () => step10AmendmentApprovalDocType(pendingAmendmentId, contractAmendments.length + 1),
+    [pendingAmendmentId, contractAmendments.length],
+  );
+  const hasPendingAmendmentDoc = genericProps.docsForStep.some(
+    (d) => d.document_type === pendingAmendmentDocType,
+  );
+
+  const findAmendmentDoc = (amendment: Step10ContractAmendment, sequenceNo: number) => {
+    const docType = resolveStep10AmendmentApprovalDocType(amendment, sequenceNo);
+    return genericProps.docsForStep.find((d) => d.document_type === docType) ?? null;
+  };
+
+  const applyAmendment = () => {
+    if (!amendmentDraft.description.trim()) {
+      toast.error("กรุณาระบุรายละเอียดการแก้ไขสัญญา");
+      return;
+    }
+    const signingDate = amendmentDraft.amendment_date.trim();
+    if (!signingDate) {
+      complianceCtx.raiseComplianceIssue?.(
+        "กรุณาระบุวันที่แก้ไขสัญญา (วันที่ลงนามในสัญญาแก้ไข)",
+        "amendment-signing-date",
+      );
+      return;
+    }
+    if (
+      isStep10AmendmentSigningDateOutOfBounds(contractStart, baseContractEnd, signingDate)
+    ) {
+      complianceCtx.raiseComplianceIssue?.(
+        STEP10_AMENDMENT_SIGNING_DATE_OUT_OF_BOUNDS_MSG,
+        "amendment-signing-date",
+      );
+      return;
+    }
+    const currentEnd = (effectiveContractEndDate || contractEndDate)?.trim() ?? "";
+    const newEnd = amendmentDraft.extended_contract_end_date.trim();
+    if (newEnd) {
+      if (!currentEnd) {
+        toast.error("ยังไม่มีวันสิ้นสุดสัญญาเดิมในระบบ — ไม่สามารถบันทึกการขยายเวลาได้");
+        return;
+      }
+      if (newEnd <= currentEnd) {
+        toast.error(
+          `วันสิ้นสุดสัญญาใหม่ต้องมากกว่าวันสิ้นสุดสัญญาเดิม (${formatThaiDateHint(currentEnd)})`,
+        );
+        return;
+      }
+    }
+    if (!hasPendingAmendmentDoc) {
+      complianceCtx.raiseComplianceIssue?.(
+        STEP10_AMENDMENT_DOC_MISSING_MSG,
+        "amendment-approval-doc",
+        pendingAmendmentDocType,
+      );
+      return;
+    }
+    const next: Step10ContractAmendment = {
+      id: pendingAmendmentId,
+      amendment_date: signingDate,
+      description: amendmentDraft.description.trim(),
+      extended_contract_end_date: newEnd,
+      approval_document_type: pendingAmendmentDocType,
+    };
+
+    if (onApplyContractAmendment) {
+      onApplyContractAmendment(next);
+    } else {
+      onContractAmendmentsChange?.([...contractAmendments, next]);
+      if (next.extended_contract_end_date && totalInstallmentCount > 0) {
+        const newPlanned = applyContractAmendmentToPlannedDates(
+          contractStart,
+          next.extended_contract_end_date,
+          totalInstallmentCount,
+          inspectionRows.map((r) => r.planned_completion_date),
+        );
+        if (newPlanned.length > 0) {
+          onInspectionRowsChange(
+            inspectionRows.map((row, idx) => ({
+              ...row,
+              planned_completion_date: newPlanned[idx] ?? row.planned_completion_date,
+            })),
+          );
+        }
+      }
+    }
+
+    if (next.extended_contract_end_date && totalInstallmentCount > 0) {
+      toast.success("ปรับวันครบกำหนดงวดงานสุดท้ายตามการขยายเวลาสัญญาแล้ว");
+    } else {
+      toast.success("บันทึกประวัติการแก้ไขสัญญาแล้ว");
+    }
+
+    complianceCtx.clearFieldHighlight?.("amendment-signing-date");
+    complianceCtx.clearFieldHighlight?.("amendment-approval-doc");
+    setPendingAmendmentId(`amendment-${Date.now()}`);
+    setAmendmentDraft({
+      amendment_date: "",
+      description: "",
+      extended_contract_end_date: "",
+    });
+  };
+
+  const removeAmendment = (id: string) => {
+    onContractAmendmentsChange?.(contractAmendments.filter((a) => a.id !== id));
   };
 
   const patchDeliveryDate = (installmentNo: number, iso: string) => {
@@ -7717,20 +7952,17 @@ export function Step10DetailForm({
     if (row && iso && row.inspection_date && isStep10InspectionBeforeDelivery(iso, row.inspection_date)) {
       next.inspection_date = "";
     }
+    // ล้างผลตรวจรับ "ผ่าน" หากลบวันส่งมอบจริง เพื่อกันสถานะสีเขียวค้าง (ข้อมูลไม่ครบ)
+    if (!iso?.trim() && normalizeStep10InspectionResult(row?.inspection_result) === "passed") {
+      next.inspection_result = "";
+      next.installment_status = "";
+    }
     patchRow(installmentNo, next);
   };
 
   const handleProjectTypeChange = (nextType: Step10ProjectType) => {
     onProjectTypeChange(nextType);
   };
-
-  const installmentDocMap = useMemo(
-    () =>
-      groupStep10DocsByInstallment(
-        genericProps.docsForStep.filter((d) => d.document_type !== STEP10_GUARANTEE_RETURN_DOC),
-      ),
-    [genericProps.docsForStep],
-  );
 
   const isWarrantyPhase = projectStatus === PROJECT_STATUS_WARRANTY;
   const previewWarrantyEnd =
@@ -7739,9 +7971,36 @@ export function Step10DetailForm({
     "";
   const previewWarrantyStart =
     warrantyStartedAt?.trim() || resolveLastInstallmentInspectionDate(inspectionRows) || "";
+  const warrantyDaysRemaining = useMemo(
+    () =>
+      previewWarrantyEnd
+        ? computeWarrantyDaysRemaining(previewWarrantyEnd, todayISO)
+        : null,
+    [previewWarrantyEnd, todayISO],
+  );
+  const warrantyCountdownLabel = formatWarrantyCountdownLabel(warrantyDaysRemaining);
 
   const [expandedInstallment, setExpandedInstallment] = useState<number | null>(null);
   const [reportGenerating, setReportGenerating] = useState(false);
+
+  useEffect(() => {
+    if (!complianceCtx.submitTriggered || !complianceCtx.activeIssueId) return;
+    const issueId = complianceCtx.activeIssueId;
+    const m = /^installment-(\d+)/.exec(issueId);
+    if (m) {
+      setExpandedInstallment(Number(m[1]));
+    }
+    const t = window.setTimeout(() => {
+      scrollToComplianceError(issueId);
+    }, m ? 80 : 0);
+    return () => window.clearTimeout(t);
+  }, [complianceCtx.submitTriggered, complianceCtx.activeIssueId]);
+
+  const amendmentMinSigningDate = step10AmendmentMinSigningDate(contractStart) || undefined;
+  const amendmentMinExtendedEnd =
+    step10AmendmentMinExtendedEndDate(contractEnd) || undefined;
+  const amendmentMaxSigningDate =
+    step10AmendmentMaxSigningDate(baseContractEnd) || undefined;
 
   const toggleInstallmentAccordion = (installmentNo: number) => {
     setExpandedInstallment((prev) => (prev === installmentNo ? null : installmentNo));
@@ -7814,6 +8073,13 @@ export function Step10DetailForm({
               }
               className={`${inputCls} bg-muted/50 cursor-not-allowed tabular-nums`}
             />
+            {effectiveContractEndDate &&
+              contractEndDate?.trim() &&
+              effectiveContractEndDate !== contractEndDate.trim() && (
+                <p className="text-xs text-amber-800 mt-1">
+                  ปรับตามการขยายเวลาสัญญา (เดิม {formatThaiDateHint(contractEndDate)})
+                </p>
+              )}
           </FieldRow>
         </div>
         <FieldRow label="คณะกรรมการตรวจรับพัสดุ (จากขั้นตอนที่ 4)">
@@ -7859,6 +8125,178 @@ export function Step10DetailForm({
         )}
       </div>
 
+      {accumulatedPenalty.totalPenaltyBaht > 0 && (
+        <div className="rounded-lg border-2 border-red-300 bg-red-50 px-4 py-3 space-y-1">
+          <p className="text-sm font-bold text-red-800">
+            ค่าปรับสะสมทั้งสัญญา (ประมาณการณ์จากวันปฏิทิน รวมวันหยุด)
+          </p>
+          <p className="text-2xl font-extrabold text-red-700 tabular-nums">
+            {formatBaht(accumulatedPenalty.totalPenaltyBaht)} บาท
+          </p>
+          <p className="text-xs text-red-700/90">
+            คำนวณอัตโนมัติจาก {accumulatedPenalty.rowsWithPenalty} งวดที่เลยกำหนด
+            (อัปเดต ณ วันนี้ {formatThaiDateHint(todayISO)})
+          </p>
+        </div>
+      )}
+
+      <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
+        <div>
+          <p className="text-sm font-medium text-foreground">ประวัติการแก้ไขสัญญา (ถ้ามี)</p>
+          <p className="text-xs text-muted-foreground mt-1">
+            บันทึกการขยายเวลาสัญญา — ระบบปรับวันครบกำหนดงวดงานอัตโนมัติเพื่อคำนวณค่าปรับให้ถูกต้อง
+          </p>
+        </div>
+        {contractAmendments.length > 0 && (
+          <ul className="space-y-2">
+            {contractAmendments.map((a, amendmentIndex) => {
+              const amendmentDoc = findAmendmentDoc(a, amendmentIndex + 1);
+              return (
+              <li
+                key={a.id}
+                className="flex flex-wrap items-start justify-between gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm"
+              >
+                <div>
+                  <p className="font-medium">
+                    {a.amendment_date ? formatThaiDateHint(a.amendment_date) : "—"} — {a.description}
+                  </p>
+                  {a.extended_contract_end_date && (
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      วันสิ้นสุดสัญญาใหม่: {formatThaiDateHint(a.extended_contract_end_date)}
+                    </p>
+                  )}
+                </div>
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  {amendmentDoc ? (
+                    <button
+                      type="button"
+                      onClick={() => openStepDocument(amendmentDoc.storage_path)}
+                      className="inline-flex items-center gap-1 rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1 text-xs font-medium text-primary hover:bg-primary/10"
+                    >
+                      ดูเอกสาร
+                    </button>
+                  ) : (
+                    <span className="text-xs text-amber-700">ยังไม่มีไฟล์แนบ</span>
+                  )}
+                  {!genericProps.readOnly && (
+                    <button
+                      type="button"
+                      onClick={() => removeAmendment(a.id)}
+                      className="text-xs text-destructive hover:underline"
+                    >
+                      ลบ
+                    </button>
+                  )}
+                </div>
+              </li>
+            );
+            })}
+          </ul>
+        )}
+        {!genericProps.readOnly && (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 pt-1 border-t border-border/60">
+            <FieldRow
+              label="วันที่แก้ไขสัญญา (วันที่ลงนามในสัญญาแก้ไข) *"
+              complianceTarget="amendment-signing-date"
+            >
+              <ThaiDatePicker
+                value={amendmentDraft.amendment_date}
+                onChange={(iso) => {
+                  setAmendmentDraft((prev) => ({ ...prev, amendment_date: iso }));
+                  complianceCtx.clearFieldHighlight?.("amendment-signing-date");
+                }}
+                minDate={amendmentMinSigningDate}
+                maxDate={amendmentMaxSigningDate}
+                onInvalidDate={() =>
+                  complianceCtx.raiseComplianceIssue?.(
+                    STEP10_AMENDMENT_SIGNING_DATE_OUT_OF_BOUNDS_MSG,
+                    "amendment-signing-date",
+                  )
+                }
+              />
+              {contractStart && baseContractEnd && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  เลือกได้ตั้งแต่ {formatThaiDateHint(contractStart)} ถึง{" "}
+                  {formatThaiDateHint(baseContractEnd)} (ห้ามย้อนหลังก่อนวันเริ่มต้นสัญญา)
+                </p>
+              )}
+            </FieldRow>
+            <FieldRow
+              label="วันสิ้นสุดสัญญาใหม่ (กรณีขยายเวลา)"
+              complianceTarget="amendment-extended-end"
+            >
+              <ThaiDatePicker
+                value={amendmentDraft.extended_contract_end_date}
+                onChange={(iso) =>
+                  setAmendmentDraft((prev) => ({
+                    ...prev,
+                    extended_contract_end_date: iso,
+                  }))
+                }
+                minDate={amendmentMinExtendedEnd}
+                onInvalidDate={() =>
+                  toast.error(
+                    contractEnd
+                      ? `วันสิ้นสุดสัญญาใหม่ต้องมากกว่าวันสิ้นสุดสัญญาเดิม (${formatThaiDateHint(contractEnd)})`
+                      : "ยังไม่มีวันสิ้นสุดสัญญาเดิมในระบบ",
+                  )
+                }
+              />
+              {contractEnd && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  เลือกได้ตั้งแต่วันถัดจาก {formatThaiDateHint(contractEnd)} เท่านั้น (ห้ามย้อนหลัง)
+                </p>
+              )}
+            </FieldRow>
+            <div className="sm:col-span-2 lg:col-span-3">
+              <FieldRow label="รายละเอียดการแก้ไข *">
+                <input
+                  type="text"
+                  value={amendmentDraft.description}
+                  onChange={(e) =>
+                    setAmendmentDraft((prev) => ({ ...prev, description: e.target.value }))
+                  }
+                  className={inputCls}
+                  placeholder="เช่น ขยายเวลาสัญญาตามบันทึกข้อความเลขที่..."
+                />
+              </FieldRow>
+            </div>
+            <div className="sm:col-span-2 lg:col-span-3">
+              <FieldRow
+                label={STEP10_AMENDMENT_APPROVAL_UPLOAD_LABEL}
+                complianceTarget="amendment-approval-doc"
+              >
+                <InlineDocUpload
+                  project={genericProps.project}
+                  stepNumber={10}
+                  documentType={pendingAmendmentDocType}
+                  label={STEP10_AMENDMENT_APPROVAL_UPLOAD_LABEL}
+                  existing={genericProps.docsForStep}
+                  onChange={genericProps.onDocsChange}
+                  filePolicyId="pdf_only"
+                  hasError={
+                    complianceCtx.submitTriggered &&
+                    complianceCtx.activeIssueId === "amendment-approval-doc"
+                  }
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  รองรับเฉพาะไฟล์ .pdf — บังคับแนบก่อนกดเพิ่มประวัติการแก้ไขสัญญา (สตง.)
+                </p>
+              </FieldRow>
+            </div>
+            <div className="sm:col-span-2 lg:col-span-3">
+              <button
+                type="button"
+                onClick={applyAmendment}
+                className={`${HELPER_BUTTON_MD}`}
+              >
+                เพิ่มประวัติการแก้ไขสัญญา
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
       <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <p className="text-sm font-medium text-foreground">
@@ -7899,22 +8337,39 @@ export function Step10DetailForm({
           <div className="space-y-2">
             {inspectionRows.map((row) => {
               const n = row.installment_no;
+              const plannedDate = resolveInstallmentPlannedDate(n, row.planned_completion_date);
               const isOpen = expandedInstallment === n;
-              const installmentDocs = installmentDocMap.get(n) ?? [];
-              const docCount = installmentDocs.length;
               const hasRequiredDocs = step10RowHasRequiredDocs(
                 n,
                 uploadedDocTypes,
                 projectType,
               );
-              const penaltyResult = computeStep10InstallmentPenalty({
+              const docChecklist = getStep10InstallmentDocChecklist(
+                n,
+                uploadedDocTypes,
+                projectType,
+              );
+              const docsUploadedCount = docChecklist.filter((d) => d.uploaded).length;
+              const docsRequiredCount = docChecklist.filter((d) => d.required).length;
+              const penaltyResult = computeStep10InstallmentPenaltyLive({
                 projectType,
                 contractAmount,
                 totalInstallments: totalInstallmentCount,
-                penaltyRatePct: row.penalty_rate_pct,
-                plannedISO: row.planned_completion_date,
+                penaltyRatePct: row.penalty_rate_pct ?? contractPolicyPenaltyRate,
+                plannedISO: plannedDate,
                 actualDeliveryISO: row.delivery_date,
+                inspectionResult: row.inspection_result,
+                asOfISO: todayISO,
               });
+              const paymentStatus = normalizeStep10PaymentStatus(row.payment_status);
+              const deliveryAlert = computeStep10InstallmentDeliveryAlert(
+                plannedDate,
+                paymentStatus,
+                todayISO,
+              );
+              const paymentStatusLabel =
+                STEP10_PAYMENT_STATUS_OPTIONS.find((o) => o.value === paymentStatus)?.label ??
+                paymentStatus;
               const penaltyBaseAmount = getStep10PenaltyBaseAmount({
                 projectType,
                 contractAmount,
@@ -7928,13 +8383,27 @@ export function Step10DetailForm({
                 row.construction_synced === true ||
                 Boolean(row.site_diary?.trim()) ||
                 Boolean(row.site_obstacles?.trim());
-              const resultLabel = step10InspectionResultLabel(row.inspection_result);
+              const normalizedResult = normalizeStep10InspectionResult(row.inspection_result);
+              // สีเขียว "ผ่านการตรวจรับถูกต้องครบถ้วน" ได้ต่อเมื่อข้อมูลครบ 100% เท่านั้น (ห้าม Blind Pass)
+              const inspectionGenuinelyPassed =
+                normalizedResult === "passed" &&
+                Boolean(row.delivery_date?.trim()) &&
+                Boolean(row.inspection_date?.trim()) &&
+                hasRequiredDocs;
+              const displayResultValue = inspectionGenuinelyPassed
+                ? "passed"
+                : normalizedResult === "defects"
+                  ? "defects"
+                  : "";
+              const resultLabel = inspectionGenuinelyPassed
+                ? step10InspectionResultLabel("passed")
+                : normalizedResult === "defects"
+                  ? step10InspectionResultLabel("defects")
+                  : normalizedResult === "passed"
+                    ? "รอตรวจรับ (ข้อมูลไม่ครบ)"
+                    : "รอตรวจรับ";
               const fieldsDisabled = genericProps.readOnly || isWarrantyPhase;
-              const procurementPolicyDisabled = genericProps.readOnly;
-              const inspectionMinDate =
-                projectType === "construction" && row.supervisor_report_date?.trim()
-                  ? row.supervisor_report_date
-                  : row.delivery_date;
+              const inspectionMinDate = row.delivery_date;
 
               return (
                 <div
@@ -7962,24 +8431,30 @@ export function Step10DetailForm({
                     <span className="text-xs text-muted-foreground hidden sm:inline">·</span>
                     <span className="text-xs text-muted-foreground shrink-0">
                       ครบกำหนด{" "}
-                      {row.planned_completion_date
-                        ? formatThaiDateHint(row.planned_completion_date)
-                        : "—"}
+                      {plannedDate ? formatThaiDateHint(plannedDate) : "—"}
                     </span>
                     <span
-                      className={`text-xs px-2 py-0.5 rounded-full border font-medium shrink-0 ${step10InspectionResultBadgeClass(row.inspection_result)}`}
+                      className={`text-xs px-2 py-0.5 rounded-full border font-medium shrink-0 ${step10InspectionResultBadgeClass(displayResultValue)}`}
                     >
                       {resultLabel}
+                    </span>
+                    <span className="text-xs px-2 py-0.5 rounded-full border border-slate-300 bg-slate-50 text-slate-700 font-medium shrink-0">
+                      {paymentStatusLabel}
                     </span>
                     {penaltyResult.penaltyBaht > 0 && (
                       <span className="text-xs font-semibold text-red-600 shrink-0">
                         ค่าปรับ {formatBaht(penaltyResult.penaltyBaht)} บาท ({penaltyResult.daysLate} วัน)
+                        {penaltyResult.isOngoingAccumulation
+                          ? " · สะสมต่อเนื่อง"
+                          : penaltyResult.isLiveEstimate
+                            ? " · ประมาณการ"
+                            : ""}
                       </span>
                     )}
                     <span
-                      className={`text-xs px-2 py-0.5 rounded-full border font-medium shrink-0 ml-auto ${step10DocsCountBadgeClass(docCount, requiredDocsPerInstallment)}`}
+                      className={`text-xs px-2 py-0.5 rounded-full border font-medium shrink-0 ml-auto ${step10DocsCountBadgeClass(docsUploadedCount, docsRequiredCount)}`}
                     >
-                      เอกสาร {hasRequiredDocs ? "ครบ" : `${docCount}/${requiredDocsPerInstallment}`}
+                      เอกสารบังคับ {hasRequiredDocs ? "ครบ" : `${docsUploadedCount}/${docsRequiredCount}`}
                     </span>
                   </button>
 
@@ -7988,19 +8463,64 @@ export function Step10DetailForm({
                     aria-hidden={!isOpen}
                   >
                     <div className="p-4 space-y-4 bg-muted/5">
+                      {deliveryAlert && (
+                        <div
+                          className={`rounded-md border px-3 py-2 text-sm font-medium ${
+                            deliveryAlert.level === "red"
+                              ? "border-red-300 bg-red-50 text-red-800"
+                              : "border-amber-300 bg-amber-50 text-amber-900"
+                          }`}
+                        >
+                          {deliveryAlert.level === "yellow" ? "⚠️ " : "🚨 "}
+                          {deliveryAlert.message}
+                        </div>
+                      )}
+
+                      <FieldRow
+                        label="สถานะเบิกจ่ายงวดงาน *"
+                        complianceTarget={`installment-${n}-payment_status`}
+                      >
+                        <select
+                          value={paymentStatus}
+                          onChange={(e) =>
+                            handlePaymentStatusChange(
+                              n,
+                              e.target.value as Step10PaymentStatus,
+                            )
+                          }
+                          disabled={fieldsDisabled}
+                          className={inputCls}
+                        >
+                          {STEP10_PAYMENT_STATUS_OPTIONS.map((opt) => (
+                            <option key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          รอตรวจรับ → ตรวจรับแล้ว → ส่งเรื่องเบิก → จ่ายเงินแล้ว
+                        </p>
+                      </FieldRow>
+
                       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                         <FieldRow
                           label="วันครบกำหนดส่งมอบประจำงวดตามสัญญา *"
                           complianceTarget={`installment-${n}-planned_date`}
                         >
-                          <ChronologicalDatePicker
-                            stepNumber={10}
-                            chronologicalCtx={genericProps.chronologicalCtx}
-                            value={row.planned_completion_date}
-                            onChange={(iso) => patchRow(n, { planned_completion_date: iso })}
-                            disabled={fieldsDisabled}
-                            showChronologicalHint={false}
+                          <input
+                            type="text"
+                            readOnly
+                            value={
+                              plannedDate
+                                ? formatThaiDateHint(plannedDate)
+                                : "— ดึงจากขั้นตอนที่ 9 —"
+                            }
+                            className={`${inputCls} bg-muted/50 cursor-not-allowed tabular-nums`}
+                            tabIndex={-1}
                           />
+                          <p className="text-xs text-muted-foreground mt-1">
+                            ค่าคงที่จากตารางงวดงาน (Step 9) — ห้ามแก้ไข
+                          </p>
                         </FieldRow>
                         <FieldRow
                           label="เลขที่หนังสือส่งมอบงาน *"
@@ -8015,125 +8535,197 @@ export function Step10DetailForm({
                             placeholder="เช่น กค 1234/2568"
                           />
                         </FieldRow>
-                        <FieldRow
-                          label="วันที่คู่สัญญาส่งมอบงานจริง *"
-                          complianceTarget={`installment-${n}-delivery_date`}
-                        >
-                          <ChronologicalDatePicker
-                            stepNumber={10}
-                            chronologicalCtx={genericProps.chronologicalCtx}
-                            additionalMinDates={contractStart ? [contractStart] : []}
-                            fieldId="delivery_date"
-                            installmentNo={n}
-                            value={row.delivery_date}
-                            onChange={(iso) => patchDeliveryDate(n, iso)}
-                            disabled={fieldsDisabled}
-                            onInvalidDate={() =>
-                              toast.error("วันที่ส่งมอบงานจริงต้องไม่ก่อนวันเริ่มต้นสัญญา")
-                            }
-                            showChronologicalHint={false}
-                          />
-                        </FieldRow>
-                        <FieldRow
-                          label="วันที่คณะกรรมการตรวจรับจริง *"
-                          complianceTarget={`installment-${n}-inspection_date`}
-                        >
-                          <ChronologicalDatePicker
-                            stepNumber={10}
-                            chronologicalCtx={genericProps.chronologicalCtx}
-                            intraStepMinDate={inspectionMinDate}
-                            fieldId="inspection_date"
-                            installmentNo={n}
-                            value={row.inspection_date}
-                            onChange={(iso) => patchRow(n, { inspection_date: iso })}
-                            disabled={fieldsDisabled || !row.delivery_date?.trim()}
-                            onInvalidDate={() =>
-                              toast.error(
-                                projectType === "construction"
-                                  ? "วันตรวจรับต้องไม่ก่อนวันส่งมอบงานและวันรายงานผู้ควบคุมงาน"
-                                  : "วันตรวจรับต้องไม่ก่อนวันที่คู่สัญญาส่งมอบงานจริง",
-                              )
-                            }
-                            showChronologicalHint={false}
-                          />
-                        </FieldRow>
-                        <FieldRow
-                          label="ผลการตรวจรับ *"
-                          complianceTarget={`installment-${n}-inspection_result`}
-                        >
-                          <select
-                            value={row.inspection_result}
-                            onChange={(e) =>
-                              patchRow(n, {
-                                inspection_result: e.target.value,
-                                installment_status:
-                                  e.target.value === "passed" ? "inspection_passed" : "",
-                              })
-                            }
-                            disabled={fieldsDisabled}
-                            className={inputCls}
+                      </div>
+
+                      <div className="rounded-md border border-sky-200/80 bg-sky-50/50 px-3 py-3 space-y-4">
+                        <div>
+                          <p className="text-sm font-medium text-foreground">
+                            วันที่สำคัญตามระเบียบฯ (แยกชัดเจน)
+                          </p>
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            ค่าปรับ: ผ่านตรวจรับ → หยุดนับในวันส่งมอบจริง · ข้อบกพร่อง → สะสมต่อเนื่องถึงวันนี้
+                          </p>
+                        </div>
+                        <div className="grid gap-4 sm:grid-cols-2">
+                          <FieldRow
+                            label="1) วันที่ผู้รับจ้างส่งมอบงานจริง *"
+                            complianceTarget={`installment-${n}-delivery_date`}
                           >
-                            <option value="">— เลือกผลการตรวจรับ —</option>
-                            {STEP10_INSPECTION_RESULT_OPTIONS.map((opt) => (
-                              <option key={opt.value} value={opt.value}>
-                                {opt.label}
-                              </option>
-                            ))}
-                          </select>
-                        </FieldRow>
+                            <ChronologicalDatePicker
+                              stepNumber={10}
+                              chronologicalCtx={genericProps.chronologicalCtx}
+                              additionalMinDates={contractStart ? [contractStart] : []}
+                              fieldId="delivery_date"
+                              installmentNo={n}
+                              value={row.delivery_date}
+                              onChange={(iso) => patchDeliveryDate(n, iso)}
+                              disabled={fieldsDisabled}
+                              onInvalidDate={() =>
+                                toast.error("วันที่ผู้รับจ้างส่งมอบงานจริงต้องไม่ก่อนวันเริ่มต้นสัญญา")
+                              }
+                              showChronologicalHint={false}
+                            />
+                            <p className="text-xs text-muted-foreground mt-1">
+                              ใช้คำนวณค่าปรับ (วันปฏิทิน) หากส่งมอบหลังวันครบกำหนดประจำงวด
+                            </p>
+                          </FieldRow>
+                          <FieldRow
+                            label="2) วันที่คณะกรรมการตรวจรับพัสดุจริง *"
+                            complianceTarget={`installment-${n}-inspection_date`}
+                          >
+                            <ChronologicalDatePicker
+                              stepNumber={10}
+                              chronologicalCtx={genericProps.chronologicalCtx}
+                              intraStepMinDate={inspectionMinDate}
+                              fieldId="inspection_date"
+                              installmentNo={n}
+                              value={row.inspection_date}
+                              onChange={(iso) => patchRow(n, { inspection_date: iso })}
+                              disabled={fieldsDisabled || !row.delivery_date?.trim()}
+                              onInvalidDate={() =>
+                                toast.error(
+                                  "วันที่คณะกรรมการตรวจรับพัสดุต้องไม่ก่อนวันที่ผู้รับจ้างส่งมอบงานจริง",
+                                )
+                              }
+                              showChronologicalHint={false}
+                            />
+                            <p className="text-xs text-muted-foreground mt-1">
+                              ตรวจสอบกรอบเวลาการทำงานของคณะกรรมการ (ระเบียบฯ ข้อ 178) — ไม่ใช้คำนวณค่าปรับ
+                            </p>
+                          </FieldRow>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                        <div className="space-y-3 sm:col-span-2 lg:col-span-1">
+                          <FieldRow
+                            label="ผลการตรวจรับ *"
+                            complianceTarget={`installment-${n}-inspection_result`}
+                          >
+                            <select
+                              value={row.inspection_result}
+                              onChange={(e) => handleInspectionResultChange(n, e.target.value)}
+                              disabled={fieldsDisabled}
+                              className={inputCls}
+                            >
+                              <option value="">— เลือกผลการตรวจรับ —</option>
+                              {STEP10_INSPECTION_RESULT_OPTIONS.map((opt) => (
+                                <option key={opt.value} value={opt.value}>
+                                  {opt.label}
+                                </option>
+                              ))}
+                            </select>
+                          </FieldRow>
+
+                          {(row.delivery_date?.trim() ||
+                            penaltyResult.daysLate > 0 ||
+                            normalizeStep10InspectionResult(row.inspection_result) ===
+                              "defects") && (
+                            <div
+                              className={`rounded-md border px-3 py-3 space-y-3 ${
+                                penaltyResult.daysLate > 0
+                                  ? "border-red-300 bg-red-50 text-red-800"
+                                  : "border-border bg-muted/30 text-muted-foreground"
+                              }`}
+                            >
+                              <p
+                                className={`text-xs font-semibold ${
+                                  penaltyResult.daysLate > 0 ? "text-red-700" : ""
+                                }`}
+                              >
+                                ผลลัพธ์การคำนวณค่าปรับประจำงวด
+                                {penaltyResult.isOngoingAccumulation
+                                  ? " · สะสมต่อเนื่องจนถึงวันนี้"
+                                  : penaltyResult.isLiveEstimate
+                                    ? " · ประมาณการ"
+                                    : ""}
+                              </p>
+                              <div className="grid gap-3 sm:grid-cols-2">
+                                <div className="space-y-1">
+                                  <label className="text-xs font-medium">
+                                    จำนวนวันส่งมอบล่าช้า
+                                  </label>
+                                  <input
+                                    type="text"
+                                    readOnly
+                                    tabIndex={-1}
+                                    value={`${penaltyResult.daysLate.toLocaleString("th-TH")} วันปฏิทิน`}
+                                    className={`${inputCls} tabular-nums cursor-default ${
+                                      penaltyResult.daysLate > 0
+                                        ? "border-red-200 bg-white/80 text-red-700 font-semibold"
+                                        : "bg-muted/50"
+                                    }`}
+                                  />
+                                </div>
+                                <div className="space-y-1">
+                                  <label className="text-xs font-medium">
+                                    รวมมูลค่าค่าปรับสะสมประจำงวด
+                                  </label>
+                                  <input
+                                    type="text"
+                                    readOnly
+                                    tabIndex={-1}
+                                    value={`${formatBaht(penaltyResult.penaltyBaht)} บาท`}
+                                    className={`${inputCls} tabular-nums cursor-default ${
+                                      penaltyResult.daysLate > 0
+                                        ? "border-red-200 bg-white/80 text-red-700 font-semibold"
+                                        : "bg-muted/50"
+                                    }`}
+                                  />
+                                </div>
+                              </div>
+                              {penaltyResult.daysLate > 0 && (
+                                <p className="text-xs leading-relaxed">
+                                  {penaltyResult.isOngoingAccumulation ? (
+                                    <>
+                                      ผลตรวจรับ: ข้อบกพร่อง — นับสะสมจากวันครบกำหนด (
+                                      {formatThaiDateHint(plannedDate)}) ถึงวันนี้ (
+                                      {formatThaiDateHint(todayISO)})
+                                    </>
+                                  ) : penaltyResult.isLiveEstimate ? (
+                                    <>
+                                      ประมาณการจากวันครบกำหนดถึงวันนี้ — ยังไม่มีวันส่งมอบจริง
+                                    </>
+                                  ) : row.delivery_date?.trim() ? (
+                                    <>
+                                      คำนวณจากวันครบกำหนดถึงวันส่งมอบจริง (
+                                      {formatThaiDateHint(row.delivery_date)})
+                                    </>
+                                  ) : null}
+                                </p>
+                              )}
+                            </div>
+                          )}
+                        </div>
                         <FieldRow
                           label="อัตราค่าปรับต่อวัน (ร้อยละ) *"
                           complianceTarget={`installment-${n}-penalty_rate`}
                         >
                           <input
-                            type="number"
-                            min={
-                              projectType === "construction"
-                                ? STEP10_PENALTY_RATE_CONSTRUCTION_MIN
-                                : 0
-                            }
-                            max={
-                              projectType === "construction"
-                                ? STEP10_PENALTY_RATE_CONSTRUCTION_MAX
-                                : undefined
-                            }
-                            step={0.001}
-                            value={row.penalty_rate_pct ?? ""}
-                            onChange={(e) => {
-                              const raw = e.target.value;
-                              patchRow(n, {
-                                penalty_rate_pct: raw ? Number(raw) : null,
-                              });
-                            }}
-                            disabled={procurementPolicyDisabled}
-                            className={inputCls}
+                            type="text"
+                            readOnly
+                            value={`${(row.penalty_rate_pct ?? contractPolicyPenaltyRate).toLocaleString("th-TH", {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 3,
+                            })} %`}
+                            className={`${inputCls} bg-muted/50 cursor-not-allowed tabular-nums`}
+                            tabIndex={-1}
                           />
                           <p className="text-xs text-muted-foreground mt-1">
                             {projectType === "construction"
-                              ? `งานก่อสร้าง: อัตรา ${STEP10_PENALTY_RATE_CONSTRUCTION_MIN}%–${STEP10_PENALTY_RATE_CONSTRUCTION_MAX}% ต่อวัน · ฐานคำนวณ: ${penaltyBaseLabel}`
-                              : `ซื้อ/จ้างทั่วไป: ค่าเริ่มต้น ${STEP10_PENALTY_RATE_GENERAL_DEFAULT}% ต่อวัน · ฐานคำนวณ: ${penaltyBaseLabel}`}
+                              ? `อัตราตามสัญญา (Step 7/9): ${STEP10_PENALTY_RATE_CONSTRUCTION_MIN}%–${STEP10_PENALTY_RATE_CONSTRUCTION_MAX}% ต่อวัน · ฐานคำนวณ: ${penaltyBaseLabel}`
+                              : `อัตราตามสัญญา (Step 7/9): ${STEP10_PENALTY_RATE_GENERAL_DEFAULT}% ต่อวัน · ฐานคำนวณ: ${penaltyBaseLabel}`}
+                            {" — ห้ามแก้ไข"}
                           </p>
                         </FieldRow>
                       </div>
 
                       {penaltyResult.daysLate > 0 && (
-                        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                          <span className="font-semibold">⚠️ เกินกำหนด {penaltyResult.daysLate} วันปฏิทิน</span>
-                          {" · "}
-                          ค่าปรับงวดนี้{" "}
-                          <span className="font-bold tabular-nums">
-                            {formatBaht(penaltyResult.penaltyBaht)} บาท
-                          </span>
-                          {projectType === "construction" ? (
-                            <span className="text-xs block mt-1">
-                              (สูตรล็อก: {penaltyBaseLabel} × อัตราค่าปรับ × วันเลท — ขั้นต่ำ 100 บาท/วัน)
-                            </span>
-                          ) : (
-                            <span className="text-xs block mt-1">
-                              (สูตรล็อก: {penaltyBaseLabel} × อัตราค่าปรับ × วันเลท)
-                            </span>
-                          )}
-                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          {projectType === "construction"
+                            ? `สูตรล็อก: ${penaltyBaseLabel} × อัตราค่าปรับ × วันเลท — ขั้นต่ำ 100 บาท/วัน`
+                            : `สูตรล็อก: ${penaltyBaseLabel} × อัตราค่าปรับ × วันเลท`}
+                        </p>
                       )}
 
                       {hasConstructionFeed && (
@@ -8216,6 +8808,35 @@ export function Step10DetailForm({
                         </div>
                       )}
 
+                      {projectType === "construction" && (
+                        <div
+                          className="rounded-md border border-amber-200 bg-amber-50/80 px-3 py-3"
+                          data-compliance-target={`installment-${n}-supervisor_verified`}
+                        >
+                          <label className="flex items-start gap-2.5 text-sm cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={row.supervisor_report_verified === true}
+                              onChange={(e) =>
+                                patchRow(n, {
+                                  supervisor_report_verified: e.target.checked,
+                                })
+                              }
+                              disabled={fieldsDisabled}
+                              className="mt-0.5 accent-primary"
+                            />
+                            <span>
+                              <span className="font-medium text-foreground">
+                                {STEP10_SUPERVISOR_REPORT_VERIFIED_LABEL} *
+                              </span>
+                              <span className="block text-xs text-muted-foreground mt-0.5">
+                                บังคับก่อนเปลี่ยนสถานะเป็น «ส่งเรื่องเบิก» หรือ «จ่ายเงินแล้ว»
+                              </span>
+                            </span>
+                          </label>
+                        </div>
+                      )}
+
                       <FieldRow label="หมายเหตุผู้ตรวจ">
                         <input
                           type="text"
@@ -8227,26 +8848,49 @@ export function Step10DetailForm({
                         />
                       </FieldRow>
 
-                      <div className="pt-2 border-t border-border/60 space-y-3">
-                        <p className="text-xs font-medium text-muted-foreground">
-                          หลักฐานงวดที่ {n}
+                      <div
+                        className="pt-2 border-t border-border/60 space-y-3"
+                        data-compliance-target={`installment-${n}-docs`}
+                      >
+                        <p className="text-xs font-medium text-foreground">
+                          Checklist เอกสารบังคับงวดที่ {n} (ระเบียบฯ ข้อ 176)
                         </p>
-                        <div className="grid gap-3 lg:grid-cols-2">
+                        <ul className="space-y-1.5 rounded-md border border-border bg-background px-3 py-2">
+                          {docChecklist.map((item, idx) => (
+                            <li
+                              key={item.key}
+                              className={`flex items-start gap-2 text-sm ${
+                                item.uploaded ? "text-emerald-800" : "text-foreground"
+                              }`}
+                            >
+                              <span
+                                className={`mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px] font-bold ${
+                                  item.uploaded
+                                    ? "border-emerald-500 bg-emerald-100 text-emerald-700"
+                                    : "border-muted-foreground/40 bg-muted/40 text-muted-foreground"
+                                }`}
+                                aria-hidden
+                              >
+                                {item.uploaded ? "✓" : ""}
+                              </span>
+                              <span>
+                                {idx + 1}. {item.label}
+                                {item.required ? " *" : ""}
+                                {item.key === "supervisor" && (
+                                  <span className="block text-xs text-muted-foreground">
+                                    บังคับเฉพาะโหมดงานก่อสร้างตามระเบียบฯ ข้อ 176
+                                  </span>
+                                )}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                        <div className="grid gap-3 lg:grid-cols-1">
                           <InlineDocUpload
                             project={genericProps.project}
                             stepNumber={10}
                             documentType={STEP10_INSTALLMENT_DOC.deliveryLetter(n)}
-                            label="1. หนังสือส่งมอบงาน/ส่งมอบพัสดุจากคู่สัญญา (.pdf) *"
-                            existing={genericProps.docsForStep}
-                            onChange={genericProps.onDocsChange}
-                            filePolicyId="pdf_only"
-                            compact
-                          />
-                          <InlineDocUpload
-                            project={genericProps.project}
-                            stepNumber={10}
-                            documentType={STEP10_INSTALLMENT_DOC.inspectionReport(n)}
-                            label="2. ใบตรวจรับพัสดุ / รายงานผลการตรวจรับ (.pdf) *"
+                            label="1. หนังสือส่งมอบงานประจำงวดของผู้รับจ้าง (PDF) *"
                             existing={genericProps.docsForStep}
                             onChange={genericProps.onDocsChange}
                             filePolicyId="pdf_only"
@@ -8258,7 +8902,7 @@ export function Step10DetailForm({
                                 project={genericProps.project}
                                 stepNumber={10}
                                 documentType={STEP10_INSTALLMENT_DOC.supervisorReport(n)}
-                                label="3. รายงานผลการปฏิบัติงานของผู้ควบคุมงานประจำงวด (.pdf) *"
+                                label="2. รายงานผลการปฏิบัติงานประจำงวดของผู้ควบคุมงานก่อสร้าง (PDF) *"
                                 existing={genericProps.docsForStep}
                                 onChange={genericProps.onDocsChange}
                                 filePolicyId="pdf_only"
@@ -8267,6 +8911,16 @@ export function Step10DetailForm({
                               <p className="text-xs text-muted-foreground">{STEP10_DAILY_REPORT_HINT}</p>
                             </div>
                           )}
+                          <InlineDocUpload
+                            project={genericProps.project}
+                            stepNumber={10}
+                            documentType={STEP10_INSTALLMENT_DOC.inspectionReport(n)}
+                            label={`${projectType === "construction" ? "3" : "2"}. ใบรายงานผลการตรวจรับพัสดุของคณะกรรมการ (PDF) *`}
+                            existing={genericProps.docsForStep}
+                            onChange={genericProps.onDocsChange}
+                            filePolicyId="pdf_only"
+                            compact
+                          />
                           <InlineDocUpload
                             project={genericProps.project}
                             stepNumber={10}
@@ -8302,19 +8956,42 @@ export function Step10DetailForm({
         <div className="rounded-lg border border-amber-300/60 bg-amber-50/40 dark:bg-amber-950/20 p-4 space-y-4">
           <div>
             <p className="text-sm font-semibold text-foreground">
-              ระยะค้ำประกันความชำรุดบกพร่อง 2 ปี
+              ระยะค้ำประกันความชำรุดบกพร่อง 2 ปี (Warranty Phase)
             </p>
             {isWarrantyPhase && (
               <p className="text-xs text-amber-900 dark:text-amber-200 mt-1 font-medium">
-                สถานะโครงการ: {PROJECT_WARRANTY_STATUS_LABEL}
+                สถานะโครงการ: {PROJECT_WARRANTY_STATUS_LABEL} — โครงการยังเปิดอยู่บนหน้าจอนี้
+                (ไม่ถูกซ่อน/Archive)
               </p>
             )}
             <p className="text-xs text-muted-foreground mt-1">
-              ระบบคำนวณจากวันที่คณะกรรมการตรวจรับจริงของงวดสุดท้าย + 2 ปีปฏิทิน
+              วันสิ้นสุดค้ำประกัน = วันที่คณะกรรมการตรวจรับพัสดุจริงงวดสุดท้าย + 2 ปีปฏิทิน
+              (ระเบียบฯ ข้อ 185)
             </p>
           </div>
+          {previewWarrantyEnd && (
+            <div
+              className={`rounded-md border px-4 py-3 ${
+                warrantyDaysRemaining != null && warrantyDaysRemaining <= 30
+                  ? "border-amber-400 bg-amber-100/80"
+                  : "border-amber-200 bg-white/60"
+              }`}
+            >
+              <p className="text-xs font-medium text-amber-900 uppercase tracking-wide">
+                นับถอยหลังระยะค้ำประกัน
+              </p>
+              <p className="text-lg font-bold text-amber-950 tabular-nums mt-1">
+                {warrantyCountdownLabel}
+              </p>
+              {previewWarrantyEnd && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  ครบกำหนดคืนหลักประกัน: {formatThaiDateHint(previewWarrantyEnd)}
+                </p>
+              )}
+            </div>
+          )}
           <div className="grid gap-3 sm:grid-cols-2 max-w-2xl">
-            <FieldRow label="วันเริ่มนับค้ำประกัน (งวดสุดท้าย)">
+            <FieldRow label="วันที่คณะกรรมการตรวจรับจริงงวดสุดท้าย (เริ่มนับค้ำประกัน)">
               <input
                 type="text"
                 readOnly
@@ -8363,7 +9040,8 @@ export function Step10DetailForm({
       {!isWarrantyPhase && !previewWarrantyEnd && (
         <div className="rounded-lg border border-dashed border-border bg-muted/10 p-4">
           <p className="text-sm font-medium text-muted-foreground">
-            หลังปิดโครงการ — ระบบจะเปิดส่วนค้ำประกัน 2 ปี และช่องอัปโหลดคืนหลักประกันสัญญา
+            หลังกดปิดโครงการจ้างสำเร็จ — ระบบจะเปลี่ยนสถานะเป็น «อยู่ระหว่างค้ำประกันความชำรุดบกพร่อง»
+            (ไม่ซ่อนโครงการ) พร้อมแสดงนับถอยหลัง 2 ปี และช่องอัปโหลดคืนหลักประกันสัญญา
           </p>
         </div>
       )}

@@ -68,6 +68,11 @@ import {
   isStep10InspectionBeforeSupervisorReport,
   normalizeStep10InspectionResult,
   STEP10_INSPECTION_RESULT_OPTIONS,
+  inferStep10PaymentStatusFromRow,
+  normalizeStep10PaymentStatus,
+  normalizeStep10ContractAmendment,
+  canAdvanceStep10PaymentStatus,
+  getStep10InstallmentDocChecklist,
 } from "@/lib/step10-contract";
 import {
   addWorkdays,
@@ -2039,12 +2044,19 @@ export type Step10InspectionRow = {
   site_obstacles?: string;
   /** งวดนี้มีการซิงก์ข้อมูลจากเมนูติดตามงานก่อสร้างแล้ว */
   construction_synced?: boolean;
+  /** สถานะเบิกจ่ายงวดงาน */
+  payment_status?: string;
+  /** ยืนยันตรวจสอบรายงานผู้ควบคุมงานแล้ว (ข้อ 176) — ก่อนส่งเรื่องเบิก */
+  supervisor_report_verified?: boolean;
 };
+
+export type Step10ContractAmendment = import("@/lib/step10-contract").Step10ContractAmendment;
 
 export type Step10FormData = {
   checklist?: Record<string, boolean>;
   project_type?: Step10ProjectType;
   inspectionRows?: Step10InspectionRow[];
+  contractAmendments?: Step10ContractAmendment[];
 };
 
 function normalizeStep10InspectionRow(
@@ -2088,6 +2100,8 @@ function normalizeStep10InspectionRow(
     site_diary: row.site_diary?.trim() ?? "",
     site_obstacles: row.site_obstacles?.trim() ?? "",
     construction_synced: row.construction_synced === true,
+    payment_status: inferStep10PaymentStatusFromRow(row),
+    supervisor_report_verified: row.supervisor_report_verified === true,
   };
 }
 
@@ -2133,12 +2147,16 @@ export function loadStep10FormFromNote(note: string | null): Step10FormData {
         : undefined;
   const rowDefaultType = projectType ?? "general";
   const raw = f.inspectionRows ?? [];
+  const amendments = (f.contractAmendments ?? []).map((a, i) =>
+    normalizeStep10ContractAmendment(a, i),
+  );
   return {
     checklist: f.checklist,
     ...(projectType != null ? { project_type: projectType } : {}),
     inspectionRows: raw.map((row, index) =>
       normalizeStep10InspectionRow(row, index, rowDefaultType),
     ),
+    contractAmendments: amendments,
   };
 }
 export function resolveProjectTotalInstallmentCount(
@@ -4153,6 +4171,40 @@ export function buildStep4CommitteesFromStep2(
   };
 }
 
+/**
+ * ข้อความแสดงคณะกรรมการตรวจรับพัสดุ (Step 10 / audit)
+ * 1) โครงสร้าง inspection_committee_members จาก Step 4 note
+ * 2) inspection_committee_text (legacy)
+ * 3) Pipeline เดียวกับ Step 4 — ดึงจากคณะกรรมการ Step 2 / committees DB
+ */
+export function resolveStep4InspectionCommitteeDisplay(
+  bidResult: Step4BidResult,
+  committees?: Step2CommitteesState | null,
+): string {
+  const normalized = normalizeStep4BidResult(bidResult);
+
+  const fromMembers = formatStep4CommitteeMembersForDisplay(
+    normalized.inspection_committee_members ?? [],
+  );
+  if (fromMembers) return fromMembers;
+
+  const fromText = normalized.inspection_committee_text?.trim();
+  if (fromText) return fromText;
+
+  if (!committees) return "";
+
+  const fromStep2 = normalizeStep4BidResult({
+    ...EMPTY_STEP4_BID_RESULT,
+    ...buildStep4CommitteesFromStep2(committees),
+  });
+  const inheritedMembers = formatStep4CommitteeMembersForDisplay(
+    fromStep2.inspection_committee_members ?? [],
+  );
+  if (inheritedMembers) return inheritedMembers;
+
+  return fromStep2.inspection_committee_text?.trim() ?? "";
+}
+
 export function getStep4RequiredFormFieldIssues(
   bidResult: Step4BidResult,
   opts: {
@@ -5014,6 +5066,13 @@ function step2FormHasPersistedData(form: Step2FormData): boolean {
   return false;
 }
 
+function step10FormHasPersistedData(form: Step10FormData): boolean {
+  if (form.project_type) return true;
+  if ((form.inspectionRows?.length ?? 0) > 0) return true;
+  if ((form.contractAmendments?.length ?? 0) > 0) return true;
+  return false;
+}
+
 function formHasPersistedData(form: StepFormData): boolean {
   if (checklistHasAnyTrue(form.checklist as Record<string, boolean | undefined> | undefined)) {
     return true;
@@ -5047,7 +5106,11 @@ function formHasPersistedData(form: StepFormData): boolean {
   if (step6AppealHasData((form as Step6FormData).step6_notes)) return true;
   if (step7ContractNoticeHasData((form as Step7FormData).contractNotice)) return true;
   if (step8ContractExecutionHasData((form as Step8FormData).contractExecution)) return true;
-  return step9ContractScheduleHasData((form as Step9FormData).contractSchedule);
+  if (step9ContractScheduleHasData((form as Step9FormData).contractSchedule)) return true;
+  if ("inspectionRows" in form || "contractAmendments" in form) {
+    return step10FormHasPersistedData(form as Step10FormData);
+  }
+  return false;
 }
 
 function step9ContractScheduleHasData(schedule?: Step9ContractSchedule): boolean {
@@ -6835,6 +6898,7 @@ export function getStep10ComplianceIssues(
 
   inspectionRows.forEach((row) => {
     const n = row.installment_no;
+    const paymentStatus = normalizeStep10PaymentStatus(row.payment_status);
     if (!row.planned_completion_date?.trim()) {
       issues.push({
         id: `installment-${n}-planned_date`,
@@ -6917,13 +6981,37 @@ export function getStep10ComplianceIssues(
       }
     }
     if (!step10RowHasRequiredDocs(n, uploadedTypes, projectType)) {
-      const docHint =
-        projectType === "construction"
-          ? "หนังสือส่งมอบงาน, ใบตรวจรับพัสดุ และรายงานผู้ควบคุมงาน"
-          : "หนังสือส่งมอบงานและใบตรวจรับพัสดุ";
+      const checklist = getStep10InstallmentDocChecklist(n, uploadedTypes, projectType);
+      for (const item of checklist) {
+        if (item.required && !item.uploaded) {
+          const issueSuffix =
+            item.key === "delivery"
+              ? "delivery_letter_doc"
+              : item.key === "supervisor"
+                ? "supervisor_report_doc"
+                : "inspection_report_doc";
+          issues.push({
+            id: `installment-${n}-${issueSuffix}`,
+            message: `งวดที่ ${n}: กรุณาแนบ${item.label} *`,
+          });
+        }
+      }
+    }
+
+    if (paymentStatus !== "payment_completed") {
       issues.push({
-        id: `installment-${n}-docs`,
-        message: `งวดที่ ${n}: กรุณาแนบหลักฐานบังคับครบ (${docHint})`,
+        id: `installment-${n}-payment_status`,
+        message: `งวดที่ ${n}: ต้องเปลี่ยนสถานะเป็น «จ่ายเงินแล้ว» ก่อนปิดโครงการ`,
+      });
+    }
+    if (
+      (paymentStatus === "payment_submitted" || paymentStatus === "payment_completed") &&
+      projectType === "construction" &&
+      !row.supervisor_report_verified
+    ) {
+      issues.push({
+        id: `installment-${n}-supervisor_verified`,
+        message: `งวดที่ ${n}: ต้องติ๊กยืนยันการตรวจสอบรายงานผู้ควบคุมงานก่อสร้าง (ข้อ 176) ก่อนส่งเรื่องเบิกจ่าย`,
       });
     }
   });

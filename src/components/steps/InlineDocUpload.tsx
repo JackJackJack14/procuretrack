@@ -15,6 +15,7 @@ import {
   type ProjectDocRef,
   type StepDocRecord,
 } from "@/lib/doc-upload";
+import { ComplianceFieldHighlightContext } from "@/components/steps/compliance-field-highlight";
 import { docUploadElementId } from "@/lib/compliance-scroll";
 import {
   resolveStepDocumentForDisplay,
@@ -71,6 +72,7 @@ export function InlineDocUpload({
   hasError: hasErrorProp,
 }: Props) {
   const highlightedMissingDocs = useContext(MissingDocHighlightContext);
+  const complianceHighlight = useContext(ComplianceFieldHighlightContext);
   const policy = filePolicyId
     ? resolveDocFilePolicyById(filePolicyId)
     : resolveDocFilePolicy(documentType);
@@ -94,6 +96,10 @@ export function InlineDocUpload({
     !file &&
     (hasErrorProp ?? highlightedMissingDocs.includes(documentType));
 
+  const clearDocumentComplianceError = () => {
+    complianceHighlight.clearDocumentHighlight?.(documentType);
+  };
+
   const tryUpload = async (f: File) => {
     const check = filePolicyId
       ? validateDocFileWithPolicy(f, policy)
@@ -106,6 +112,7 @@ export function InlineDocUpload({
     try {
       const saved = await uploadStepDocument(project, stepNumber, documentType, f);
       if (saved) {
+        clearDocumentComplianceError();
         onUploadSuccess?.({
           documentType,
           fileName: saved.file_name,

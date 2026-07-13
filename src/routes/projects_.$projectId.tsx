@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
-import { useEffect, useMemo, useState, useRef } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft, ArrowRight, Check, Upload, Eye, Trash2, FileText, Loader2,
@@ -62,10 +62,14 @@ import {
 import { CompletedStepView } from "@/components/steps/CompletedStepView";
 import {
   computeStep10InstallmentPlannedDates,
+  computeStep10InstallmentDueDates,
   computeWarrantyEndDateISO,
   PROJECT_STATUS_WARRANTY,
   PROJECT_STATUS_CONTRACT_BREACH_CANCELLED,
   resolveLastInstallmentInspectionDate,
+  resolveEffectiveContractEndDate,
+  applyContractAmendmentToPlannedDates,
+  canArchiveStep10Project,
 } from "@/lib/step10-contract";
 import {
   addWorkdays,
@@ -212,7 +216,7 @@ import {
   getStep10ComplianceIssues,
   isStep10ReadyForNext,
   countStep10FormRequiredProgress,
-  formatStep4CommitteeMembersForDisplay,
+  resolveStep4InspectionCommitteeDisplay,
   sanitizeStep9WorkStartAgainstSignedDate,
   type Step9ContractSchedule,
   buildStep10InspectionRows,
@@ -220,6 +224,7 @@ import {
   resolveProjectTotalInstallmentCount,
   type Step10InspectionRow,
   type Step10ProjectType,
+  type Step10ContractAmendment,
   resolveWinnerAnnouncementDate,
   resolveAppealAnchorDate,
   isStep4WinnerDataLocked,
@@ -289,9 +294,11 @@ import {
 } from "@/lib/form-audit-trail";
 import {
   inferPublicationComplianceTarget,
+  mapRequiredDocToComplianceTarget,
   resolveDocTypeFromComplianceIssue,
   scrollToComplianceErrorAfterPaint,
 } from "@/lib/compliance-scroll";
+import { MissingDocHighlightContext } from "@/components/steps/InlineDocUpload";
 import { StepAuditZipButton } from "@/components/StepAuditZipButton";
 import {
   computeReactiveChecklistEffective,
@@ -570,6 +577,7 @@ function ProjectDetailPage() {
   });
   const [step10InspectionRows, setStep10InspectionRows] = useState<Step10InspectionRow[]>([]);
   const [step10ProjectType, setStep10ProjectType] = useState<Step10ProjectType>("general");
+  const [step10ContractAmendments, setStep10ContractAmendments] = useState<Step10ContractAmendment[]>([]);
 
   const { data, isPending: loading, refetch } = useQuery({
     queryKey: ["project", projectId],
@@ -697,6 +705,7 @@ function ProjectDetailPage() {
     setStep9ContractSchedule({ ...EMPTY_STEP9_CONTRACT_SCHEDULE });
     setStep10InspectionRows([]);
     setStep10ProjectType("general");
+    setStep10ContractAmendments([]);
   }, [projectId]);
 
   useEffect(() => {
@@ -806,6 +815,7 @@ function ProjectDetailPage() {
       case 10:
         setStep10ProjectType("general");
         setGenericManualChecklist(createEmptyManualChecklist(10));
+        setStep10ContractAmendments([]);
         setStep10InspectionRows(
           buildStep10InspectionRows(totalInstallmentCount, [], step10PlannedDates, "general"),
         );
@@ -1236,14 +1246,60 @@ function ProjectDetailPage() {
     return null;
   }, [step7ContractNotice.contract_duration_days, step9ScheduleForProject.contract_duration_days]);
 
+  const step10EffectiveContractEndDate = useMemo(
+    () => resolveEffectiveContractEndDate(contractEndDate ?? "", step10ContractAmendments),
+    [contractEndDate, step10ContractAmendments],
+  );
+
   const step10PlannedDates = useMemo(
     () =>
-      computeStep10InstallmentPlannedDates(
-        step9ScheduleForProject.work_start_date,
-        step9ScheduleForProject.contract_duration_days,
-        totalInstallmentCount,
-      ),
-    [step9ScheduleForProject, totalInstallmentCount],
+      computeStep10InstallmentDueDates({
+        workStartISO: step9ScheduleForProject.work_start_date,
+        contractDurationDays: step9ScheduleForProject.contract_duration_days,
+        totalInstallments: totalInstallmentCount,
+        originalContractEndISO: contractEndDate ?? "",
+        amendments: step10ContractAmendments,
+      }),
+    [
+      step9ScheduleForProject,
+      totalInstallmentCount,
+      contractEndDate,
+      step10ContractAmendments,
+    ],
+  );
+
+  /** บันทึกประวัติแก้ไขสัญญา + ทับวันครบกำหนดงวดสุดท้ายทันที (atomic state pipeline) */
+  const applyStep10ContractAmendment = useCallback(
+    (amendment: Step10ContractAmendment) => {
+      const nextAmendments = [...step10ContractAmendments, amendment];
+      setStep10ContractAmendments(nextAmendments);
+
+      const extendedEnd = amendment.extended_contract_end_date?.trim();
+      if (!extendedEnd || totalInstallmentCount <= 0) return;
+
+      const effectiveEnd = resolveEffectiveContractEndDate(
+        contractEndDate ?? "",
+        nextAmendments,
+      );
+      setStep10InspectionRows((prev) => {
+        const newPlanned = applyContractAmendmentToPlannedDates(
+          step9ScheduleForProject.work_start_date,
+          effectiveEnd,
+          totalInstallmentCount,
+          prev.map((r) => r.planned_completion_date),
+        );
+        return prev.map((row, idx) => ({
+          ...row,
+          planned_completion_date: newPlanned[idx] ?? row.planned_completion_date,
+        }));
+      });
+    },
+    [
+      step10ContractAmendments,
+      contractEndDate,
+      totalInstallmentCount,
+      step9ScheduleForProject.work_start_date,
+    ],
   );
 
   const step10ContractAmount = useMemo(() => {
@@ -1265,12 +1321,10 @@ function ProjectDetailPage() {
     return amount != null && Number.isFinite(amount) ? amount : null;
   }, [step8Record?.note, project, mergedStep4BidResult, step4BidResult]);
 
-  const step10InspectionCommitteeDisplay = useMemo(() => {
-    const members = mergedStep4BidResult.inspection_committee_members ?? [];
-    const formatted = formatStep4CommitteeMembersForDisplay(members);
-    if (formatted) return formatted;
-    return mergedStep4BidResult.inspection_committee_text?.trim() ?? "";
-  }, [mergedStep4BidResult]);
+  const step10InspectionCommitteeDisplay = useMemo(
+    () => resolveStep4InspectionCommitteeDisplay(mergedStep4BidResult, step2Committees),
+    [mergedStep4BidResult, step2Committees],
+  );
 
   const executiveReportSource = useMemo((): ExecutiveReportProject | null => {
     if (!project) return null;
@@ -1568,19 +1622,28 @@ function ProjectDetailPage() {
     if (current.step_number === 10) {
       const step10Form = loadStep10FormFromNote(current.note);
       const draft = loadStepDraftFields(current);
+      const amendments = step10Form.contractAmendments ?? [];
       const autoDetectedType = resolveProjectWorkType({
         project_type: project?.project_type,
       });
       const projectType = step10Form.project_type ?? autoDetectedType;
       setStep10ProjectType(projectType);
+      setStep10ContractAmendments(amendments);
       setGenericManualChecklist(
         normalizeManualChecklist(10, step10Form.checklist ?? loadManualChecklistFromNote(10, current.note)),
       );
+      const initialPlannedDates = computeStep10InstallmentDueDates({
+        workStartISO: step9ScheduleForProject.work_start_date,
+        contractDurationDays: step9ScheduleForProject.contract_duration_days,
+        totalInstallments: totalInstallmentCount,
+        originalContractEndISO: contractEndDate ?? "",
+        amendments,
+      });
       setStep10InspectionRows(
         buildStep10InspectionRows(
           totalInstallmentCount,
           step10Form.inspectionRows ?? [],
-          step10PlannedDates,
+          initialPlannedDates,
           projectType,
         ),
       );
@@ -1601,14 +1664,14 @@ function ProjectDetailPage() {
     const draft = loadStepDraftFields(current);
     setNote(draft.userNote);
     setDueDate(draft.dueDate);
-  }, [current?.id, project?.id, project?.committee_appointment_mode, committees.length, step2Record?.id, step2Record?.note, mergedStep4BidResult, step7Record?.note, contractSignedDate, totalInstallmentCount, step10PlannedDates]); // eslint-disable-line
+  }, [current?.id, project?.id, project?.committee_appointment_mode, committees.length, step2Record?.id, step2Record?.note, mergedStep4BidResult, step7Record?.note, contractSignedDate, totalInstallmentCount, contractEndDate, step9ScheduleForProject.work_start_date, step9ScheduleForProject.contract_duration_days]); // eslint-disable-line
 
   useEffect(() => {
     if (current?.step_number !== 10) return;
     setStep10InspectionRows((prev) =>
       buildStep10InspectionRows(totalInstallmentCount, prev, step10PlannedDates, step10ProjectType),
     );
-  }, [current?.step_number, totalInstallmentCount, step10PlannedDates, step10ProjectType]);
+  }, [current?.step_number, totalInstallmentCount, step10PlannedDates, step10ProjectType, step10ContractAmendments]);
   useEffect(() => {
     if (current?.step_number !== 9 || !contractSignedDate?.trim()) return;
     setStep9ContractSchedule((prev) =>
@@ -1685,14 +1748,68 @@ function ProjectDetailPage() {
     [appealAnchorDate, step7ContractNotice],
   );
 
+  const clearComplianceFieldHighlight = useCallback((issueId: string) => {
+    const docType = resolveDocTypeFromComplianceIssue(issueId);
+    setHighlightedComplianceIssues((prev) => prev.filter((id) => id !== issueId));
+    setActiveComplianceIssue((prev) => (prev?.id === issueId ? null : prev));
+    if (docType) {
+      setHighlightedMissingDocs((prev) => prev.filter((t) => t !== docType));
+    }
+  }, []);
+
+  const clearComplianceHighlightForDocument = useCallback((documentType: string) => {
+    const issueId = mapRequiredDocToComplianceTarget(documentType);
+    setHighlightedMissingDocs((prev) => prev.filter((t) => t !== documentType));
+    setHighlightedComplianceIssues((prev) => prev.filter((id) => id !== issueId));
+    setActiveComplianceIssue((prev) => {
+      if (!prev) return null;
+      if (prev.id === issueId) return null;
+      if (resolveDocTypeFromComplianceIssue(prev.id) === documentType) return null;
+      return prev;
+    });
+  }, []);
+
+  const raiseComplianceIssue = useCallback(
+    (message: string, issueId: string, docType?: string) => {
+      setComplianceSubmitTriggered(true);
+      setActiveComplianceIssue({ id: issueId, message });
+      setError(null);
+      const resolvedDocType =
+        docType ?? resolveDocTypeFromComplianceIssue(issueId) ?? undefined;
+      setHighlightedMissingDocs(resolvedDocType ? [resolvedDocType] : []);
+      setHighlightedComplianceIssues([issueId]);
+      scrollToComplianceErrorAfterPaint(issueId, resolvedDocType);
+    },
+    [],
+  );
+
   const complianceFieldHighlightValue = useMemo(
     () => ({
       submitTriggered: complianceSubmitTriggered,
       activeIssueId: activeComplianceIssue?.id ?? null,
       activeMessage: activeComplianceIssue?.message ?? null,
+      clearFieldHighlight: clearComplianceFieldHighlight,
+      clearDocumentHighlight: clearComplianceHighlightForDocument,
+      raiseComplianceIssue,
     }),
-    [complianceSubmitTriggered, activeComplianceIssue],
+    [
+      complianceSubmitTriggered,
+      activeComplianceIssue,
+      clearComplianceFieldHighlight,
+      clearComplianceHighlightForDocument,
+      raiseComplianceIssue,
+    ],
   );
+
+  useEffect(() => {
+    if (!activeComplianceIssue || !current) return;
+    const docType = resolveDocTypeFromComplianceIssue(activeComplianceIssue.id);
+    if (!docType) return;
+    const hasDoc = docs.some(
+      (d) => d.step_number === current.step_number && d.document_type === docType,
+    );
+    if (hasDoc) clearComplianceHighlightForDocument(docType);
+  }, [docs, activeComplianceIssue, current, clearComplianceHighlightForDocument]);
 
   const chronologicalFormSnapshot = useMemo(
     () => ({
@@ -2527,8 +2644,66 @@ function ProjectDetailPage() {
     if (current.step_number === 7 || current.step_number === 8 || current.step_number === 10) {
       const timelineBlock = blockChronologicalSave(current.step_number);
       if (timelineBlock) {
+        if (current.step_number === 10) {
+          const step10Docs = docs.filter((d) => d.step_number === 10);
+          const issues = getStep10ComplianceIssues(
+            step10InspectionRows,
+            genericManualChecklist,
+            {
+              responsibleName: effectiveResponsibleName,
+              stepDocs: step10Docs,
+              totalInstallmentCount,
+              projectType: step10ProjectType,
+              contractStartDate,
+              timelineCtx: timelineValidationCtx,
+            },
+          );
+          const dateIssue =
+            issues.find(
+              (i) =>
+                i.id.includes("delivery") ||
+                i.id.includes("inspection") ||
+                i.id.includes("planned") ||
+                i.id.includes("timeline") ||
+                i.id.includes("before"),
+            ) ?? issues[0];
+          failStepCompliance(
+            dateIssue?.message ?? timelineBlock,
+            dateIssue?.id,
+          );
+          return false;
+        }
         toast.error(timelineBlock);
         setError(timelineBlock);
+        return false;
+      }
+    }
+
+    if (current.step_number === 10 && !opts?.silent) {
+      const step10Docs = docs.filter((d) => d.step_number === 10);
+      const issues = getStep10ComplianceIssues(
+        step10InspectionRows,
+        genericManualChecklist,
+        {
+          responsibleName: effectiveResponsibleName,
+          stepDocs: step10Docs,
+          totalInstallmentCount,
+          projectType: step10ProjectType,
+          contractStartDate,
+          timelineCtx: timelineValidationCtx,
+        },
+      );
+      // บันทึกร่าง: บล็อกเฉพาะวันที่ขัดแย้ง — เอกสารไม่ครบไปบล็อกตอนปิดโครงการ
+      const blockingIssue = issues.find(
+        (i) =>
+          i.id.includes("delivery_before") ||
+          i.id.includes("inspection_before") ||
+          i.id.includes("before_contract") ||
+          i.id.includes("before_delivery") ||
+          i.id.includes("before_supervisor"),
+      );
+      if (blockingIssue) {
+        failStepCompliance(blockingIssue.message, blockingIssue.id);
         return false;
       }
     }
@@ -2548,6 +2723,7 @@ function ProjectDetailPage() {
                 checklist: genericManualChecklist,
                 inspectionRows: step10InspectionRows,
                 project_type: step10ProjectType,
+                contractAmendments: step10ContractAmendments,
               })
             : null;
     const { error: e } = await patchStepDraft(
@@ -2627,8 +2803,31 @@ function ProjectDetailPage() {
       const warrantyStart = lastInspection || null;
       const warrantyEnd = warrantyStart ? computeWarrantyEndDateISO(warrantyStart) : null;
       updates.status = PROJECT_STATUS_WARRANTY;
+      updates.current_step = 10;
       if (warrantyStart) updates.warranty_started_at = warrantyStart;
       if (warrantyEnd) updates.warranty_end_date = warrantyEnd;
+
+      const archivedAt = new Date().toISOString();
+      const performerId = u.user?.id ?? null;
+      if (performerId && project.organization_id) {
+        const performer = await resolvePerformerProfile(supabase, performerId);
+        await logProjectWorkflowAudit(supabase, {
+          projectId: project.id,
+          organizationId: project.organization_id,
+          action: "step10_archive_completed",
+          performedBy: performer.id,
+          performerName: performer.name,
+          details: {
+            archived_at: archivedAt,
+            responsible_officer: effectiveResponsibleName,
+            total_installments: totalInstallmentCount,
+            project_type: step10ProjectType,
+            warranty_started_at: warrantyStart,
+            warranty_end_date: warrantyEnd,
+            contract_amendments_count: step10ContractAmendments.length,
+          },
+        });
+      }
     }
     const { error: projErr } = await supabase
       .from("projects")
@@ -2651,7 +2850,10 @@ function ProjectDetailPage() {
         console.warn("[Workflow] failed to mark next step in_progress", nextStepErr);
       }
     }
-    setActiveStep(backendStepToUiStep(nextStep, project.method));
+    setActiveStep(backendStepToUiStep(
+      current.step_number === 10 ? 10 : nextStep,
+      project.method,
+    ));
     await invalidateAll();
     return true;
   };
@@ -4293,6 +4495,7 @@ function ProjectDetailPage() {
                     />
                   )}
                   {current.step_number === 9 && !isSpecificShortWorkflow && (
+                    <MissingDocHighlightContext.Provider value={highlightedMissingDocs}>
                     <Step9DetailForm
                       manualChecklist={genericManualChecklist}
                       onManualChange={setGenericManualCheck}
@@ -4340,6 +4543,7 @@ function ProjectDetailPage() {
                       step1Budget={calcBudget}
                       chronologicalCtx={timelineValidationCtx}
                     />
+                    </MissingDocHighlightContext.Provider>
                   )}
                   {current.step_number === 10 && (
                     <Step10DetailForm
@@ -4371,6 +4575,11 @@ function ProjectDetailPage() {
                       contractAmount={step10ContractAmount}
                       contractStartDate={contractStartDate}
                       contractEndDate={contractEndDate}
+                      effectiveContractEndDate={step10EffectiveContractEndDate}
+                      contractAmendments={step10ContractAmendments}
+                      onContractAmendmentsChange={setStep10ContractAmendments}
+                      installmentPlannedDates={step10PlannedDates}
+                      onApplyContractAmendment={applyStep10ContractAmendment}
                       inspectionCommitteeDisplay={step10InspectionCommitteeDisplay}
                       projectStatus={project.status}
                       resultUnit={step1Profile.result_unit || project.result_unit}
@@ -5187,6 +5396,17 @@ function ProjectDetailPage() {
                     project.status !== PROJECT_STATUS_WARRANTY) ||
                     showHistoricalSaveAndNext) &&
                   (isSpecificShortWorkflow || current.step_number !== 3 || showStep3DetailForm);
+                const step10ArchiveReady =
+                  current.step_number !== 10 ||
+                  canArchiveStep10Project(
+                    step10InspectionRows,
+                    docsForStep.map((d) => d.document_type),
+                    step10ProjectType,
+                    totalInstallmentCount,
+                  );
+                const step10ArchiveLocked =
+                  current.step_number === 10 && !step10ArchiveReady && !bypassCurrentStep;
+                const completeBtnDisabled = disabled;
                 const showSaveDraft =
                   !isViewingPastStep &&
                   !workflowReadOnly &&
@@ -5197,6 +5417,9 @@ function ProjectDetailPage() {
                   viewedBackendStep === 10
                     ? "ปิดโครงการจ้างสำเร็จ (Archive Project)"
                     : "บันทึกและไปขั้นตอนถัดไป";
+                const step10ArchiveLockHint = step10ArchiveLocked
+                    ? "ล็อกไว้จนกว่าทุกงวดงานจะเป็นสถานะ «จ่ายเงินแล้ว» และเอกสารแนบบังคับครบถ้วน — กดเพื่อดูจุดที่ยังไม่ครบ"
+                    : null;
                 const showBackButton =
                   activeStep > 1 && workflowMode !== "historical_edit";
                 const showClearCurrentStep =
@@ -5254,13 +5477,38 @@ function ProjectDetailPage() {
                         {showCompleteBtn &&
                           (current.step_number !== 6 || step6CanAdvanceAfterVerdict) &&
                           !step7BreachNoShow && (
-                          <button
-                            onClick={() => completeStep()}
-                            disabled={disabled}
-                            className="h-10 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed disabled:hover:bg-muted flex items-center gap-2"
-                          >
-                            <Check className="h-4 w-4" /> {completeBtnLabel}
-                          </button>
+                          <div className="flex flex-col items-end gap-1">
+                            <button
+                              onClick={() => {
+                                if (step10ArchiveLocked) {
+                                  const firstIssue =
+                                    step10ComplianceIssues[0] ?? {
+                                      id: `installment-1-payment_status`,
+                                      message:
+                                        "ยังปิดโครงการไม่ได้ — ทุกงวดต้องเป็นสถานะ «จ่ายเงินแล้ว» และเอกสารบังคับครบถ้วน",
+                                    };
+                                  failStepCompliance(firstIssue.message, firstIssue.id);
+                                  return;
+                                }
+                                void completeStep();
+                              }}
+                              disabled={completeBtnDisabled}
+                              title={step10ArchiveLockHint ?? undefined}
+                              aria-disabled={step10ArchiveLocked || undefined}
+                              className={`h-10 px-4 rounded-md text-sm font-medium flex items-center gap-2 ${
+                                step10ArchiveLocked
+                                  ? "bg-muted text-muted-foreground cursor-not-allowed hover:bg-muted"
+                                  : "bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed disabled:hover:bg-muted"
+                              }`}
+                            >
+                              <Check className="h-4 w-4" /> {completeBtnLabel}
+                            </button>
+                            {step10ArchiveLockHint && (
+                              <p className="text-xs text-amber-800 max-w-xs text-right">
+                                {step10ArchiveLockHint}
+                              </p>
+                            )}
+                          </div>
                         )}
                         {showStep7BreachEndBtn && (
                           <button

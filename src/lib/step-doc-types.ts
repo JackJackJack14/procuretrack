@@ -482,6 +482,7 @@ export function hasStep9Hs1Doc(docs: Array<{ document_type: string }>): boolean 
 /** ประเภทเอกสารขั้นตอนที่ 10 — บริหารสัญญา (คืนหลักประกัน) */
 export const STEP10_DOC = {
   GUARANTEE_RETURN: "บันทึกคืนหลักประกันสัญญา",
+  CONTRACT_AMENDMENT_APPROVAL_PREFIX: "เอกสารอนุมัติแก้ไขสัญญา / บันทึกข้อความขยายเวลา",
 } as const;
 
 /** @deprecated */

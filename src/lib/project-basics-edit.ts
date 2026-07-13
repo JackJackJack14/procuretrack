@@ -29,7 +29,8 @@ export type CriticalProjectSnapshot = {
 
 export type WorkflowAuditAction =
   | "rollback_to_edit_basics"
-  | "critical_fields_saved_reset";
+  | "critical_fields_saved_reset"
+  | "step10_archive_completed";
 
 export type WorkflowAuditEntry = {
   projectId: string;

@@ -7,6 +7,7 @@ import {
   STEP7_DOC,
   STEP9_DOC,
 } from "@/lib/step-doc-types";
+import { STEP10_INSTALLMENT_DOC } from "@/lib/step10-contract";
 
 export const COMPLIANCE_TARGET_ATTR = "data-compliance-target";
 
@@ -104,6 +105,20 @@ export function resolveDocTypeFromComplianceIssue(issueIdOrDocType: string): str
     } catch {
       return null;
     }
+  }
+  const step10DocMatch =
+    /^installment-(\d+)-(delivery_letter_doc|supervisor_report_doc|inspection_report_doc)$/.exec(
+      issueIdOrDocType,
+    );
+  if (step10DocMatch) {
+    const n = Number(step10DocMatch[1]);
+    const kind = step10DocMatch[2];
+    if (kind === "delivery_letter_doc") return STEP10_INSTALLMENT_DOC.deliveryLetter(n);
+    if (kind === "supervisor_report_doc") return STEP10_INSTALLMENT_DOC.supervisorReport(n);
+    return STEP10_INSTALLMENT_DOC.inspectionReport(n);
+  }
+  if (issueIdOrDocType === "amendment-approval-doc") {
+    return null;
   }
   if (
     Object.values(STEP3_DOC).includes(issueIdOrDocType as (typeof STEP3_DOC)[keyof typeof STEP3_DOC]) ||
