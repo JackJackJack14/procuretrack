@@ -106,7 +106,7 @@ export const METHOD_LABEL: Record<string, string> = Object.fromEntries(
 export const STATUS_LABEL: Record<string, string> = {
   active: "กำลังดำเนินการ",
   completed: "เสร็จสิ้น",
-  warranty: "ปิดงานจ้างสำเร็จ (อยู่ระหว่างค้ำประกันความชำรุด 2 ปี)",
+  warranty: "ปิดงานจ้างสำเร็จ (อยู่ระหว่างค้ำประกันความชำรุดบกพร่อง)",
   cancelled: "ยกเลิก",
   contract_breach_cancelled: "เอกชนทิ้งงาน (มาตรา 109)",
   on_hold: "พักการดำเนินการ",

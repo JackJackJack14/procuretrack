@@ -10,6 +10,7 @@ type Props = {
   value: number | null;
   onChange: (value: number | null) => void;
   readOnly?: boolean;
+  disabled?: boolean;
   placeholder?: string;
   className?: string;
   /** แสดงบรรทัดยืนยันจำนวนเงินที่ฟอร์แมตแล้วใต้ช่องกรอก */
@@ -21,6 +22,7 @@ export function CurrencyInput({
   value,
   onChange,
   readOnly = false,
+  disabled = false,
   placeholder = "0",
   className,
   showFormattedHint = false,
@@ -60,6 +62,7 @@ export function CurrencyInput({
         value={display}
         onChange={handleChange}
         placeholder={placeholder}
+        disabled={disabled}
         className={className}
         autoComplete="off"
       />

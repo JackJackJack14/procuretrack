@@ -9,15 +9,52 @@ import {
   STEP10_PENALTY_RATE_GENERAL_DEFAULT,
   todayLocalISO,
 } from "@/lib/step10-guideline";
+import {
+  STEP7_DEFECT_WARRANTY_YEARS_DEFAULT,
+  addCalendarYearsISO,
+} from "@/lib/step7-lg-expiry";
 
-/** สถานะโครงการ — หลังปิดงานจ้าง อยู่ระหว่างค้ำประกัน 2 ปี */
+/** สถานะโครงการ — หลังปิดงานจ้าง อยู่ระหว่างค้ำประกันความชำรุดบกพร่อง */
 export const PROJECT_STATUS_WARRANTY = "warranty";
 
 /** สถานะโครงการ — ผู้ชนะไม่มาลงนามสัญญา (มาตรา 109) */
 export const PROJECT_STATUS_CONTRACT_BREACH_CANCELLED = "contract_breach_cancelled";
 
+/** ระเบียบฯ ข้อ 185 — ระยะค้ำประกันความชำรุดบกพร่องต้องไม่น้อยกว่า 2 ปี */
+export const STEP10_DEFECT_WARRANTY_YEARS_MIN = 2;
+export const STEP10_DEFECT_WARRANTY_YEARS_DEFAULT = STEP7_DEFECT_WARRANTY_YEARS_DEFAULT;
+
+/** @deprecated ใช้ formatProjectWarrantyStatusLabel(years) เมื่อทราบระยะปี */
 export const PROJECT_WARRANTY_STATUS_LABEL =
-  "ปิดงานจ้างสำเร็จ (อยู่ระหว่างค้ำประกันความชำรุด 2 ปี)";
+  "ปิดงานจ้างสำเร็จ (อยู่ระหว่างค้ำประกันความชำรุดบกพร่อง)";
+
+export function formatProjectWarrantyStatusLabel(warrantyYears?: number | null): string {
+  const years = normalizeStep10DefectWarrantyYears(warrantyYears);
+  return `ปิดงานจ้างสำเร็จ (อยู่ระหว่างค้ำประกันความชำรุด ${years} ปี)`;
+}
+
+/**
+ * ระยะค้ำประกัน (ปี) ตามระเบียบฯ ข้อ 185 — ไม่น้อยกว่า 2 ปี
+ * รับค่าจาก Step 7/9 หรือที่ผู้ใช้ระบุใน Step 10
+ */
+export function normalizeStep10DefectWarrantyYears(
+  years: number | null | undefined,
+): number {
+  if (years == null || !Number.isFinite(years)) {
+    return STEP10_DEFECT_WARRANTY_YEARS_DEFAULT;
+  }
+  return Math.max(STEP10_DEFECT_WARRANTY_YEARS_MIN, Math.round(years));
+}
+
+export function isStep10DefectWarrantyYearsValid(
+  years: number | null | undefined,
+): boolean {
+  return (
+    years != null &&
+    Number.isFinite(years) &&
+    Math.round(years) >= STEP10_DEFECT_WARRANTY_YEARS_MIN
+  );
+}
 
 export type Step10InstallmentStatus =
   | "under_construction"
@@ -76,6 +113,133 @@ const STEP10_INSTALLMENT_DOC_LEGACY = {
 };
 
 export const STEP10_GUARANTEE_RETURN_DOC = "บันทึกคืนหลักประกันสัญญา";
+
+/** หนังสือค้ำประกันผลงาน (ความชำรุดบกพร่อง) — Step 10 Warranty Security */
+export const STEP10_WARRANTY_BANK_GUARANTEE_DOC =
+  "หนังสือค้ำประกันธนาคารเพื่อค้ำประกันความชำรุดบกพร่อง";
+
+export const STEP10_WARRANTY_SECURITY_METHOD_OPTIONS = [
+  {
+    value: "retention" as const,
+    label: "หักเงินประกันผลงาน (Retention)",
+  },
+  {
+    value: "bank_guarantee" as const,
+    label: "หนังสือค้ำประกันธนาคาร (Bank Guarantee)",
+  },
+] as const;
+
+export type Step10WarrantySecurityMethod =
+  (typeof STEP10_WARRANTY_SECURITY_METHOD_OPTIONS)[number]["value"] | "";
+
+export type Step10WarrantySecurity = {
+  method: Step10WarrantySecurityMethod;
+  /** อัตราร้อยละหักเงินประกันผลงาน (เช่น 5 หรือ 10) */
+  retention_pct: number | null;
+  /** ยอดเงินประกันที่หักไว้ (บาท) */
+  retention_amount: number | null;
+  bg_document_no: string;
+  bg_bank_name: string;
+  bg_amount: number | null;
+  /** วันหมดอายุหนังสือค้ำประกัน */
+  bg_expiry_date: string;
+};
+
+export const STEP10_WARRANTY_RETENTION_PCT_DEFAULT = 5;
+
+export const EMPTY_STEP10_WARRANTY_SECURITY: Step10WarrantySecurity = {
+  method: "",
+  retention_pct: STEP10_WARRANTY_RETENTION_PCT_DEFAULT,
+  retention_amount: null,
+  bg_document_no: "",
+  bg_bank_name: "",
+  bg_amount: null,
+  bg_expiry_date: "",
+};
+
+export function normalizeStep10WarrantySecurity(
+  raw?: Partial<Step10WarrantySecurity> | null,
+): Step10WarrantySecurity {
+  const method =
+    raw?.method === "retention" || raw?.method === "bank_guarantee" ? raw.method : "";
+  const retentionPctRaw = raw?.retention_pct;
+  const retentionPct =
+    retentionPctRaw != null && Number.isFinite(retentionPctRaw) && retentionPctRaw > 0
+      ? retentionPctRaw
+      : STEP10_WARRANTY_RETENTION_PCT_DEFAULT;
+  const retentionAmountRaw = raw?.retention_amount;
+  const retentionAmount =
+    retentionAmountRaw != null && Number.isFinite(retentionAmountRaw) && retentionAmountRaw >= 0
+      ? retentionAmountRaw
+      : null;
+  const bgAmountRaw = raw?.bg_amount;
+  const bgAmount =
+    bgAmountRaw != null && Number.isFinite(bgAmountRaw) && bgAmountRaw >= 0
+      ? bgAmountRaw
+      : null;
+  return {
+    method,
+    retention_pct: retentionPct,
+    retention_amount: retentionAmount,
+    bg_document_no: raw?.bg_document_no?.trim() ?? "",
+    bg_bank_name: raw?.bg_bank_name?.trim() ?? "",
+    bg_amount: bgAmount,
+    bg_expiry_date: raw?.bg_expiry_date?.trim() ?? "",
+  };
+}
+
+export function computeStep10RetentionAmount(
+  contractAmount: number | null | undefined,
+  retentionPct: number | null | undefined,
+): number | null {
+  if (
+    contractAmount == null ||
+    !Number.isFinite(contractAmount) ||
+    contractAmount <= 0 ||
+    retentionPct == null ||
+    !Number.isFinite(retentionPct) ||
+    retentionPct <= 0
+  ) {
+    return null;
+  }
+  return Math.round(contractAmount * (retentionPct / 100) * 100) / 100;
+}
+
+export function step10WarrantySecurityMethodLabel(
+  method: Step10WarrantySecurityMethod,
+): string {
+  return (
+    STEP10_WARRANTY_SECURITY_METHOD_OPTIONS.find((o) => o.value === method)?.label ??
+    "— ยังไม่ระบุ —"
+  );
+}
+
+/** BG หมดอายุก่อนวันสิ้นสุดค้ำประกัน → ไม่ครอบคลุม */
+export function isStep10BgExpiryShortOfWarranty(
+  bgExpiryISO: string,
+  warrantyEndISO: string,
+): boolean {
+  const expiry = bgExpiryISO?.trim() ?? "";
+  const end = warrantyEndISO?.trim() ?? "";
+  if (!expiry || !end) return false;
+  return expiry < end;
+}
+
+export const STEP10_BG_EXPIRY_SHORT_OF_WARRANTY_MSG =
+  "❌ หลักประกันผลงานไม่ครอบคลุมระยะเวลาค้ำประกัน!";
+
+/** วันแจ้งเตือนล่วงหน้าก่อนครบกำหนดคืนหลักประกัน (ค่าเริ่มต้น 30 วัน) */
+export function computeStep10WarrantyReturnReminderISO(
+  warrantyEndISO: string,
+  daysBefore = 30,
+): string | null {
+  const end = warrantyEndISO?.trim() ?? "";
+  if (!end) return null;
+  const d = parseLocalISODate(end);
+  if (!d) return null;
+  d.setDate(d.getDate() - Math.abs(Math.round(daysBefore)));
+  return formatLocalISODate(d);
+}
 
 export const STEP10_AMENDMENT_APPROVAL_DOC_PREFIX =
   "เอกสารอนุมัติแก้ไขสัญญา / บันทึกข้อความขยายเวลา";
@@ -272,15 +436,22 @@ export function computeStep10InstallmentDueDates(opts: {
   totalInstallments: number;
   originalContractEndISO: string;
   amendments?: Step10ContractAmendment[];
+  /** วันครบกำหนดจากตารางงวดเงิน Step 9 (ถ้ามี) — ใช้ก่อนสูตรแบ่งช่วง */
+  schedulePlannedDates?: string[];
 }): string[] {
   const n = Math.max(0, Math.floor(opts.totalInstallments));
   if (n <= 0) return [];
 
-  const base = computeStep10InstallmentPlannedDates(
+  const computed = computeStep10InstallmentPlannedDates(
     opts.workStartISO,
     opts.contractDurationDays,
     n,
   );
+  const fromSchedule = opts.schedulePlannedDates ?? [];
+  const base = Array.from({ length: n }, (_, i) => {
+    const scheduled = fromSchedule[i]?.trim() ?? "";
+    return scheduled || computed[i]?.trim() || "";
+  });
 
   const originalEnd = opts.originalContractEndISO?.trim() ?? "";
   const amendments = opts.amendments ?? [];
@@ -462,11 +633,16 @@ export function resolveLastInstallmentInspectionDate(rows: Step10InspectionRow[]
   return withDate[0].inspection_date?.trim() ?? "";
 }
 
-export function computeWarrantyEndDateISO(lastInspectionISO: string): string | null {
-  const d = parseLocalISODate(lastInspectionISO);
-  if (!d) return null;
-  d.setFullYear(d.getFullYear() + 2);
-  return formatLocalISODate(d);
+/**
+ * วันสิ้นสุดค้ำประกัน = วันตรวจรับงวดสุดท้าย + ระยะปีตามสัญญา (ระเบียบฯ ข้อ 185)
+ * @param warrantyYears ระยะค้ำประกันเป็นปี — ค่าเริ่มต้น/ขั้นต่ำ 2 ปี หากไม่ระบุ
+ */
+export function computeWarrantyEndDateISO(
+  lastInspectionISO: string,
+  warrantyYears?: number | null,
+): string | null {
+  const years = normalizeStep10DefectWarrantyYears(warrantyYears);
+  return addCalendarYearsISO(lastInspectionISO, years);
 }
 
 /** จำนวนวันปฏิทินที่เหลือจนครบกำหนดค้ำประกัน (0 = วันสุดท้าย, ค่าลบ = เลยกำหนดแล้ว) */
@@ -788,6 +964,40 @@ export function step10AmendmentMinExtendedEndDate(currentEndISO: string): string
   if (!current) return "";
   return addCalendarDaysISO(current, 1) ?? "";
 }
+
+/**
+ * วันครบกำหนด Baseline ต่องวด — ก่อนมีการขยายเวลา/แก้ไขสัญญา
+ * (เทียบเท่า Due Dates ที่ไม่รวม amendments)
+ */
+export function computeStep10InstallmentBaselineDates(opts: {
+  workStartISO: string;
+  contractDurationDays: number | null | undefined;
+  totalInstallments: number;
+  originalContractEndISO: string;
+  schedulePlannedDates?: string[];
+}): string[] {
+  return computeStep10InstallmentDueDates({
+    ...opts,
+    amendments: [],
+  });
+}
+
+/** วันที่กำหนดจริง (Adjusted) เกินวันสิ้นสุดสัญญาเดิมหรือไม่ */
+export function isStep10AdjustedDateBeyondOriginalContractEnd(
+  adjustedISO: string,
+  originalContractEndISO: string,
+): boolean {
+  const adjusted = adjustedISO?.trim() ?? "";
+  const originalEnd = originalContractEndISO?.trim() ?? "";
+  if (!adjusted || !originalEnd) return false;
+  return adjusted > originalEnd;
+}
+
+export const STEP10_ADJUSTED_DATE_BEYOND_ORIGINAL_END_MSG =
+  "วันที่กำหนดจริงเกินวันสิ้นสุดสัญญาเดิม — ต้องมีการอนุมัติขยายเวลา (บันทึกข้อความขยายเวลา) มิฉะนั้นอาจมีผลค่าปรับตามสัญญา";
+
+export const STEP10_ADJUSTED_DATE_REQUIRES_AMENDMENT_MSG =
+  "แก้ไขวันที่กำหนดจริงได้เฉพาะเมื่อมีเอกสารบันทึกข้อความขยายเวลา/แก้ไขสัญญาอ้างอิง — กรุณาเลือกเลขที่เอกสารก่อน";
 
 /**
  * ปรับวันครบกำหนดงวดหลังขยายสัญญา

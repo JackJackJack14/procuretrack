@@ -71,6 +71,7 @@ import {
   inferStep10PaymentStatusFromRow,
   normalizeStep10PaymentStatus,
   normalizeStep10ContractAmendment,
+  normalizeStep10WarrantySecurity,
   canAdvanceStep10PaymentStatus,
   getStep10InstallmentDocChecklist,
 } from "@/lib/step10-contract";
@@ -1981,12 +1982,29 @@ export type Step8FormData = {
 };
 
 /** ระยะเวลาและงวดงาน — ขั้นตอนที่ 9 */
+export type Step9InstallmentFinancialRow = {
+  installment_no: number;
+  /**
+   * วันครบกำหนดส่งมอบประจำงวด — กรอกเองตามสัญญา (Manual Entry)
+   * ไม่มีค่าเริ่มต้นจากสูตรคำนวณ
+   */
+  planned_completion_date: string;
+  /** งานที่ทำเพิ่มในงวดนี้ (ร้อยละ %) — ค่าที่ผู้ใช้กรอก */
+  incremental_progress_pct: number | null;
+  /** งานสะสมถึงสิ้นงวดนี้ (ร้อยละ %) — คำนวณอัตโนมัติจาก incremental */
+  cumulative_progress_pct: number | null;
+  /** จำนวนเงินที่ชำระในงวดนี้ (บาท) — คำนวณอัตโนมัติ */
+  payment_amount: number | null;
+};
+
 export type Step9ContractSchedule = {
   contract_duration_days: number | null;
   /** วันสิ้นสุดสัญญา — บันทึกจากฟอร์มเพื่อส่งต่อขั้นตอนที่ 10 */
   contract_end_date: string;
   /** จำนวนงวดงานทั้งหมดตามสัญญา — ใช้ดีดตารางตรวจรับ Step 10 */
   total_installment_count: number | null;
+  /** ตารางงวดเงิน — งานเพิ่มต่องวด (%) / งานสะสม / จำนวนเงิน */
+  installment_schedule?: Step9InstallmentFinancialRow[];
   /** วันเริ่มต้นสัญญา — sync กับ notice_to_proceed_date (legacy) */
   work_start_date: string;
   notice_to_proceed_date: string;
@@ -1994,7 +2012,7 @@ export type Step9ContractSchedule = {
   egp_essential_publication_date: string;
   /** เลขที่สัญญาจากระบบ e-GP */
   egp_contract_control_no: string;
-  /** @deprecated ไม่ใช้ในฟอร์มขั้นตอนที่ 9 รุ่นใหม่ */
+  /** @deprecated ไม่ใช้ในฟอร์มขั้นตอนที่ 9 เวอร์ชันใหม่ */
   notice_to_proceed_letter_no: string;
 };
 
@@ -2007,6 +2025,7 @@ export const EMPTY_STEP9_CONTRACT_SCHEDULE: Step9ContractSchedule = {
   contract_duration_days: null,
   contract_end_date: "",
   total_installment_count: null,
+  installment_schedule: [],
   work_start_date: "",
   notice_to_proceed_date: "",
   egp_essential_publication_date: "",
@@ -2014,13 +2033,328 @@ export const EMPTY_STEP9_CONTRACT_SCHEDULE: Step9ContractSchedule = {
   notice_to_proceed_letter_no: "",
 };
 
+export const STEP9_INSTALLMENT_AMOUNT_TOLERANCE_BAHT = 1;
+export const STEP9_INSTALLMENT_PCT_TOLERANCE = 0.01;
+
+function roundBaht2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+function roundPct2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+function isFiniteNumber(n: number | null | undefined): n is number {
+  return n != null && Number.isFinite(n);
+}
+
+/**
+ * แปลงแถวดิบ → รูปแบบมาตรฐาน
+ * รองรับข้อมูลเก่าย้ายจาก cumulative อย่างเดียว → คำนวณ incremental ย้อนหลังตอน migrate ทั้งตาราง
+ */
+export function normalizeStep9InstallmentFinancialRow(
+  raw: Partial<Step9InstallmentFinancialRow> | null | undefined,
+  index: number,
+): Step9InstallmentFinancialRow {
+  const incRaw = raw?.incremental_progress_pct;
+  const cumRaw = raw?.cumulative_progress_pct;
+  const amountRaw = raw?.payment_amount;
+  return {
+    installment_no: raw?.installment_no ?? index + 1,
+    planned_completion_date: raw?.planned_completion_date?.trim() ?? "",
+    incremental_progress_pct:
+      incRaw != null && Number.isFinite(incRaw) ? incRaw : null,
+    cumulative_progress_pct:
+      cumRaw != null && Number.isFinite(cumRaw) ? cumRaw : null,
+    payment_amount:
+      amountRaw != null && Number.isFinite(amountRaw) ? amountRaw : null,
+  };
+}
+
+/** ย้ายข้อมูลเก่ารูปแบบ cumulative-only → incremental (ผลต่างงวดต่องวด) */
+export function migrateStep9InstallmentRowsToIncremental(
+  rows: Array<Partial<Step9InstallmentFinancialRow> | null | undefined>,
+): Step9InstallmentFinancialRow[] {
+  let prevCum = 0;
+  return rows.map((raw, i) => {
+    const base = normalizeStep9InstallmentFinancialRow(raw, i);
+    let inc = base.incremental_progress_pct;
+    if (!isFiniteNumber(inc) && isFiniteNumber(base.cumulative_progress_pct)) {
+      inc = roundPct2(base.cumulative_progress_pct - prevCum);
+      prevCum = base.cumulative_progress_pct;
+    } else if (isFiniteNumber(inc)) {
+      prevCum = roundPct2(prevCum + inc);
+    }
+    return {
+      ...base,
+      incremental_progress_pct: isFiniteNumber(inc) ? inc : null,
+    };
+  });
+}
+
+/**
+ * คำนวณงานสะสม + จำนวนเงินจากงานที่ทำเพิ่มในงวดนี้ (Incremental %):
+ * cum_i = sum(inc_1..i)
+ * payment_i = วงเงินสัญญา × (inc_i / 100)
+ * งวดสุดท้ายเมื่อสะสมครบ 100% ใช้ยอดคงเหลือดูดซับเศษทศนิยม
+ */
+export function recalculateStep9InstallmentPayments(
+  rows: Step9InstallmentFinancialRow[],
+  contractAmount: number | null | undefined,
+): Step9InstallmentFinancialRow[] {
+  const amountOk =
+    contractAmount != null && Number.isFinite(contractAmount) && contractAmount > 0
+      ? contractAmount
+      : null;
+
+  const migrated = migrateStep9InstallmentRowsToIncremental(rows);
+  let cum = 0;
+  let paidSoFar = 0;
+
+  return migrated.map((row, i) => {
+    const isLast = i === migrated.length - 1;
+    const inc = row.incremental_progress_pct;
+    let cumPct: number | null = null;
+    let payment: number | null = null;
+
+    if (isFiniteNumber(inc)) {
+      cum = roundPct2(cum + inc);
+      cumPct = cum;
+      if (amountOk != null) {
+        const atFullProgress = Math.abs(cum - 100) <= STEP9_INSTALLMENT_PCT_TOLERANCE;
+        if (isLast && atFullProgress) {
+          payment = roundBaht2(amountOk - paidSoFar);
+        } else {
+          payment = roundBaht2((amountOk * inc) / 100);
+        }
+        paidSoFar = roundBaht2(paidSoFar + payment);
+      }
+    }
+
+    return normalizeStep9InstallmentFinancialRow(
+      {
+        ...row,
+        cumulative_progress_pct: cumPct,
+        payment_amount: payment,
+      },
+      i,
+    );
+  });
+}
+
+/**
+ * สร้าง/ซิงก์ตารางงวดเงินตามจำนวนงวด
+ * — วันครบกำหนด: Manual Entry เท่านั้น (คงค่าที่ผู้ใช้กรอก ไม่เติมจากสูตร)
+ * — Incremental % คงค่าเดิมหรือค่าเริ่มต้นแบ่งเท่า; สะสมและเงินคำนวณอัตโนมัติ
+ */
+export function buildStep9InstallmentSchedule(
+  count: number,
+  contractAmount: number | null | undefined,
+  existing: Step9InstallmentFinancialRow[] = [],
+  _plannedDates: string[] = [],
+): Step9InstallmentFinancialRow[] {
+  const n = Math.max(0, Math.min(99, Math.floor(count)));
+  if (n <= 0) return [];
+
+  const migratedExisting = migrateStep9InstallmentRowsToIncremental(existing);
+  let allocatedPct = 0;
+
+  const base = Array.from({ length: n }, (_, i) => {
+    const installment_no = i + 1;
+    const prev = migratedExisting.find((r) => r.installment_no === installment_no);
+    const equalShare = roundPct2(100 / n);
+    let defaultInc: number;
+    if (installment_no === n) {
+      defaultInc = roundPct2(100 - allocatedPct);
+    } else {
+      defaultInc = equalShare;
+      allocatedPct = roundPct2(allocatedPct + equalShare);
+    }
+
+    return normalizeStep9InstallmentFinancialRow(
+      {
+        installment_no,
+        // Manual Entry: ห้ามเติมวันที่จากสูตร — ว่างจนกว่าผู้ใช้จะกรอก
+        planned_completion_date: prev?.planned_completion_date?.trim() || "",
+        incremental_progress_pct:
+          prev?.incremental_progress_pct != null
+            ? prev.incremental_progress_pct
+            : defaultInc,
+        cumulative_progress_pct: null,
+        payment_amount: null,
+      },
+      i,
+    );
+  });
+
+  return recalculateStep9InstallmentPayments(base, contractAmount);
+}
+
+/**
+ * Hard-limit เท่านั้น:
+ * 1) วันครบกำหนดเกินวันสิ้นสุดสัญญา
+ * 2) วันที่งวดไม่เรียงลำดับ (งวด N มากกว่างวด N+1)
+ */
+export function getStep9InstallmentDateWarnings(
+  rows: Step9InstallmentFinancialRow[] | null | undefined,
+  opts: {
+    contractEndDate?: string | null;
+  } = {},
+): string[] {
+  const warnings: string[] = [];
+  const list = [...(rows ?? [])].sort(
+    (a, b) => a.installment_no - b.installment_no,
+  );
+  const contractEnd = opts.contractEndDate?.trim() ?? "";
+
+  for (const row of list) {
+    const date = row.planned_completion_date?.trim() ?? "";
+    if (!date) continue;
+    if (contractEnd && date > contractEnd) {
+      warnings.push(
+        `งวดที่ ${row.installment_no}: วันครบกำหนดเกินวันสิ้นสุดสัญญา — กรุณาตรวจสอบ`,
+      );
+    }
+  }
+
+  for (let i = 0; i < list.length - 1; i++) {
+    const current = list[i]?.planned_completion_date?.trim() ?? "";
+    const next = list[i + 1]?.planned_completion_date?.trim() ?? "";
+    if (current && next && current > next) {
+      warnings.push(
+        `วันที่ส่งมอบไม่เรียงลำดับ: งวดที่ ${list[i].installment_no} มากกว่างวดที่ ${list[i + 1].installment_no}`,
+      );
+    }
+  }
+
+  return warnings;
+}
+
+export function sumStep9InstallmentPaymentAmounts(
+  rows: Step9InstallmentFinancialRow[] | null | undefined,
+): number {
+  return (rows ?? []).reduce((sum, row) => {
+    const a = row.payment_amount;
+    return sum + (a != null && Number.isFinite(a) ? a : 0);
+  }, 0);
+}
+
+export function sumStep9InstallmentIncrementalPct(
+  rows: Step9InstallmentFinancialRow[] | null | undefined,
+): number {
+  return roundPct2(
+    (rows ?? []).reduce((sum, row) => {
+      const a = row.incremental_progress_pct;
+      return sum + (a != null && Number.isFinite(a) ? a : 0);
+    }, 0),
+  );
+}
+
+/** ผลรวมจำนวนเงินทุกงวดต้องเท่ากับวงเงินสัญญา (ยอมคลาดเคลื่อน ±1 บาท) */
+export function isStep9InstallmentAmountBalanced(
+  rows: Step9InstallmentFinancialRow[] | null | undefined,
+  contractAmount: number | null | undefined,
+  toleranceBaht = STEP9_INSTALLMENT_AMOUNT_TOLERANCE_BAHT,
+): boolean {
+  if (contractAmount == null || !Number.isFinite(contractAmount) || contractAmount <= 0) {
+    return true;
+  }
+  const rowsList = rows ?? [];
+  if (rowsList.length === 0) return true;
+  const sum = sumStep9InstallmentPaymentAmounts(rowsList);
+  return Math.abs(sum - contractAmount) <= toleranceBaht;
+}
+
+/** ผลรวมงานสะสม (หรือผลรวม incremental) ต้องเท่ากับ 100% */
+export function isStep9InstallmentProgressAt100(
+  rows: Step9InstallmentFinancialRow[] | null | undefined,
+  tolerancePct = STEP9_INSTALLMENT_PCT_TOLERANCE,
+): boolean {
+  const rowsList = rows ?? [];
+  if (rowsList.length === 0) return false;
+  const lastCum = rowsList[rowsList.length - 1]?.cumulative_progress_pct;
+  if (isFiniteNumber(lastCum)) {
+    return Math.abs(lastCum - 100) <= tolerancePct;
+  }
+  return Math.abs(sumStep9InstallmentIncrementalPct(rowsList) - 100) <= tolerancePct;
+}
+
+/** คำเตือน real-time เมื่อ incremental ติดลบ หรือสะสมเกิน 100% */
+export function getStep9InstallmentProgressWarnings(
+  rows: Step9InstallmentFinancialRow[] | null | undefined,
+): string[] {
+  const warnings: string[] = [];
+  const list = rows ?? [];
+  for (const row of list) {
+    const inc = row.incremental_progress_pct;
+    if (isFiniteNumber(inc) && inc < 0) {
+      warnings.push(
+        `งวดที่ ${row.installment_no}: งานที่ทำเพิ่มในงวดนี้ติดลบ (${inc}%) — กรุณาแก้ไข`,
+      );
+    }
+    const cum = row.cumulative_progress_pct;
+    if (isFiniteNumber(cum) && cum > 100 + STEP9_INSTALLMENT_PCT_TOLERANCE) {
+      warnings.push(
+        `งวดที่ ${row.installment_no}: งานสะสมเกิน 100% (ปัจจุบัน ${cum}%) — กรุณาลดค่างานเพิ่มในงวด`,
+      );
+    }
+  }
+  const totalInc = sumStep9InstallmentIncrementalPct(list);
+  if (
+    list.length > 0 &&
+    list.every((r) => isFiniteNumber(r.incremental_progress_pct)) &&
+    totalInc > 100 + STEP9_INSTALLMENT_PCT_TOLERANCE
+  ) {
+    warnings.push(
+      `ผลรวมงานที่ทำเพิ่มทุกงวดเกิน 100% (ปัจจุบัน ${totalInc}%) — ต้องรวมกันได้พอดี 100%`,
+    );
+  }
+  return warnings;
+}
+
+/** ข้อความเตือนเมื่อยอดรวมงวดเงินไม่เท่ากับวงเงินสัญญา */
+export function getStep9InstallmentAmountBalanceAlertMessage(
+  contractAmount: number,
+): string {
+  const formatted = contractAmount.toLocaleString("th-TH", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  });
+  return `ยอดเงินรวมไม่ครบถ้วน: ต้องเท่ากับ ${formatted} บาท`;
+}
+
+export function getStep9InstallmentProgressNot100AlertMessage(
+  currentPct: number,
+): string {
+  return `งานสะสมรวมไม่ครบถ้วน: ต้องเท่ากับ 100% (ปัจจุบัน ${roundPct2(currentPct)}%)`;
+}
+
+export function resolveStep9InstallmentFinancialRow(
+  schedule: Step9ContractSchedule | null | undefined,
+  installmentNo: number,
+): Step9InstallmentFinancialRow | null {
+  const row = (schedule?.installment_schedule ?? []).find(
+    (r) => r.installment_no === installmentNo,
+  );
+  return row ?? null;
+}
+
 /** แถวตารางตรวจรับงวดงาน — ขั้นตอนที่ 10 */
 export type Step10ProjectType = "general" | "construction";
 
 export type Step10InspectionRow = {
   installment_no: number;
-  /** วันครบกำหนดส่งมอบประจำงวดตามสัญญา */
+  /**
+   * วันครบกำหนดจริง (Adjusted) — ใช้คิดค่าปรับและสถานะล่าช้า
+   * แก้ไขได้เฉพาะเมื่อมีเอกสารแก้ไขสัญญา (Amendment) อ้างอิง
+   */
   planned_completion_date: string;
+  /**
+   * วันที่ตามสัญญา (Baseline) — จาก Step 7/9 ก่อนขยายเวลา ห้ามแก้ไข
+   */
+  baseline_planned_completion_date?: string;
+  /** รหัสประวัติแก้ไขสัญญาที่ใช้อ้างอิงเมื่อปรับ Adjusted Date */
+  adjusted_date_amendment_id?: string;
   /** เลขที่หนังสือส่งมอบงาน */
   delivery_letter_no: string;
   delivery_date: string;
@@ -2057,6 +2391,10 @@ export type Step10FormData = {
   project_type?: Step10ProjectType;
   inspectionRows?: Step10InspectionRow[];
   contractAmendments?: Step10ContractAmendment[];
+  /** ระยะค้ำประกันความชำรุดบกพร่อง (ปี) — ระเบียบฯ ข้อ 185 ไม่น้อยกว่า 2 ปี */
+  defect_warranty_years?: number | null;
+  /** การจัดการหลักประกันผลงาน (Retention / Bank Guarantee) */
+  warrantySecurity?: import("@/lib/step10-contract").Step10WarrantySecurity;
 };
 
 function normalizeStep10InspectionRow(
@@ -2076,6 +2414,11 @@ function normalizeStep10InspectionRow(
   return {
     installment_no: row.installment_no ?? index + 1,
     planned_completion_date: row.planned_completion_date?.trim() ?? "",
+    baseline_planned_completion_date:
+      row.baseline_planned_completion_date?.trim() ||
+      row.planned_completion_date?.trim() ||
+      "",
+    adjusted_date_amendment_id: row.adjusted_date_amendment_id?.trim() ?? "",
     delivery_letter_no: row.delivery_letter_no?.trim() ?? "",
     delivery_date: row.delivery_date?.trim() ?? "",
     inspection_date: row.inspection_date?.trim() ?? "",
@@ -2110,16 +2453,44 @@ export function buildStep10InspectionRows(
   existing: Step10InspectionRow[] = [],
   plannedDates: string[] = [],
   projectType: Step10ProjectType = "general",
+  baselineDates: string[] = [],
 ): Step10InspectionRow[] {
   const n = Math.max(0, Math.min(99, Math.floor(totalInstallments)));
   return Array.from({ length: n }, (_, index) => {
     const installment_no = index + 1;
     const prev = existing.find((row) => row.installment_no === installment_no);
-    const planned =
-      plannedDates[index]?.trim() || prev?.planned_completion_date?.trim() || "";
+    const baselineFromSource =
+      baselineDates[index]?.trim() ||
+      prev?.baseline_planned_completion_date?.trim() ||
+      "";
+    const pipelineAdjusted = plannedDates[index]?.trim() || "";
+    const hasLinkedAmendment = Boolean(prev?.adjusted_date_amendment_id?.trim());
+    const isLast = installment_no === n && n > 0;
+
+    // Baseline: อัปเดตจากแหล่ง Step 7/9 เสมอ (ล็อกไม่ให้ผู้ใช้แก้ — แหล่งอ้างอิงเท่านั้น)
+    const baseline =
+      baselineFromSource ||
+      prev?.planned_completion_date?.trim() ||
+      pipelineAdjusted ||
+      "";
+
+    // Adjusted: คงค่าที่ผูกลิงก์กับ Amendment ไว้; งวดสุดท้ายยังรับค่าจาก pipeline เมื่อขยายเวลา
+    let adjusted = pipelineAdjusted || prev?.planned_completion_date?.trim() || baseline;
+    if (hasLinkedAmendment && prev?.planned_completion_date?.trim()) {
+      if (!isLast || !pipelineAdjusted || pipelineAdjusted === prev.planned_completion_date) {
+        adjusted = prev.planned_completion_date.trim();
+      }
+    }
+    if (!adjusted) adjusted = baseline;
+
     if (prev) {
       return normalizeStep10InspectionRow(
-        { ...prev, planned_completion_date: planned },
+        {
+          ...prev,
+          baseline_planned_completion_date: baseline,
+          planned_completion_date: adjusted,
+          adjusted_date_amendment_id: prev.adjusted_date_amendment_id ?? "",
+        },
         index,
         projectType,
       );
@@ -2127,7 +2498,8 @@ export function buildStep10InspectionRows(
     return normalizeStep10InspectionRow(
       {
         installment_no,
-        planned_completion_date: planned,
+        baseline_planned_completion_date: baseline,
+        planned_completion_date: adjusted,
         penalty_rate_pct: projectType === "construction" ? 0.01 : 0.1,
       },
       index,
@@ -2150,6 +2522,11 @@ export function loadStep10FormFromNote(note: string | null): Step10FormData {
   const amendments = (f.contractAmendments ?? []).map((a, i) =>
     normalizeStep10ContractAmendment(a, i),
   );
+  const warrantyYearsRaw = f.defect_warranty_years;
+  const defectWarrantyYears =
+    warrantyYearsRaw != null && Number.isFinite(Number(warrantyYearsRaw))
+      ? Math.round(Number(warrantyYearsRaw))
+      : null;
   return {
     checklist: f.checklist,
     ...(projectType != null ? { project_type: projectType } : {}),
@@ -2157,6 +2534,8 @@ export function loadStep10FormFromNote(note: string | null): Step10FormData {
       normalizeStep10InspectionRow(row, index, rowDefaultType),
     ),
     contractAmendments: amendments,
+    defect_warranty_years: defectWarrantyYears,
+    warrantySecurity: normalizeStep10WarrantySecurity(f.warrantySecurity),
   };
 }
 export function resolveProjectTotalInstallmentCount(
@@ -5070,6 +5449,10 @@ function step10FormHasPersistedData(form: Step10FormData): boolean {
   if (form.project_type) return true;
   if ((form.inspectionRows?.length ?? 0) > 0) return true;
   if ((form.contractAmendments?.length ?? 0) > 0) return true;
+  if (form.defect_warranty_years != null && Number.isFinite(form.defect_warranty_years)) {
+    return true;
+  }
+  if (form.warrantySecurity?.method) return true;
   return false;
 }
 
@@ -5118,6 +5501,7 @@ function step9ContractScheduleHasData(schedule?: Step9ContractSchedule): boolean
   return !!(
     (schedule.contract_duration_days != null && schedule.contract_duration_days > 0) ||
     (schedule.total_installment_count != null && schedule.total_installment_count > 0) ||
+    (schedule.installment_schedule?.length ?? 0) > 0 ||
     schedule.work_start_date?.trim() ||
     schedule.notice_to_proceed_date?.trim() ||
     schedule.egp_essential_publication_date?.trim() ||
@@ -6537,6 +6921,10 @@ export function loadStep9FormFromNote(note: string | null): Step9FormData {
       contract_duration_days: raw?.contract_duration_days ?? null,
       contract_end_date: raw?.contract_end_date?.trim() ?? "",
       total_installment_count: raw?.total_installment_count ?? null,
+      installment_schedule: recalculateStep9InstallmentPayments(
+        migrateStep9InstallmentRowsToIncremental(raw?.installment_schedule ?? []),
+        null,
+      ),
       egp_essential_publication_date: raw?.egp_essential_publication_date ?? "",
       egp_contract_control_no: raw?.egp_contract_control_no ?? "",
       notice_to_proceed_letter_no: raw?.notice_to_proceed_letter_no ?? "",
@@ -6703,6 +7091,8 @@ export function getStep9ComplianceIssues(
     procurementPath?: string | null;
     externalCapture?: Step9ExternalCaptureInput;
     timelineCtx?: TimelineValidationContext;
+    /** วงเงินสัญญาจริง — ใช้ตรวจผลรวมจำนวนเงินทุกงวด */
+    contractAmount?: number | null;
   },
 ): Step9ComplianceIssue[] {
   const issues: Step9ComplianceIssue[] = [];
@@ -6776,6 +7166,78 @@ export function getStep9ComplianceIssues(
       id: "total_installment_count",
       message: "กรุณาระบุจำนวนงวดงานทั้งหมด (ต้องมากกว่า 0)",
     });
+  } else {
+    const rows = schedule.installment_schedule ?? [];
+    if (rows.length !== Math.floor(installments)) {
+      issues.push({
+        id: "installment_schedule",
+        message: "กรุณากรอกตารางงวดเงินให้ครบทุกงวด (งานที่ทำเพิ่มในงวดนี้ %)",
+      });
+    } else {
+      for (const row of rows) {
+        const n = row.installment_no;
+        if (
+          row.incremental_progress_pct == null ||
+          !Number.isFinite(row.incremental_progress_pct)
+        ) {
+          issues.push({
+            id: `installment-${n}-incremental_pct`,
+            message: `งวดที่ ${n}: กรุณาระบุงานที่ทำเพิ่มในงวดนี้ (ร้อยละ %)`,
+          });
+        } else if (row.incremental_progress_pct < 0) {
+          issues.push({
+            id: `installment-${n}-incremental_pct`,
+            message: `งวดที่ ${n}: งานที่ทำเพิ่มในงวดนี้ต้องไม่ติดลบ`,
+          });
+        }
+        if (
+          row.payment_amount == null ||
+          !Number.isFinite(row.payment_amount) ||
+          row.payment_amount < 0
+        ) {
+          issues.push({
+            id: `installment-${n}-payment_amount`,
+            message: `งวดที่ ${n}: ไม่สามารถคำนวณจำนวนเงินที่ชำระได้ — ตรวจสอบงานที่ทำเพิ่มในงวดนี้`,
+          });
+        }
+        if (
+          row.cumulative_progress_pct != null &&
+          Number.isFinite(row.cumulative_progress_pct) &&
+          row.cumulative_progress_pct > 100 + STEP9_INSTALLMENT_PCT_TOLERANCE
+        ) {
+          issues.push({
+            id: `installment-${n}-cumulative_pct`,
+            message: `งวดที่ ${n}: งานสะสมเกิน 100% (ปัจจุบัน ${row.cumulative_progress_pct}%)`,
+          });
+        }
+      }
+      const totalInc = sumStep9InstallmentIncrementalPct(rows);
+      if (
+        rows.every(
+          (r) =>
+            r.incremental_progress_pct != null &&
+            Number.isFinite(r.incremental_progress_pct),
+        ) &&
+        !isStep9InstallmentProgressAt100(rows)
+      ) {
+        issues.push({
+          id: "installment_progress_100",
+          message: getStep9InstallmentProgressNot100AlertMessage(totalInc),
+        });
+      }
+      const contractAmount = opts.contractAmount;
+      if (
+        contractAmount != null &&
+        Number.isFinite(contractAmount) &&
+        contractAmount > 0 &&
+        !isStep9InstallmentAmountBalanced(rows, contractAmount)
+      ) {
+        issues.push({
+          id: "installment_amount_balance",
+          message: getStep9InstallmentAmountBalanceAlertMessage(contractAmount),
+        });
+      }
+    }
   }
 
   if (!hasStep9Hs1Doc(opts.stepDocs ?? [])) {

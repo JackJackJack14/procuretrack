@@ -63,6 +63,7 @@ import { CompletedStepView } from "@/components/steps/CompletedStepView";
 import {
   computeStep10InstallmentPlannedDates,
   computeStep10InstallmentDueDates,
+  computeStep10InstallmentBaselineDates,
   computeWarrantyEndDateISO,
   PROJECT_STATUS_WARRANTY,
   PROJECT_STATUS_CONTRACT_BREACH_CANCELLED,
@@ -70,6 +71,11 @@ import {
   resolveEffectiveContractEndDate,
   applyContractAmendmentToPlannedDates,
   canArchiveStep10Project,
+  normalizeStep10DefectWarrantyYears,
+  STEP10_DEFECT_WARRANTY_YEARS_DEFAULT,
+  EMPTY_STEP10_WARRANTY_SECURITY,
+  normalizeStep10WarrantySecurity,
+  type Step10WarrantySecurity,
 } from "@/lib/step10-contract";
 import {
   addWorkdays,
@@ -213,6 +219,12 @@ import {
   buildProjectStep9ExternalCaptureFields,
   type Step9ExternalCaptureInput,
   isStep9ReadyForNext,
+  isStep9InstallmentAmountBalanced,
+  isStep9InstallmentProgressAt100,
+  getStep9InstallmentAmountBalanceAlertMessage,
+  getStep9InstallmentProgressNot100AlertMessage,
+  sumStep9InstallmentIncrementalPct,
+  recalculateStep9InstallmentPayments,
   getStep10ComplianceIssues,
   isStep10ReadyForNext,
   countStep10FormRequiredProgress,
@@ -263,7 +275,10 @@ import {
   normalizeProcurementPath,
 } from "@/lib/procurement-path";
 import { resolveProjectContractSignedDate } from "@/lib/step9-guideline";
-import { computeStep7ContractEndFromNotice } from "@/lib/step7-lg-expiry";
+import {
+  computeStep7ContractEndFromNotice,
+  resolveStep7DefectWarrantyYears,
+} from "@/lib/step7-lg-expiry";
 import {
   resolveProjectContractEndDate,
   resolveProjectContractStartDate,
@@ -578,6 +593,12 @@ function ProjectDetailPage() {
   const [step10InspectionRows, setStep10InspectionRows] = useState<Step10InspectionRow[]>([]);
   const [step10ProjectType, setStep10ProjectType] = useState<Step10ProjectType>("general");
   const [step10ContractAmendments, setStep10ContractAmendments] = useState<Step10ContractAmendment[]>([]);
+  const [step10DefectWarrantyYears, setStep10DefectWarrantyYears] = useState<number>(
+    STEP10_DEFECT_WARRANTY_YEARS_DEFAULT,
+  );
+  const [step10WarrantySecurity, setStep10WarrantySecurity] = useState<Step10WarrantySecurity>({
+    ...EMPTY_STEP10_WARRANTY_SECURITY,
+  });
 
   const { data, isPending: loading, refetch } = useQuery({
     queryKey: ["project", projectId],
@@ -706,6 +727,8 @@ function ProjectDetailPage() {
     setStep10InspectionRows([]);
     setStep10ProjectType("general");
     setStep10ContractAmendments([]);
+    setStep10DefectWarrantyYears(STEP10_DEFECT_WARRANTY_YEARS_DEFAULT);
+    setStep10WarrantySecurity({ ...EMPTY_STEP10_WARRANTY_SECURITY });
   }, [projectId]);
 
   useEffect(() => {
@@ -816,8 +839,18 @@ function ProjectDetailPage() {
         setStep10ProjectType("general");
         setGenericManualChecklist(createEmptyManualChecklist(10));
         setStep10ContractAmendments([]);
+        setStep10DefectWarrantyYears(
+          resolveStep7DefectWarrantyYears(step7ContractNoticeFromDb),
+        );
+        setStep10WarrantySecurity({ ...EMPTY_STEP10_WARRANTY_SECURITY });
         setStep10InspectionRows(
-          buildStep10InspectionRows(totalInstallmentCount, [], step10PlannedDates, "general"),
+          buildStep10InspectionRows(
+            totalInstallmentCount,
+            [],
+            step10PlannedDates,
+            "general",
+            step10BaselineDates,
+          ),
         );
         setNote("");
         setDueDate("");
@@ -1259,6 +1292,9 @@ function ProjectDetailPage() {
         totalInstallments: totalInstallmentCount,
         originalContractEndISO: contractEndDate ?? "",
         amendments: step10ContractAmendments,
+        schedulePlannedDates: (step9ScheduleForProject.installment_schedule ?? []).map(
+          (r) => r.planned_completion_date?.trim() || "",
+        ),
       }),
     [
       step9ScheduleForProject,
@@ -1266,6 +1302,21 @@ function ProjectDetailPage() {
       contractEndDate,
       step10ContractAmendments,
     ],
+  );
+
+  /** Baseline วันครบกำหนดต่องวด — ไม่รวมการขยายเวลา (อ้างอิง Step 7/9) */
+  const step10BaselineDates = useMemo(
+    () =>
+      computeStep10InstallmentBaselineDates({
+        workStartISO: step9ScheduleForProject.work_start_date,
+        contractDurationDays: step9ScheduleForProject.contract_duration_days,
+        totalInstallments: totalInstallmentCount,
+        originalContractEndISO: contractEndDate ?? "",
+        schedulePlannedDates: (step9ScheduleForProject.installment_schedule ?? []).map(
+          (r) => r.planned_completion_date?.trim() || "",
+        ),
+      }),
+    [step9ScheduleForProject, totalInstallmentCount, contractEndDate],
   );
 
   /** บันทึกประวัติแก้ไขสัญญา + ทับวันครบกำหนดงวดสุดท้ายทันที (atomic state pipeline) */
@@ -1290,7 +1341,15 @@ function ProjectDetailPage() {
         );
         return prev.map((row, idx) => ({
           ...row,
+          baseline_planned_completion_date:
+            row.baseline_planned_completion_date?.trim() ||
+            row.planned_completion_date ||
+            "",
           planned_completion_date: newPlanned[idx] ?? row.planned_completion_date,
+          adjusted_date_amendment_id:
+            idx === totalInstallmentCount - 1
+              ? amendment.id
+              : row.adjusted_date_amendment_id,
         }));
       });
     },
@@ -1629,6 +1688,15 @@ function ProjectDetailPage() {
       const projectType = step10Form.project_type ?? autoDetectedType;
       setStep10ProjectType(projectType);
       setStep10ContractAmendments(amendments);
+      const inheritedWarrantyYears = resolveStep7DefectWarrantyYears(step7ContractNoticeFromDb);
+      setStep10DefectWarrantyYears(
+        normalizeStep10DefectWarrantyYears(
+          step10Form.defect_warranty_years ?? inheritedWarrantyYears,
+        ),
+      );
+      setStep10WarrantySecurity(
+        normalizeStep10WarrantySecurity(step10Form.warrantySecurity),
+      );
       setGenericManualChecklist(
         normalizeManualChecklist(10, step10Form.checklist ?? loadManualChecklistFromNote(10, current.note)),
       );
@@ -1638,6 +1706,18 @@ function ProjectDetailPage() {
         totalInstallments: totalInstallmentCount,
         originalContractEndISO: contractEndDate ?? "",
         amendments,
+        schedulePlannedDates: (step9ScheduleForProject.installment_schedule ?? []).map(
+          (r) => r.planned_completion_date?.trim() || "",
+        ),
+      });
+      const initialBaselineDates = computeStep10InstallmentBaselineDates({
+        workStartISO: step9ScheduleForProject.work_start_date,
+        contractDurationDays: step9ScheduleForProject.contract_duration_days,
+        totalInstallments: totalInstallmentCount,
+        originalContractEndISO: contractEndDate ?? "",
+        schedulePlannedDates: (step9ScheduleForProject.installment_schedule ?? []).map(
+          (r) => r.planned_completion_date?.trim() || "",
+        ),
       });
       setStep10InspectionRows(
         buildStep10InspectionRows(
@@ -1645,6 +1725,7 @@ function ProjectDetailPage() {
           step10Form.inspectionRows ?? [],
           initialPlannedDates,
           projectType,
+          initialBaselineDates,
         ),
       );
       if (isExternalProcurement(effectiveProcurementPath)) {
@@ -1669,9 +1750,22 @@ function ProjectDetailPage() {
   useEffect(() => {
     if (current?.step_number !== 10) return;
     setStep10InspectionRows((prev) =>
-      buildStep10InspectionRows(totalInstallmentCount, prev, step10PlannedDates, step10ProjectType),
+      buildStep10InspectionRows(
+        totalInstallmentCount,
+        prev,
+        step10PlannedDates,
+        step10ProjectType,
+        step10BaselineDates,
+      ),
     );
-  }, [current?.step_number, totalInstallmentCount, step10PlannedDates, step10ProjectType, step10ContractAmendments]);
+  }, [
+    current?.step_number,
+    totalInstallmentCount,
+    step10PlannedDates,
+    step10BaselineDates,
+    step10ProjectType,
+    step10ContractAmendments,
+  ]);
   useEffect(() => {
     if (current?.step_number !== 9 || !contractSignedDate?.trim()) return;
     setStep9ContractSchedule((prev) =>
@@ -2593,10 +2687,43 @@ function ProjectDetailPage() {
         setError(timelineBlock);
         return false;
       }
-      const endISO = resolveStep9ContractEndDateISO(step9ContractSchedule);
+      const scheduleToSave = {
+        ...step9ContractSchedule,
+        installment_schedule: recalculateStep9InstallmentPayments(
+          step9ContractSchedule.installment_schedule ?? [],
+          step10ContractAmount,
+        ),
+      };
+      if ((scheduleToSave.installment_schedule?.length ?? 0) > 0) {
+        if (!isStep9InstallmentProgressAt100(scheduleToSave.installment_schedule)) {
+          const progressMsg = getStep9InstallmentProgressNot100AlertMessage(
+            sumStep9InstallmentIncrementalPct(scheduleToSave.installment_schedule),
+          );
+          toast.error(progressMsg);
+          setError(progressMsg);
+          return false;
+        }
+        if (
+          step10ContractAmount != null &&
+          Number.isFinite(step10ContractAmount) &&
+          step10ContractAmount > 0 &&
+          !isStep9InstallmentAmountBalanced(
+            scheduleToSave.installment_schedule,
+            step10ContractAmount,
+          )
+        ) {
+          const balanceMsg =
+            getStep9InstallmentAmountBalanceAlertMessage(step10ContractAmount);
+          toast.error(balanceMsg);
+          setError(balanceMsg);
+          return false;
+        }
+      }
+      setStep9ContractSchedule(scheduleToSave);
+      const endISO = resolveStep9ContractEndDateISO(scheduleToSave);
       const formNote = serializeStepNote(note, {
         checklist: genericManualChecklist,
-        contractSchedule: step9ContractSchedule,
+        contractSchedule: scheduleToSave,
       });
       const { error: e } = await patchStepDraft(
         current.id,
@@ -2616,9 +2743,9 @@ function ProjectDetailPage() {
           const { error: contractErr } = await supabase
             .from("contracts")
             .update({
-              start_date: step9ContractSchedule.work_start_date,
+              start_date: scheduleToSave.work_start_date,
               end_date: endISO,
-              duration_days: step9ContractSchedule.contract_duration_days,
+              duration_days: scheduleToSave.contract_duration_days,
             })
             .eq("id", contractRow.id);
           if (contractErr) {
@@ -2724,6 +2851,8 @@ function ProjectDetailPage() {
                 inspectionRows: step10InspectionRows,
                 project_type: step10ProjectType,
                 contractAmendments: step10ContractAmendments,
+                defect_warranty_years: step10DefectWarrantyYears,
+                warrantySecurity: step10WarrantySecurity,
               })
             : null;
     const { error: e } = await patchStepDraft(
@@ -2801,7 +2930,10 @@ function ProjectDetailPage() {
     if (current.step_number === 10) {
       const lastInspection = resolveLastInstallmentInspectionDate(step10InspectionRows);
       const warrantyStart = lastInspection || null;
-      const warrantyEnd = warrantyStart ? computeWarrantyEndDateISO(warrantyStart) : null;
+      const warrantyYears = normalizeStep10DefectWarrantyYears(step10DefectWarrantyYears);
+      const warrantyEnd = warrantyStart
+        ? computeWarrantyEndDateISO(warrantyStart, warrantyYears)
+        : null;
       updates.status = PROJECT_STATUS_WARRANTY;
       updates.current_step = 10;
       if (warrantyStart) updates.warranty_started_at = warrantyStart;
@@ -2824,6 +2956,9 @@ function ProjectDetailPage() {
             project_type: step10ProjectType,
             warranty_started_at: warrantyStart,
             warranty_end_date: warrantyEnd,
+            defect_warranty_years: warrantyYears,
+            warranty_security_method: step10WarrantySecurity.method || null,
+            warranty_security: step10WarrantySecurity,
             contract_amendments_count: step10ContractAmendments.length,
           },
         });
@@ -3342,6 +3477,7 @@ function ProjectDetailPage() {
         procurementPath: effectiveProcurementPath,
         externalCapture: step9ExternalCapture,
         timelineCtx: timelineValidationCtx,
+        contractAmount: step10ContractAmount,
       });
       if (complianceIssues.length > 0) {
         failStepCompliance(complianceIssues[0].message, complianceIssues[0].id);
@@ -3517,7 +3653,7 @@ function ProjectDetailPage() {
       setActiveComplianceIssue(null);
       toast.success(
         completedStepNumber === 10
-          ? "ปิดโครงการจ้างสำเร็จ — อยู่ระหว่างค้ำประกันความชำรุด 2 ปี"
+          ? `ปิดโครงการจ้างสำเร็จ — อยู่ระหว่างค้ำประกันความชำรุด ${normalizeStep10DefectWarrantyYears(step10DefectWarrantyYears)} ปี`
           : completedStepNumber === 1
             ? "บันทึกขั้นตอนที่ 1 เรียบร้อย — ไปขั้นตอนที่ 2 แล้ว"
             : "ยืนยันเสร็จสิ้นขั้นตอนแล้ว",
@@ -4579,6 +4715,11 @@ function ProjectDetailPage() {
                       contractAmendments={step10ContractAmendments}
                       onContractAmendmentsChange={setStep10ContractAmendments}
                       installmentPlannedDates={step10PlannedDates}
+                      installmentBaselineDates={step10BaselineDates}
+                      installmentFinancialSchedule={recalculateStep9InstallmentPayments(
+                        step9ScheduleForProject.installment_schedule ?? [],
+                        step10ContractAmount,
+                      )}
                       onApplyContractAmendment={applyStep10ContractAmendment}
                       inspectionCommitteeDisplay={step10InspectionCommitteeDisplay}
                       projectStatus={project.status}
@@ -4593,6 +4734,13 @@ function ProjectDetailPage() {
                       }
                       warrantyEndDate={project.warranty_end_date ?? null}
                       warrantyStartedAt={project.warranty_started_at ?? null}
+                      defectWarrantyYears={step10DefectWarrantyYears}
+                      onDefectWarrantyYearsChange={setStep10DefectWarrantyYears}
+                      inheritedDefectWarrantyYears={resolveStep7DefectWarrantyYears(
+                        step7ContractNoticeFromDb,
+                      )}
+                      warrantySecurity={step10WarrantySecurity}
+                      onWarrantySecurityChange={setStep10WarrantySecurity}
                       chronologicalCtx={timelineValidationCtx}
                     />
                   )}
@@ -5017,6 +5165,7 @@ function ProjectDetailPage() {
                         procurementPath: effectiveProcurementPath,
                         externalCapture: step9ExternalCapture,
                         timelineCtx: timelineValidationCtx,
+                        contractAmount: step10ContractAmount,
                       })
                     : [];
                 const step9Ready =
@@ -5027,6 +5176,7 @@ function ProjectDetailPage() {
                     contractSignedDate,
                     procurementPath: effectiveProcurementPath,
                     externalCapture: step9ExternalCapture,
+                    contractAmount: step10ContractAmount,
                   });
                 const step10ComplianceIssues =
                   current.step_number === 10

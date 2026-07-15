@@ -8,6 +8,7 @@ import {
   STEP8_DOC,
   STEP8_DOC_LEGACY,
   STEP9_DOC,
+  STEP10_DOC,
 } from "@/lib/step-doc-types";
 
 export type DocFilePolicyId =
@@ -133,6 +134,8 @@ const DOC_TYPE_POLICY: Record<string, DocFilePolicyId> = {
 
   [STEP9_DOC.HS1_ESSENTIAL_CONTRACT]: "pdf_only",
   [STEP9_DOC.EGP_CONTRACT_STATUS_SCREENSHOT]: "egp_screenshot",
+  [STEP10_DOC.WARRANTY_BANK_GUARANTEE]: "pdf_only",
+  [STEP10_DOC.GUARANTEE_RETURN]: "egp_screenshot",
 };
 
 /** นโยบายไฟล์ตาม inline evidence config */
