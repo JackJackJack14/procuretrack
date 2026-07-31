@@ -10,6 +10,8 @@ export type FetchOrgProjectsResult<T> = {
   error: string | null;
   errorCode?: "NOT_AUTH" | "NO_ORG" | "QUERY" | "SCHEMA";
   profile: OrgProfile | null;
+  /** อีเมลบัญชีที่ login อยู่ — ใช้ตรวจว่าเป็นบัญชีเดิมหรือไม่ */
+  userEmail?: string | null;
 };
 
 /** ดึงโครงการของหน่วยงานปัจจุบัน (RLS + ตรวจ profile ก่อน) */
@@ -23,8 +25,11 @@ export async function fetchOrganizationProjects<T = Record<string, unknown>>(
       error: "กรุณาเข้าสู่ระบบ",
       errorCode: "NOT_AUTH",
       profile: null,
+      userEmail: null,
     };
   }
+
+  const userEmail = auth.user.email ?? null;
 
   const { data: prof, error: profErr } = await supabase
     .from("profiles")
@@ -38,6 +43,7 @@ export async function fetchOrganizationProjects<T = Record<string, unknown>>(
       error: profErr.message,
       errorCode: "QUERY",
       profile: null,
+      userEmail,
     };
   }
 
@@ -48,6 +54,7 @@ export async function fetchOrganizationProjects<T = Record<string, unknown>>(
         "บัญชีนี้ยังไม่ได้ผูกกับหน่วยงาน — ข้อมูลโครงการจะไม่แสดงจนกว่าจะตั้งค่าหน่วยงานให้ถูกต้อง",
       errorCode: "NO_ORG",
       profile: prof,
+      userEmail,
     };
   }
 
@@ -65,6 +72,7 @@ export async function fetchOrganizationProjects<T = Record<string, unknown>>(
         : error.message,
       errorCode: isSchema ? "SCHEMA" : "QUERY",
       profile: prof,
+      userEmail,
     };
   }
 
@@ -72,6 +80,7 @@ export async function fetchOrganizationProjects<T = Record<string, unknown>>(
     projects: (data ?? []) as T[],
     error: null,
     profile: prof,
+    userEmail,
   };
 }
 

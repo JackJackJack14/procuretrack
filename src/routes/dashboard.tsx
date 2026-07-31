@@ -59,6 +59,8 @@ function DashboardPage() {
   const projects = projectResult?.projects ?? [];
   const projectsError = projectResult?.error ?? null;
   const profileName = projectResult?.profile?.full_name;
+  const userEmail = projectResult?.userEmail ?? null;
+  const hasOrg = !!projectResult?.profile?.organization_id;
 
   const { data: alerts = [] } = useQuery({
     queryKey: ["alerts"],
@@ -127,20 +129,27 @@ function DashboardPage() {
           <div className="rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
             <p className="font-medium">ไม่สามารถโหลดข้อมูลโครงการได้</p>
             <p className="mt-1 text-destructive/90">{projectsError}</p>
-            {profileName && (
-              <p className="mt-2 text-xs text-muted-foreground">
-                ผู้ใช้: {profileName} · Supabase:{" "}
-                {import.meta.env.VITE_SUPABASE_URL ?? "ไม่พบ VITE_SUPABASE_URL ใน .env"}
-              </p>
-            )}
+            <p className="mt-2 text-xs text-muted-foreground">
+              บัญชีที่เข้าสู่ระบบ:{" "}
+              <span className="font-medium text-foreground">{userEmail ?? "—"}</span>
+              {profileName ? ` (${profileName})` : ""}
+              {hasOrg ? "" : " · ยังไม่ผูกหน่วยงาน"}
+            </p>
           </div>
         )}
 
-        {!loading && !projectsError && projects.length === 0 && profileName && (
-          <div className="rounded-lg border border-dashed border-border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
-            ไม่พบโครงการในหน่วยงานของ <span className="font-medium text-foreground">{profileName}</span>
-            {" "}— หากเคยมีข้อมูลแล้ว ให้ตรวจสอบว่า Login ด้วยบัญชีเดิมและไฟล์{" "}
-            <code className="text-xs">.env</code> ชี้ไป Supabase project เดียวกัน
+        {!loading && !projectsError && projects.length === 0 && (
+          <div className="rounded-lg border border-amber-300/70 bg-amber-50/80 px-4 py-3 text-sm text-amber-950">
+            <p className="font-medium">Login สำเร็จแล้ว แต่ไม่พบโครงการในบัญชีนี้</p>
+            <p className="mt-1">
+              อีเมลที่เข้าอยู่ตอนนี้:{" "}
+              <span className="font-semibold">{userEmail ?? "— ไม่พบอีเมล —"}</span>
+              {profileName ? ` · ชื่อ: ${profileName}` : ""}
+            </p>
+            <p className="mt-2 text-amber-900/90">
+              ถ้าเคยมีโครงการแล้ว แปลว่าอีเมลนี้ไม่ใช่บัญชีเดิม (หรือหน่วยงานคนละชุด) —
+              ลองออกจากระบบแล้วเข้าด้วยอีเมลที่เคยสร้างโครงการ หรือเช็กใน Supabase Dashboard → Authentication → Users
+            </p>
           </div>
         )}
 
